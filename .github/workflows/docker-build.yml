@@ -6,6 +6,7 @@ on:
     tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:  # 允许手动触发
 
 env:
   # Docker Hub 配置 (替换为你的用户名)

@@ -37,8 +37,10 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 天
     
     # 导出配置
-    MAX_CONCURRENT_DOWNLOADS: int = 5
-    CHUNK_SIZE: int = 1024 * 1024  # 1MB
+    MAX_CONCURRENT_DOWNLOADS: int = 10  # Telegram 免费用户限制
+    DOWNLOAD_THREADS: int = 10          # 下载线程数
+    DOWNLOAD_SPEED_LIMIT: int = 0       # 下载速度限制 (KB/s, 0=无限制)
+    CHUNK_SIZE: int = 1024 * 1024       # 1MB
     
     class Config:
         env_file = ".env"

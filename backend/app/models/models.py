@@ -94,6 +94,11 @@ class ExportOptions(BaseModel):
     # 保存路径/格式
     export_path: str = "/downloads"
     export_format: ExportFormat = ExportFormat.HTML
+    
+    # 下载设置 (Telegram 免费用户限制)
+    max_concurrent_downloads: int = 10   # 最大并发下载数
+    download_threads: int = 10           # 下载线程数
+    download_speed_limit: int = 0        # 下载速度限制 (KB/s, 0=无限制)
 
 
 class ChatInfo(BaseModel):

@@ -200,6 +200,46 @@
         </p>
       </div>
       
+      <!-- 下载设置 -->
+      <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border);">
+        <h3 style="margin-bottom: 10px;">下载设置</h3>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
+          <div class="form-group">
+            <label class="form-label">并发下载数</label>
+            <input 
+              v-model.number="options.max_concurrent_downloads" 
+              type="number" 
+              class="form-input"
+              min="1" 
+              max="10"
+            >
+            <p style="color: #666; font-size: 12px; margin-top: 4px;">Telegram 免费用户限制 10</p>
+          </div>
+          <div class="form-group">
+            <label class="form-label">下载线程数</label>
+            <input 
+              v-model.number="options.download_threads" 
+              type="number" 
+              class="form-input"
+              min="1" 
+              max="10"
+            >
+            <p style="color: #666; font-size: 12px; margin-top: 4px;">推荐 10</p>
+          </div>
+          <div class="form-group">
+            <label class="form-label">速度限制 (KB/s)</label>
+            <input 
+              v-model.number="options.download_speed_limit" 
+              type="number" 
+              class="form-input"
+              min="0"
+              placeholder="0 = 无限制"
+            >
+            <p style="color: #666; font-size: 12px; margin-top: 4px;">0 = 不限速</p>
+          </div>
+        </div>
+      </div>
+      
       <div style="margin-top: 20px; display: flex; justify-content: space-between;">
         <button @click="step = 2" class="btn btn-outline">← 上一步</button>
         <button @click="step = 4" class="btn btn-primary">下一步 →</button>
@@ -295,7 +335,12 @@ const options = reactive({
   
   // 其他
   export_path: '/downloads',
-  export_format: 'html'
+  export_format: 'html',
+  
+  // 下载设置 (Telegram 免费用户限制)
+  max_concurrent_downloads: 10,
+  download_threads: 10,
+  download_speed_limit: 0  // 0 = 无限制
 })
 
 const formatText = {
