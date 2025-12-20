@@ -1,0 +1,172 @@
+"""
+TG Export - 数据模型
+"""
+from datetime import datetime
+from enum import Enum
+from typing import Optional, List
+from pydantic import BaseModel, Field
+
+
+class ChatType(str, Enum):
+    """聊天类型"""
+    PRIVATE = "private"           # 私聊
+    BOT = "bot"                   # 机器人对话
+    GROUP = "group"               # 私密群组
+    SUPERGROUP = "supergroup"     # 公开群组
+    CHANNEL = "channel"           # 频道
+
+
+class MediaType(str, Enum):
+    """媒体类型"""
+    PHOTO = "photo"               # 图片
+    VIDEO = "video"               # 视频文件
+    AUDIO = "audio"               # 音频
+    VOICE = "voice"               # 语音消息
+    VIDEO_NOTE = "video_note"     # 视频消息 (圆形)
+    DOCUMENT = "document"         # 文件
+    STICKER = "sticker"           # 贴纸
+    ANIMATION = "animation"       # GIF 动态图
+
+
+class ExportFormat(str, Enum):
+    """导出格式"""
+    HTML = "html"                 # 人类可读的 HTML
+    JSON = "json"                 # 机器可读的 JSON
+    BOTH = "both"                 # 以上两者
+
+
+class TaskStatus(str, Enum):
+    """任务状态"""
+    PENDING = "pending"           # 等待中
+    RUNNING = "running"           # 运行中
+    PAUSED = "paused"             # 已暂停
+    COMPLETED = "completed"       # 已完成
+    FAILED = "failed"             # 失败
+    CANCELLED = "cancelled"       # 已取消
+
+
+class ExportOptions(BaseModel):
+    """导出选项 - 对应官方导出功能"""
+    
+    # 账号信息
+    account_info: bool = False
+    contacts: bool = False
+    
+    # 历史记录导出设置
+    private_chats: bool = True          # 私聊
+    bot_chats: bool = False             # 机器人对话
+    private_groups: bool = True         # 私密群组
+    private_channels: bool = True       # 私密频道
+    public_groups: bool = False         # 公开群组
+    public_channels: bool = False       # 公开频道
+    only_my_messages: bool = False      # 只导出我的消息
+    
+    # 指定聊天 (可选)
+    specific_chats: List[int] = Field(default_factory=list)  # 指定的聊天 ID
+    
+    # 消息范围 (单频道/群组导出)
+    # message_from=1, message_to=0 表示从第1条到最新
+    # message_from=1, message_to=100 表示第1条到第100条
+    message_from: int = 1               # 起始消息 ID
+    message_to: int = 0                 # 结束消息 ID (0=最新)
+    
+    # 断点续传
+    resume_download: bool = True        # 启用断点续传
+    skip_existing: bool = True          # 跳过已下载的文件
+    
+    # 媒体文件导出设置
+    photos: bool = True                 # 图片
+    videos: bool = True                 # 视频文件
+    voice_messages: bool = True         # 语音消息
+    video_messages: bool = True         # 视频消息
+    stickers: bool = False              # 贴纸
+    gifs: bool = True                   # GIF 动态图
+    files: bool = True                  # 文件
+    
+    # 其它
+    active_sessions: bool = False       # 活跃会话
+    other_data: bool = False            # 其它数据
+    
+    # 时间范围
+    date_from: Optional[datetime] = None
+    date_to: Optional[datetime] = None
+    
+    # 保存路径/格式
+    export_path: str = "/downloads"
+    export_format: ExportFormat = ExportFormat.HTML
+
+
+class ChatInfo(BaseModel):
+    """聊天信息"""
+    id: int
+    title: str
+    type: ChatType
+    username: Optional[str] = None
+    members_count: Optional[int] = None
+    photo_path: Optional[str] = None
+    is_selected: bool = False
+
+
+class MessageInfo(BaseModel):
+    """消息信息"""
+    id: int
+    date: datetime
+    from_user_id: Optional[int] = None
+    from_user_name: Optional[str] = None
+    text: Optional[str] = None
+    media_type: Optional[MediaType] = None
+    media_path: Optional[str] = None
+    file_name: Optional[str] = None
+    file_size: Optional[int] = None
+    reply_to_message_id: Optional[int] = None
+
+
+class ExportTask(BaseModel):
+    """导出任务"""
+    id: str
+    name: str
+    status: TaskStatus = TaskStatus.PENDING
+    options: ExportOptions
+    created_at: datetime = Field(default_factory=datetime.now)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    
+    # 进度信息
+    total_chats: int = 0
+    processed_chats: int = 0
+    total_messages: int = 0
+    processed_messages: int = 0
+    total_media: int = 0
+    downloaded_media: int = 0
+    total_size: int = 0
+    downloaded_size: int = 0
+    
+    # 错误信息
+    error: Optional[str] = None
+    
+    @property
+    def progress(self) -> float:
+        """计算总进度"""
+        if self.total_messages == 0:
+            return 0.0
+        return (self.processed_messages / self.total_messages) * 100
+
+
+class User(BaseModel):
+    """用户模型"""
+    username: str
+    password_hash: str
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class LoginRequest(BaseModel):
+    """登录请求"""
+    username: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    """Token 响应"""
+    access_token: str
+    token_type: str = "bearer"

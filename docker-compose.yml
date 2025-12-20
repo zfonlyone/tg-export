@@ -1,0 +1,26 @@
+services:
+  tg-export:
+    build: .
+    container_name: tg-export
+    restart: unless-stopped
+    ports:
+      - "9528:9528"
+    volumes:
+      - ./data:/app/data:shared
+      - /storage/downloads:/downloads:shared
+    environment:
+      - TZ=Asia/Shanghai
+      - DEBUG=false
+      - WEB_HOST=0.0.0.0
+      - WEB_PORT=9528
+      - SECRET_KEY=${SECRET_KEY:-change-this-secret-key}
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - API_ID=${API_ID:-}
+      - API_HASH=${API_HASH:-}
+      - BOT_TOKEN=${BOT_TOKEN:-}
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
