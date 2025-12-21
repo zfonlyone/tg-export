@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "TG Export"
     APP_VERSION: str = "1.1.6"
     DEBUG: bool = False
+    WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")
+    WEB_PORT: int = int(os.getenv("WEB_PORT", 9528))
     
     # 路径配置
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
