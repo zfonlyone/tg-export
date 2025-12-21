@@ -59,9 +59,9 @@
           <span style="font-weight: 600;">📌 指定聊天</span>
         </label>
         <div v-if="enableSpecificChats" style="margin-top: 12px;">
-          <p style="color: #666; margin-bottom: 8px; font-size: 13px;">输入聊天 ID，自动识别数字</p>
+          <p style="color: #666; margin-bottom: 8px; font-size: 13px;">粘贴聊天 ID 或链接，系统会自动识别。💡 如果 ID 缺少 -100 前缀，后台将尝试自动补全。</p>
           <div style="display: flex; gap: 15px;">
-            <input v-model="specificChatsInput" @input="parseSpecificChats" class="form-input" style="flex: 1;" placeholder="粘贴聊天 ID 或链接">
+            <input v-model="specificChatsInput" @input="parseSpecificChats" class="form-input" style="flex: 1;" placeholder="例如: -10012345678 或 12345678">
             <div v-if="parsedChatIds.length > 0" style="flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
               <span v-for="(id, idx) in parsedChatIds" :key="idx" class="id-tag" @click="removeChatId(idx)">{{ id }} ×</span>
             </div>

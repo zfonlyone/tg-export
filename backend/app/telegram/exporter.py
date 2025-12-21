@@ -294,10 +294,20 @@ class ExportManager:
         all_chats = await telegram_client.get_dialogs()
         filtered_chats = []
         
+        # 标准化指定的聊天 ID (处理可能缺失的 -100 前缀)
+        standardized_specific_ids = []
+        if options.specific_chats:
+            for cid in options.specific_chats:
+                standard_id = telegram_client.resolve_chat_id(str(cid))
+                if isinstance(standard_id, int):
+                    standardized_specific_ids.append(standard_id)
+                else:
+                    standardized_specific_ids.append(cid)
+        
         for chat in all_chats:
             # 如果指定了特定聊天，只导出这些
-            if options.specific_chats:
-                if chat.id in options.specific_chats:
+            if standardized_specific_ids:
+                if chat.id in standardized_specific_ids:
                     filtered_chats.append(chat)
                 continue
             

@@ -7,7 +7,7 @@
       <div class="stat-card">
         <div class="icon">📋</div>
         <div class="value">{{ stats.totalTasks }}</div>
-        <div class="label">总下载数</div>
+        <div class="label">任务总数</div>
       </div>
       <div class="stat-card">
         <div class="icon">✅</div>
@@ -60,18 +60,18 @@
     <!-- 最近任务 -->
     <div class="card">
       <div class="card-header">
-        <h2>📋 最近下载</h2>
+        <h2>📋 最近任务</h2>
         <router-link to="/tasks" class="btn btn-outline">查看全部</router-link>
       </div>
       
       <div v-if="recentTasks.length === 0" style="text-align: center; padding: 30px; color: #666;">
-        暂无下载历史
+        暂无任务历史
       </div>
       
       <table v-else class="table">
         <thead>
           <tr>
-            <th>下载名称</th>
+            <th>任务名称</th>
             <th>状态</th>
             <th>进度</th>
             <th>创建时间</th>
@@ -103,10 +103,10 @@
       </div>
       <div style="display: flex; gap: 15px; flex-wrap: wrap;">
         <router-link to="/export" class="btn btn-primary">
-          📥 新建下载
+          📥 新建导出
         </router-link>
         <router-link to="/tasks" class="btn btn-outline">
-          📋 查看下载
+          📋 任务管理
         </router-link>
         <a href="/exports" target="_blank" class="btn btn-outline">
           📁 浏览文件

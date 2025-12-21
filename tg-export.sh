@@ -783,7 +783,7 @@ YAML
     docker_compose pull
     
     log "启动服务..."
-    docker_compose up -d
+    docker_compose up --build -d
     
     sleep 3
     if docker ps | grep -q tg-export; then
@@ -1102,7 +1102,7 @@ case "$1" in
     stop) cd "$APP_DIR" && docker_compose down ;;
     restart) cd "$APP_DIR" && docker_compose restart ;;
     logs) docker_compose logs -f --tail=100 tg-export ;;
-    update) cd "$APP_DIR" && docker_compose pull && docker_compose up -d ;;
+    update) cd "$APP_DIR" && docker_compose pull && docker_compose up --build -d ;;
     status) docker ps | grep -E "CONTAINER|tg-export" ;;
     "") show_menu ;;
     *) echo "用法: tge {start|stop|restart|logs|update|status}" ;;
@@ -1202,7 +1202,7 @@ update_app() {
     log "正在更新 TG Export..."
     cd "$APP_DIR" || exit
     docker_compose pull
-    docker_compose up -d
+    docker_compose up --build -d
     log "更新完成！"
 }
 

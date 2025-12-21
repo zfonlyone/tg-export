@@ -2,7 +2,7 @@
   <div class="fade-in">
     <!-- 页面标题 -->
     <div class="page-header">
-      <h1>📋 下载管理</h1>
+      <h1>📋 任务管理</h1>
       <router-link to="/export" class="btn btn-primary">+ 新建导出</router-link>
     </div>
     
@@ -19,14 +19,14 @@
         <div class="stat-icon">⏳</div>
         <div class="stat-info">
           <div class="stat-value">{{ pendingCount }}</div>
-          <div class="stat-label">未完成</div>
+          <div class="stat-label">进行中</div>
         </div>
       </div>
       <div class="stat-card failed">
         <div class="stat-icon">❌</div>
         <div class="stat-info">
           <div class="stat-value">{{ failedCount }}</div>
-          <div class="stat-label">失败</div>
+          <div class="stat-label">异常</div>
         </div>
       </div>
     </div>
@@ -42,7 +42,7 @@
       <button @click="removeCompleted" class="btn btn-outline btn-sm" :disabled="completedCount === 0">
         🗑 移除已完成
       </button>
-      <span class="refresh-label">刷新间隔: {{ refreshInterval / 1000 }}s</span>
+      <span class="refresh-label">更新间隔: {{ refreshInterval / 1000 }}s</span>
     </div>
     
     <!-- 加载中 -->
@@ -53,8 +53,8 @@
     <!-- 空状态 -->
     <div v-else-if="tasks.length === 0" class="empty-state">
       <div class="icon">📭</div>
-      <p>暂无下载任务</p>
-      <router-link to="/export" class="btn btn-primary">创建第一个导出</router-link>
+      <p>暂无任务</p>
+      <router-link to="/export" class="btn btn-primary">创建第一个导出任务</router-link>
     </div>
     
     <!-- 任务列表 -->
@@ -76,18 +76,18 @@
         </div>
         
         <!-- 进度条 -->
-        <div v-if="task.status === 'extracting' || task.status === 'running' || task.status === 'paused'">
+        <div v-if="['extracting', 'running', 'paused'].includes(task.status)">
           <div class="progress">
             <div class="progress-bar" :style="{ width: task.progress + '%' }"></div>
           </div>
           <div class="progress-text">
             <span>{{ (task.progress || 0).toFixed(1) }}%</span>
-            <span v-if="task.status === 'extracting'">🔍 正在提取消息: {{ task.processed_messages }} / {{ task.total_messages || '?' }}</span>
-            <span v-else>📥 正在下载媒体: {{ task.downloaded_media }} / {{ task.total_media }}</span>
+            <span v-if="task.status === 'extracting'">🔍 正在扫描消息: {{ task.processed_messages }}</span>
+            <span v-else>📥 下载文件: {{ task.downloaded_media }} / {{ task.total_media }}</span>
           </div>
         </div>
         
-        <!-- 任务信息 -->
+        <!-- 任务概览信息 -->
         <div class="task-info">
           <div class="task-info-item">
             📨 消息: {{ task.processed_messages }}
@@ -96,27 +96,27 @@
             📁 媒体: {{ task.downloaded_media }}/{{ task.total_media }}
           </div>
           <div class="task-info-item">
-            💾 大小: {{ formatSize(task.downloaded_size) }}
+            💾 容量: {{ formatSize(task.downloaded_size) }}
           </div>
           <div class="task-info-item" v-if="task.failed_downloads?.length > 0">
             ⚠️ 失败: {{ task.failed_downloads.length }}
           </div>
         </div>
         
-        <!-- 详细进度 -->
+        <!-- 下载清单详情 (运行中默认展开) -->
         <div v-if="task.download_queue?.length > 0" class="failed-section">
           <div class="failed-header" @click="toggleDetailed(task.id)">
-            <span>📊 详细下载状态 ({{ task.downloaded_media }}/{{ task.total_media }})</span>
-            <span>{{ expandedDetailed[task.id] ? '▼' : '▶' }}</span>
+            <span>📊 传输明细 ({{ task.downloaded_media }}/{{ task.total_media }})</span>
+            <span>{{ isDetailedExpanded(task) ? '▼' : '▶' }}</span>
           </div>
-          <div v-if="expandedDetailed[task.id]" class="failed-list">
+          <div v-if="isDetailedExpanded(task)" class="failed-list">
              <div v-for="item in task.download_queue.slice(0, 50)" :key="item.id" class="download-item-row">
                 <div style="flex: 1; min-width: 0;">
                   <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 11px;">
-                    <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ item.file_name }}</span>
+                    <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace;">{{ item.file_name }}</span>
                     <span>{{ item.progress.toFixed(0) }}%</span>
                   </div>
-                  <div class="progress" style="height: 4px; margin: 0;">
+                  <div class="progress" style="height: 4px; margin: 0; background: rgba(0,0,0,0.05);">
                     <div class="progress-bar" :style="{ width: item.progress + '%' }"></div>
                   </div>
                 </div>
@@ -124,23 +124,20 @@
                    <span :class="'item-status ' + item.status">{{ item.status }}</span>
                 </div>
              </div>
-             <div v-if="task.download_queue.length > 50" class="download-item-row" style="justify-content: center; color: #888;">
-                还有 {{ task.download_queue.length - 50 }} 个文件...
+             <div v-if="task.download_queue.length > 50" class="download-item-row" style="justify-content: center; color: #888; font-size: 12px; border: none;">
+                ... 及其他 {{ task.download_queue.length - 50 }} 个文件
              </div>
           </div>
         </div>
         
-        <!-- 完成信息 -->
-        <div v-if="task.status === 'completed'" style="margin-top: 12px; padding: 12px; background: #d4edda; border-radius: 6px;">
+        <!-- 导出成功 (精简样式) -->
+        <div v-if="task.status === 'completed'" class="completed-info-box">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div>
-              <div style="color: #155724; font-weight: 500;">✅ 导出完成</div>
-              <div style="font-size: 12px; color: #666;">
-                {{ task.processed_messages }} 条消息, {{ task.downloaded_media }} 个媒体文件
-              </div>
+            <div style="color: #27ae60; font-size: 14px; display: flex; align-items: center; gap: 6px;">
+              <span style="font-size: 18px;">✅</span> 导出成功，共计 {{ task.downloaded_media }} 个文件
             </div>
             <a :href="'/exports/' + task.id" target="_blank" class="btn btn-success btn-sm">
-              📁 查看文件
+              📁 浏览文件
             </a>
           </div>
         </div>
@@ -193,17 +190,16 @@ import axios from 'axios'
 const loading = ref(true)
 const tasks = ref([])
 const expandedDetailed = ref({})
-const refreshInterval = ref(3000)
-let intervalId = null
+const parsedChatIds = ref([])
+const parsedMessageIds = ref([])
 
-const statusText = {
-  extracting: '正在提取',
-  pending: '等待中',
-  running: '运行中',
-  paused: '已暂停',
-  completed: '已完成',
-  failed: '失败',
-  cancelled: '已取消'
+function isDetailedExpanded(task) {
+  // 如果用户手动点击过，按用户的选择来
+  if (expandedDetailed.value[task.id] !== undefined) {
+    return expandedDetailed.value[task.id]
+  }
+  // 运行中或暂停的任务默认展示详情
+  return ['running', 'paused', 'extracting'].includes(task.status)
 }
 
 // 统计
@@ -362,5 +358,14 @@ onUnmounted(() => {
 .status-badge.status-extracting {
   background: #f3e5f5;
   color: #7b1fa2;
+}
+
+.completed-info-box {
+  margin-top: 12px;
+  padding: 10px 15px;
+  background: #fafffb;
+  border: 1px solid #e7f5ed;
+  border-left: 4px solid #27ae60;
+  border-radius: 4px;
 }
 </style>
