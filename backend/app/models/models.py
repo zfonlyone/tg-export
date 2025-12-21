@@ -99,6 +99,11 @@ class ExportOptions(BaseModel):
     max_concurrent_downloads: int = 10   # 最大并发下载数
     download_threads: int = 10           # 下载线程数
     download_speed_limit: int = 0        # 下载速度限制 (KB/s, 0=无限制)
+    
+    # 重试设置
+    max_download_retries: int = 5        # 最大重试次数
+    retry_delay: float = 2.0             # 重试初始延迟 (秒)
+    auto_retry_failed: bool = True       # 自动重试失败的下载
 
 
 class ChatInfo(BaseModel):
@@ -126,6 +131,18 @@ class MessageInfo(BaseModel):
     reply_to_message_id: Optional[int] = None
 
 
+class FailedDownload(BaseModel):
+    """下载失败记录"""
+    message_id: int
+    chat_id: int
+    file_name: Optional[str] = None
+    error_type: str                       # connection_lost, file_ref_expired, peer_invalid
+    error_message: str
+    retry_count: int = 0
+    last_retry: Optional[datetime] = None
+    resolved: bool = False
+
+
 class ExportTask(BaseModel):
     """导出任务"""
     id: str
@@ -148,6 +165,10 @@ class ExportTask(BaseModel):
     
     # 错误信息
     error: Optional[str] = None
+    
+    # 失败下载跟踪
+    failed_downloads: List["FailedDownload"] = Field(default_factory=list)
+    retry_downloads: int = 0              # 重试成功的数量
     
     @property
     def progress(self) -> float:

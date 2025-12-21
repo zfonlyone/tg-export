@@ -145,6 +145,19 @@ class TelegramClient:
             return 0
         return 0
     
+    async def get_message_by_id(self, chat_id: int, message_id: int) -> Optional[Message]:
+        """根据消息ID获取消息（用于刷新文件引用）"""
+        if not self._client:
+            return None
+        try:
+            messages = await self._client.get_messages(chat_id, message_id)
+            if messages:
+                return messages if isinstance(messages, Message) else messages[0]
+            return None
+        except Exception as e:
+            print(f"获取消息失败: {e}")
+            return None
+    
     async def download_media(
         self,
         message: Message,
@@ -155,16 +168,13 @@ class TelegramClient:
         if not self._client or not message.media:
             return None
         
-        try:
-            path = await self._client.download_media(
-                message,
-                file_name=str(file_path),
-                progress=progress_callback
-            )
-            return path
-        except Exception as e:
-            print(f"下载失败: {e}")
-            return None
+        # 直接调用下载，不捕获异常，让上层处理重试逻辑
+        path = await self._client.download_media(
+            message,
+            file_name=str(file_path),
+            progress=progress_callback
+        )
+        return path
     
     def get_media_type(self, message: Message) -> Optional[MediaType]:
         """获取消息的媒体类型"""

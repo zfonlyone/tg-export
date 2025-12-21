@@ -31,8 +31,8 @@
           </router-link>
         </li>
       </ul>
-      <div style="padding: 20px; margin-top: auto; border-top: 1px solid var(--border);">
-        <button @click="logout" class="btn btn-outline" style="width: 100%;">
+      <div class="sidebar-footer">
+        <button @click="logout" class="btn btn-outline" style="width: 100%; color: rgba(255,255,255,0.8); border-color: rgba(255,255,255,0.3);">
           🚪 退出登录
         </button>
       </div>
@@ -88,14 +88,14 @@ function logout() {
 </script>
 
 <style scoped>
-.top-bar {
-  margin-bottom: 20px;
-  padding-bottom: 15px;
-  border-bottom: 1px solid var(--border);
+.sidebar-footer {
+  padding: 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.btn-sm {
-  padding: 6px 12px;
-  font-size: 13px;
+.sidebar-footer .btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.5);
+  color: #fff;
 }
 </style>

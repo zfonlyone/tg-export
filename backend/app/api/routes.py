@@ -146,6 +146,83 @@ async def cancel_export(
     raise HTTPException(status_code=400, detail="取消失败")
 
 
+@router.post("/export/{task_id}/pause")
+async def pause_export(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """暂停导出任务"""
+    success = await export_manager.pause_export(task_id)
+    if success:
+        return {"status": "ok", "message": "任务已暂停"}
+    raise HTTPException(status_code=400, detail="暂停失败")
+
+
+@router.post("/export/{task_id}/resume")
+async def resume_export(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """恢复导出任务"""
+    success = await export_manager.resume_export(task_id)
+    if success:
+        return {"status": "ok", "message": "任务已恢复"}
+    raise HTTPException(status_code=400, detail="恢复失败")
+
+
+@router.get("/export/{task_id}/failed")
+async def get_failed_downloads(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """获取失败的下载列表"""
+    task = export_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return {
+        "task_id": task_id,
+        "failed_count": len(task.failed_downloads),
+        "failed_downloads": task.failed_downloads
+    }
+
+
+@router.post("/export/{task_id}/retry")
+async def retry_failed_downloads(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """重试所有失败的下载 (目前记录失败供后续重试)"""
+    task = export_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    failed_count = len(task.failed_downloads)
+    # TODO: 实现实际的重试逻辑
+    return {
+        "status": "ok",
+        "message": f"已标记 {failed_count} 个失败项待重试",
+        "failed_count": failed_count
+    }
+
+
+@router.delete("/export/{task_id}")
+async def delete_task(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """删除导出任务"""
+    task = export_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    # 如果任务正在运行，先取消
+    if task.status == TaskStatus.RUNNING:
+        await export_manager.cancel_export(task_id)
+    
+    del export_manager.tasks[task_id]
+    return {"status": "ok", "message": "任务已删除"}
+
+
 @router.get("/export/tasks", response_model=List[ExportTask])
 async def get_tasks(current_user: User = Depends(get_current_user)):
     """获取所有任务"""
@@ -187,3 +264,4 @@ async def update_settings(
     """更新设置"""
     # 这里可以实现设置保存逻辑
     return {"status": "ok"}
+

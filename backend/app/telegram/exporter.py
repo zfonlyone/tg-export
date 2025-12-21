@@ -3,7 +3,9 @@ TG Export - 导出器核心
 处理消息导出逻辑
 """
 import asyncio
+import json
 import uuid
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Callable
@@ -12,9 +14,12 @@ from pyrogram.types import Message
 from ..config import settings
 from ..models import (
     ExportTask, ExportOptions, TaskStatus, ChatInfo, 
-    MessageInfo, MediaType, ChatType, ExportFormat
+    MessageInfo, MediaType, ChatType, ExportFormat, FailedDownload
 )
 from .client import telegram_client
+from .retry_manager import DownloadRetryManager
+
+logger = logging.getLogger(__name__)
 
 
 class ExportManager:
@@ -24,6 +29,7 @@ class ExportManager:
         self.tasks: Dict[str, ExportTask] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
         self._progress_callbacks: Dict[str, List[Callable]] = {}
+        self._paused_tasks: set = set()  # 暂停的任务ID
     
     def create_task(self, name: str, options: ExportOptions) -> ExportTask:
         """创建导出任务"""
@@ -89,9 +95,36 @@ class ExportManager:
             self._running_tasks[task_id].cancel()
             del self._running_tasks[task_id]
         
+        self._paused_tasks.discard(task_id)
         task.status = TaskStatus.CANCELLED
         await self._notify_progress(task_id, task)
         return True
+    
+    async def pause_export(self, task_id: str) -> bool:
+        """暂停导出任务"""
+        task = self.tasks.get(task_id)
+        if not task or task.status != TaskStatus.RUNNING:
+            return False
+        
+        self._paused_tasks.add(task_id)
+        task.status = TaskStatus.PAUSED
+        await self._notify_progress(task_id, task)
+        return True
+    
+    async def resume_export(self, task_id: str) -> bool:
+        """恢复导出任务"""
+        task = self.tasks.get(task_id)
+        if not task or task.status != TaskStatus.PAUSED:
+            return False
+        
+        self._paused_tasks.discard(task_id)
+        task.status = TaskStatus.RUNNING
+        await self._notify_progress(task_id, task)
+        return True
+    
+    def is_paused(self, task_id: str) -> bool:
+        """检查任务是否暂停"""
+        return task_id in self._paused_tasks
     
     async def _run_export(self, task: ExportTask):
         """执行导出任务"""
@@ -271,22 +304,48 @@ class ExportManager:
                         # 使用临时文件名下载 (.downloading 后缀)
                         temp_file_path = file_path.with_suffix(file_path.suffix + ".downloading")
                         
-                        # 检查是否有未完成的下载
-                        if options.resume_download and temp_file_path.exists():
-                            # 继续下载 (Pyrogram 会自动断点续传)
-                            pass
+                        # 等待暂停状态结束
+                        while self.is_paused(task.id):
+                            await asyncio.sleep(1)
+                            if task.status == TaskStatus.CANCELLED:
+                                break
                         
-                        downloaded = await telegram_client.download_media(
-                            msg, 
-                            temp_file_path,
+                        if task.status == TaskStatus.CANCELLED:
+                            break
+                        
+                        # 使用重试管理器下载
+                        retry_manager = DownloadRetryManager(
+                            max_retries=options.max_download_retries,
+                            initial_delay=options.retry_delay
+                        )
+                        
+                        success, downloaded, failure_info = await retry_manager.download_with_retry(
+                            download_func=telegram_client.download_media,
+                            message=msg,
+                            file_path=temp_file_path,
+                            refresh_message_func=telegram_client.get_message_by_id,
                             progress_callback=lambda c, t: self._update_download_progress(task, c)
                         )
                         
-                        if downloaded:
+                        if success and downloaded:
                             # 下载完成，重命名为正式文件名
-                            temp_file_path.rename(file_path)
+                            if temp_file_path.exists():
+                                temp_file_path.rename(file_path)
                             media_path = str(file_path.relative_to(export_path))
                             task.downloaded_media += 1
+                        elif failure_info:
+                            # 记录失败
+                            failed_download = FailedDownload(
+                                message_id=failure_info["message_id"],
+                                chat_id=failure_info["chat_id"],
+                                file_name=failure_info["file_name"],
+                                error_type=failure_info["error_type"],
+                                error_message=failure_info["error_message"],
+                                retry_count=failure_info["retry_count"],
+                                last_retry=datetime.fromisoformat(failure_info["last_retry"])
+                            )
+                            task.failed_downloads.append(failed_download)
+                            logger.warning(f"下载失败已记录: {file_name} ({failure_info['error_type']})")
             
             # 构建消息信息
             msg_info = MessageInfo(
