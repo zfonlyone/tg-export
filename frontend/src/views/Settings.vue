@@ -15,25 +15,28 @@
       <div style="display: flex; gap: 15px; align-items: flex-end;">
         <div class="form-group" style="flex: 1; margin-bottom: 0;">
           <label class="form-label">API ID</label>
-          <input v-model="apiId" type="number" class="form-input" placeholder="例如: 12345678" :disabled="apiConfigured && !editingApi">
+          <input v-model="apiId" type="number" class="form-input" placeholder="例如: 12345678" :disabled="hasApiConfig && !editingApi">
         </div>
         <div class="form-group" style="flex: 2; margin-bottom: 0;">
           <label class="form-label">API Hash</label>
-          <input v-model="apiHash" type="text" class="form-input" placeholder="例如: abcdef1234567890..." :disabled="apiConfigured && !editingApi">
+          <input v-model="apiHash" type="text" class="form-input" :placeholder="hasApiConfig && !editingApi ? '******' : '例如: abcdef1234567890...'" :disabled="hasApiConfig && !editingApi">
         </div>
-        <button v-if="!apiConfigured" @click="initTelegram" class="btn btn-primary" :disabled="!apiId || !apiHash || loading" style="white-space: nowrap;">
-          {{ loading ? '保存中...' : '保存配置' }}
-        </button>
-        <button v-else-if="!editingApi" @click="editingApi = true" class="btn btn-outline" style="white-space: nowrap;">
-          修改
-        </button>
-        <button v-else @click="initTelegram" class="btn btn-primary" :disabled="!apiId || !apiHash || loading" style="white-space: nowrap;">
-          {{ loading ? '保存中...' : '保存' }}
-        </button>
+        
+        <div style="display: flex; gap: 10px;">
+          <button v-if="!hasApiConfig || editingApi" @click="initTelegram" class="btn btn-primary" :disabled="!apiId || (!apiHash && !hasApiConfig) || loading" style="white-space: nowrap;">
+            {{ loading ? '保存中...' : '保存配置' }}
+          </button>
+          <button v-if="hasApiConfig && !editingApi" @click="editingApi = true" class="btn btn-outline" style="white-space: nowrap;">
+            修改配置
+          </button>
+          <button v-if="editingApi" @click="cancelEditApi" class="btn btn-outline" style="white-space: nowrap;">
+            取消
+          </button>
+        </div>
       </div>
       
-      <div v-if="apiConfigured && !editingApi" style="margin-top: 10px; color: #28a745; font-size: 13px;">
-        ✅ API 已配置
+      <div v-if="hasApiConfig && !editingApi" style="margin-top: 10px; color: #28a745; font-size: 13px;">
+        ✅ API 已保存至服务器 (环境变量)
       </div>
     </div>
     
@@ -190,10 +193,11 @@ const message = ref('')
 const messageType = ref('success')
 const botSaved = ref(false)
 const savingBot = ref(false)
+const hasApiConfig = ref(false)  // 后端是否已配置 API
 
-// API 是否已配置
+// API 是否已配置 (从后端读取的状态)
 const apiConfigured = computed(() => {
-  return apiId.value && apiHash.value && !editingApi.value
+  return hasApiConfig.value && !editingApi.value
 })
 
 function getAuthHeader() {
@@ -208,16 +212,28 @@ async function fetchStatus() {
     ])
     telegramStatus.value = statusRes.data
     
+    // 读取后端配置状态
+    hasApiConfig.value = settingsRes.data.has_api_config || false
     if (settingsRes.data.api_id) {
       apiId.value = settingsRes.data.api_id
-      apiHash.value = settingsRes.data.api_hash || '***已保存***'
     }
+    // 不主动设置 apiHash，保持为空直到用户点击修改
+    
     exportPath.value = settingsRes.data.export_path || '/downloads'
     maxConcurrent.value = settingsRes.data.max_concurrent_downloads || 5
     botSaved.value = settingsRes.data.has_bot_token || false
   } catch (err) {
+    if (err.response?.status === 401) {
+      localStorage.removeItem('token')
+      router.push('/login')
+    }
     console.error('获取设置失败:', err)
   }
+}
+
+function cancelEditApi() {
+  editingApi.value = false
+  apiHash.value = '' // 清空未保存的输入
 }
 
 async function initTelegram() {

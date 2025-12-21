@@ -31,6 +31,19 @@ ACME_SH="$HOME/.acme.sh/acme.sh"
 log() { echo -e "${GREEN}[✓]${PLAIN} $1"; }
 warn() { echo -e "${YELLOW}[!]${PLAIN} $1"; }
 error() { echo -e "${RED}[✗]${PLAIN} $1"; }
+info() { echo -e "${CYAN}[i]${PLAIN} $1"; }
+
+# Docker Compose 兼容封装
+docker_compose() {
+    if command -v docker-compose &> /dev/null; then
+        docker-compose "$@"
+    elif docker compose version &> /dev/null; then
+        docker compose "$@"
+    else
+        error "未检测到 docker-compose 或 docker compose"
+        return 1
+    fi
+}
 
 # ===== 显示菜单 =====
 show_menu() {
@@ -49,7 +62,7 @@ show_menu() {
     echo -e "${CYAN}---------------------------------------------${PLAIN}"
 }
 
-# ===== 权限检查 =====
+# ===== 环境检查 =====
 check_root() {
     if [[ $EUID -ne 0 ]]; then
         error "请使用 root 用户运行此脚本！"
@@ -57,9 +70,17 @@ check_root() {
     fi
 }
 
+check_disk() {
+    local FREE_GB=$(df -m / | awk 'NR==2 {print $4}')
+    if [[ $FREE_GB -lt 1024 ]]; then
+        warn "系统盘剩余空间较少 (${FREE_GB}MB)，请确保有足够的空间下载 Telegram 媒体。"
+    fi
+}
+
 # ===== 读取配置 =====
 load_config() {
     if [ -f "$APP_DIR/$CONFIG_FILE" ]; then
+        # 防止变量污染，局部读取
         source "$APP_DIR/$CONFIG_FILE"
         return 0
     fi
@@ -753,10 +774,10 @@ services:
 YAML
     
     log "拉取镜像..."
-    docker-compose pull 2>/dev/null || docker compose pull
+    docker_compose pull
     
     log "启动服务..."
-    docker-compose up -d 2>/dev/null || docker compose up -d
+    docker_compose up -d
     
     sleep 3
     if docker ps | grep -q tg-export; then
@@ -951,6 +972,15 @@ NC='\033[0m'
 APP_DIR="/opt/tg-export"
 UNIFIED_CERT_DIR="/etc/ssl/wildcard"
 
+# Docker Compose 封装
+function docker_compose() {
+    if command -v docker-compose &> /dev/null; then
+        docker-compose "$@"
+    else
+        docker compose "$@"
+    fi
+}
+
 function show_menu() {
     clear
     echo -e "${GREEN}=== TG Export 管理工具 (tge) ===${NC}"
@@ -970,9 +1000,9 @@ function show_menu() {
 
 function handle_choice() {
     case $1 in
-        1) cd "$APP_DIR" && docker-compose up -d; read -p "按回车继续..."; show_menu ;;
-        2) cd "$APP_DIR" && docker-compose down; read -p "按回车继续..."; show_menu ;;
-        3) cd "$APP_DIR" && docker-compose restart; read -p "按回车继续..."; show_menu ;;
+        1) cd "$APP_DIR" && docker_compose up -d; read -p "按回车继续..."; show_menu ;;
+        2) cd "$APP_DIR" && docker_compose down; read -p "按回车继续..."; show_menu ;;
+        3) cd "$APP_DIR" && docker_compose restart; read -p "按回车继续..."; show_menu ;;
         4) 
             docker ps | grep -E "CONTAINER|tg-export"
             echo
@@ -983,8 +1013,8 @@ function handle_choice() {
             read -p "按回车继续..."
             show_menu
             ;;
-        5) docker logs -f --tail=100 tg-export ;;
-        6) cd "$APP_DIR" && docker-compose pull && docker-compose up -d; read -p "按回车继续..."; show_menu ;;
+        5) docker_compose logs -f --tail=100 tg-export ;;
+        6) cd "$APP_DIR" && docker_compose pull && docker_compose up -d; read -p "按回车继续..."; show_menu ;;
         7) manage_certs; show_menu ;;
         8) manage_password; show_menu ;;
         0) exit 0 ;;
@@ -1037,11 +1067,8 @@ function update_password() {
         sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=\"$NEW_PWD\"/" "$APP_DIR/.tge_config"
     fi
     
-    # 删除用户数据，让系统重新创建
-    rm -f "$APP_DIR/data/users.json"
-    
     # 重启容器
-    cd "$APP_DIR" && docker-compose restart
+    cd "$APP_DIR" && docker_compose restart
     
     echo
     echo -e "${GREEN}密码已更新！${NC}"
@@ -1064,11 +1091,11 @@ function manage_certs() {
 
 # 直接命令支持
 case "$1" in
-    start) cd "$APP_DIR" && docker-compose up -d ;;
-    stop) cd "$APP_DIR" && docker-compose down ;;
-    restart) cd "$APP_DIR" && docker-compose restart ;;
-    logs) docker logs -f --tail=100 tg-export ;;
-    update) cd "$APP_DIR" && docker-compose pull && docker-compose up -d ;;
+    start) cd "$APP_DIR" && docker_compose up -d ;;
+    stop) cd "$APP_DIR" && docker_compose down ;;
+    restart) cd "$APP_DIR" && docker_compose restart ;;
+    logs) docker_compose logs -f --tail=100 tg-export ;;
+    update) cd "$APP_DIR" && docker_compose pull && docker_compose up -d ;;
     status) docker ps | grep -E "CONTAINER|tg-export" ;;
     "") show_menu ;;
     *) echo "用法: tge {start|stop|restart|logs|update|status}" ;;
@@ -1096,7 +1123,7 @@ uninstall_app() {
             ;;
         1)
             log "仅停止服务..."
-            cd "$APP_DIR" 2>/dev/null && docker-compose down 2>/dev/null || docker compose down
+            cd "$APP_DIR" 2>/dev/null && docker_compose down
             log "服务已停止，数据保留在 $APP_DIR"
             ;;
         2)
@@ -1136,7 +1163,7 @@ uninstall_app() {
             
             # 停止并删除容器
             cd "$APP_DIR" 2>/dev/null
-            docker-compose down -v 2>/dev/null || docker compose down -v
+            docker_compose down -v
             docker stop tg-export 2>/dev/null
             docker rm tg-export 2>/dev/null
             docker rmi $(docker images | grep tg-export | awk '{print $3}') 2>/dev/null || true
@@ -1167,8 +1194,8 @@ uninstall_app() {
 update_app() {
     log "正在更新 TG Export..."
     cd "$APP_DIR" || exit
-    docker-compose pull 2>/dev/null || docker compose pull
-    docker-compose up -d 2>/dev/null || docker compose up -d
+    docker_compose pull
+    docker_compose up -d
     log "更新完成！"
 }
 
@@ -1211,6 +1238,7 @@ show_status() {
 # ===== 主程序 =====
 main() {
     check_root
+    check_disk
     
     case "$1" in
         install) install_app ;;
@@ -1220,6 +1248,7 @@ main() {
         nginx) setup_nginx ;;
         cert) manage_certs ;;
         ufw) manage_ufw ;;
+        logs) docker_compose logs -f --tail=100 tg-export ;;
         *) 
             while true; do
                 show_menu
@@ -1230,7 +1259,7 @@ main() {
                     2) uninstall_app ;;
                     3) update_app ;;
                     4) show_status ;;
-                    5) docker logs -f --tail=100 tg-export ;;
+                    5) docker_compose logs -f --tail=100 tg-export ;;
                     6) setup_nginx ;;
                     7) manage_certs ;;
                     8) manage_ufw ;;

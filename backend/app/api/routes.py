@@ -58,8 +58,11 @@ async def init_telegram(
     current_user: User = Depends(get_current_user)
 ):
     """初始化 Telegram 客户端"""
-    await telegram_client.init(api_id, api_hash)
-    return {"status": "ok", "message": "客户端已初始化"}
+    try:
+        await telegram_client.init(api_id, api_hash)
+        return {"status": "ok", "message": "客户端已初始化"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/telegram/send-code")
@@ -94,10 +97,29 @@ async def sign_in(
     current_user: User = Depends(get_current_user)
 ):
     """登录验证"""
-    success = await telegram_client.sign_in(phone, code, phone_code_hash, password)
-    if success:
-        return {"status": "ok", "message": "登录成功"}
-    raise HTTPException(status_code=400, detail="登录失败")
+    try:
+        success = await telegram_client.sign_in(phone, code, phone_code_hash, password)
+        if success:
+            return {"status": "ok", "message": "登录成功"}
+        raise RuntimeError("登录异常终止")
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        # 转换常见错误，提供更好看的消息
+        if "flood" in error_msg.lower():
+            raise HTTPException(status_code=429, detail=error_msg)
+        if "password" in error_msg.lower() or "2FA" in error_msg:
+            # 这是一个特定流程，前端需要这个信息
+            return {"status": "needs_password", "message": "需要两步验证密码"}
+        raise HTTPException(status_code=400, detail=error_msg)
+
+
+@router.post("/telegram/disconnect")
+async def disconnect_telegram(current_user: User = Depends(get_current_user)):
+    """断开 Telegram 连接"""
+    await telegram_client.stop()
+    return {"status": "ok", "message": "已断开连接"}
 
 
 @router.get("/telegram/status")
@@ -257,11 +279,14 @@ async def get_task(
 async def get_settings(current_user: User = Depends(get_current_user)):
     """获取设置"""
     import os
+    api_id = os.environ.get("API_ID") or settings.API_ID
+    api_hash = os.environ.get("API_HASH") or settings.API_HASH
+    
     return {
         "export_path": os.environ.get("DOWNLOAD_DIR", "/downloads"),
         "max_concurrent_downloads": settings.MAX_CONCURRENT_DOWNLOADS,
-        "api_id": settings.API_ID,
-        "api_hash": "***" if settings.API_HASH else "",
+        "api_id": api_id,
+        "has_api_config": bool(api_id and api_hash),  # 是否已配置 API
         "has_bot_token": bool(os.environ.get("BOT_TOKEN", settings.BOT_TOKEN))
     }
 
