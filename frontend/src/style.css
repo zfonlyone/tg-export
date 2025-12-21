@@ -15,7 +15,7 @@
   --border: #e0e0e0;
   --border-dark: #404040;
   --radius: 12px;
-  --shadow: 0 2px 8px rgba(0,0,0,0.1);
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -205,13 +205,58 @@ a:hover {
 .form-checkbox {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   cursor: pointer;
+  padding: 8px 12px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  transition: all 0.2s;
+  user-select: none;
 }
 
-.form-checkbox input {
-  width: 18px;
-  height: 18px;
+.form-checkbox:hover {
+  border-color: var(--primary);
+  background: rgba(0, 136, 204, 0.05);
+}
+
+.form-checkbox input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  transition: all 0.2s;
+}
+
+.form-checkbox input[type="checkbox"]:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+.form-checkbox input[type="checkbox"]:checked::after {
+  content: '✓';
+  position: absolute;
+  color: white;
+  font-size: 14px;
+  font-weight: bold;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.form-checkbox input[type="checkbox"]:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 136, 204, 0.2);
+}
+
+.form-checkbox.selected,
+.form-checkbox:has(input:checked) {
+  border-color: var(--primary);
+  background: rgba(0, 136, 204, 0.1);
 }
 
 /* 进度条 */
@@ -239,11 +284,30 @@ a:hover {
   font-weight: 500;
 }
 
-.status-pending { background: #fff3cd; color: #856404; }
-.status-running { background: #cce5ff; color: #004085; }
-.status-completed { background: #d4edda; color: #155724; }
-.status-failed { background: #f8d7da; color: #721c24; }
-.status-cancelled { background: #e2e3e5; color: #495057; }
+.status-pending {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.status-running {
+  background: #cce5ff;
+  color: #004085;
+}
+
+.status-completed {
+  background: #d4edda;
+  color: #155724;
+}
+
+.status-failed {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.status-cancelled {
+  background: #e2e3e5;
+  color: #495057;
+}
 
 /* 表格 */
 .table {
@@ -313,7 +377,7 @@ a:hover {
   padding: 40px;
   width: 100%;
   max-width: 400px;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
 }
 
 .login-card h1 {
@@ -328,15 +392,15 @@ a:hover {
     height: auto;
     position: relative;
   }
-  
+
   .main-content {
     margin-left: 0;
   }
-  
+
   .app-container {
     flex-direction: column;
   }
-  
+
   .stats-grid {
     grid-template-columns: 1fr;
   }
@@ -344,8 +408,15 @@ a:hover {
 
 /* 动画 */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .fade-in {
@@ -370,5 +441,7 @@ a:hover {
 }
 
 @keyframes spin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }

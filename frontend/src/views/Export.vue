@@ -92,7 +92,8 @@
         </div>
       </div>
       
-      <div style="margin-top: 20px; text-align: right;">
+      <div style="margin-top: 20px; display: flex; justify-content: space-between;">
+        <router-link to="/dashboard" class="btn btn-outline">← 返回首页</router-link>
         <button @click="step = 2" class="btn btn-primary">下一步 →</button>
       </div>
     </div>
