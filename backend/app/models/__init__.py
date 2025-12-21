@@ -9,6 +9,7 @@ from .models import (
     ExportOptions,
     ChatInfo,
     MessageInfo,
+    FailedDownload,
     ExportTask,
     User,
     LoginRequest,
@@ -23,8 +24,10 @@ __all__ = [
     "ExportOptions",
     "ChatInfo",
     "MessageInfo",
+    "FailedDownload",
     "ExportTask",
     "User",
     "LoginRequest",
     "TokenResponse",
 ]
+
