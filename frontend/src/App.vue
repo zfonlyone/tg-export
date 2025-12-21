@@ -58,19 +58,27 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 
 const router = useRouter()
 const route = useRoute()
 
-const isLoggedIn = computed(() => {
-  return !!localStorage.getItem('token')
-})
+// 使用 ref 确保响应性
+const isLoggedIn = ref(false)
+
+// 检查登录状态
+function checkLoginStatus() {
+  isLoggedIn.value = !!localStorage.getItem('token')
+}
 
 // 在非首页显示返回按钮
-const showBackButton = computed(() => {
-  return route.path !== '/dashboard' && route.path !== '/'
+const showBackButton = ref(false)
+
+// 监听路由变化
+router.afterEach((to) => {
+  showBackButton.value = to.path !== '/dashboard' && to.path !== '/'
+  checkLoginStatus()
 })
 
 function goBack() {
@@ -83,8 +91,14 @@ function goBack() {
 
 function logout() {
   localStorage.removeItem('token')
+  isLoggedIn.value = false  // 立即更新状态
   router.push('/login')
 }
+
+onMounted(() => {
+  checkLoginStatus()
+  showBackButton.value = route.path !== '/dashboard' && route.path !== '/'
+})
 </script>
 
 <style scoped>

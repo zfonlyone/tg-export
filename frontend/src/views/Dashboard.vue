@@ -45,6 +45,7 @@
           <div>
             <div style="font-weight: 600;">{{ telegramStatus.user?.first_name }} {{ telegramStatus.user?.last_name }}</div>
             <div style="color: #666;">@{{ telegramStatus.user?.username || 'N/A' }}</div>
+            <div style="color: #999; font-size: 12px;">ID: {{ telegramStatus.user?.id }}</div>
           </div>
           <span class="status-badge status-completed" style="margin-left: auto;">已连接</span>
         </div>
