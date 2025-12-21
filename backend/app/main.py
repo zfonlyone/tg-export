@@ -75,6 +75,30 @@ async def startup_event():
     """)
     # 初始化管理员用户
     init_admin_user()
+    
+    # 尝试自动恢复 Telegram 会话
+    import os
+    from .telegram import telegram_client
+    
+    api_id = os.environ.get("API_ID") or settings.API_ID
+    api_hash = os.environ.get("API_HASH") or settings.API_HASH
+    
+    if api_id and api_hash:
+        session_file = settings.SESSIONS_DIR / "tg_export.session"
+        if session_file.exists():
+            print("[TG] 发现已保存的会话，尝试自动登录...")
+            try:
+                await telegram_client.init(int(api_id), api_hash)
+                if await telegram_client.start():
+                    print("[TG] ✅ 自动登录成功！")
+                else:
+                    print("[TG] 会话无效，需要重新登录")
+            except Exception as e:
+                print(f"[TG] 自动登录失败: {e}")
+        else:
+            print("[TG] 未找到会话文件，请在设置页面登录 Telegram")
+    else:
+        print("[TG] 未配置 API_ID/API_HASH，请在设置页面配置")
 
 
 @app.on_event("shutdown")

@@ -68,7 +68,17 @@ async def send_code(
     current_user: User = Depends(get_current_user)
 ):
     """发送验证码"""
+    import os
     try:
+        # 自动从环境变量初始化客户端
+        if not telegram_client.is_initialized:
+            api_id = os.environ.get("API_ID") or settings.API_ID
+            api_hash = os.environ.get("API_HASH") or settings.API_HASH
+            if api_id and api_hash:
+                await telegram_client.init(int(api_id), api_hash)
+            else:
+                raise RuntimeError("请先配置 API ID 和 API Hash")
+        
         phone_code_hash = await telegram_client.send_code(phone)
         return {"status": "ok", "phone_code_hash": phone_code_hash}
     except Exception as e:

@@ -61,12 +61,6 @@
         </button>
       </div>
       
-      <!-- 未连接 - 需要先配置 API -->
-      <div v-else-if="!apiConfigured" style="text-align: center; padding: 30px; color: #666;">
-        <div style="font-size: 48px; margin-bottom: 15px;">🔒</div>
-        <p>请先在上方配置 Telegram App API</p>
-      </div>
-      
       <!-- 未连接 - 登录流程 -->
       <div v-else>
         <!-- 步骤指示器 -->

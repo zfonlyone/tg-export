@@ -216,17 +216,19 @@ class ExportManager:
         options = task.options
         messages: List[MessageInfo] = []
         
-        # 创建聊天目录
-        chat_dir = export_path / self._safe_filename(chat.title)
+        # 创建 Telegram Desktop 风格的目录结构
+        # export_path/chats/chat_ID/
+        chats_dir = export_path / "chats"
+        chat_dir = chats_dir / f"chat_{abs(chat.id)}"
         chat_dir.mkdir(parents=True, exist_ok=True)
         
-        # 创建媒体目录
+        # 创建媒体目录 - 匹配 Telegram Desktop 命名
         media_dirs = {
             MediaType.PHOTO: chat_dir / "photos",
-            MediaType.VIDEO: chat_dir / "videos",
-            MediaType.VOICE: chat_dir / "voice_messages",
-            MediaType.VIDEO_NOTE: chat_dir / "video_messages",
-            MediaType.AUDIO: chat_dir / "audio",
+            MediaType.VIDEO: chat_dir / "video_files",
+            MediaType.VOICE: chat_dir / "voice_messages", 
+            MediaType.VIDEO_NOTE: chat_dir / "round_video_messages",
+            MediaType.AUDIO: chat_dir / "audio_files",
             MediaType.DOCUMENT: chat_dir / "files",
             MediaType.STICKER: chat_dir / "stickers",
             MediaType.ANIMATION: chat_dir / "gifs",
