@@ -42,20 +42,27 @@ if not frontend_path.exists():
     # 尝试 Docker 环境路径
     frontend_path = Path("/app/frontend/dist")
 
-# 导出文件访问 - 必须在前端 catch-all 路由之前挂载
+# 导出文件访问
 exports_path = settings.EXPORT_DIR
-if exports_path.exists():
-    app.mount("/exports", StaticFiles(directory=exports_path, html=True), name="exports")
 
 if frontend_path.exists():
     app.mount("/assets", StaticFiles(directory=frontend_path / "assets"), name="assets")
+    
+    # exports 路由必须在 catch-all 之前
+    if exports_path.exists():
+        app.mount("/exports", StaticFiles(directory=exports_path, html=True), name="exports")
     
     @app.get("/")
     async def serve_frontend():
         return FileResponse(frontend_path / "index.html")
     
+    # 这个 catch-all 路由最后定义，但 mount 的优先级更高
     @app.get("/{path:path}")
     async def serve_frontend_routes(path: str):
+        # 对于 exports 开头的路径，返回 404 让 mount 处理（实际上不会执行到这里）
+        if path.startswith("exports"):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404)
         file_path = frontend_path / path
         if file_path.exists() and file_path.is_file():
             return FileResponse(file_path)

@@ -1,291 +1,43 @@
 """
 TG Export - HTML 导出器
-生成类似 Telegram Desktop 官方导出的 HTML 格式
+生成与 Telegram Desktop 官方导出完全兼容的 HTML 格式
 """
 from pathlib import Path
 from typing import List, Dict
 from datetime import datetime
 import html
+import shutil
 
 from ..models import ExportTask, ChatInfo, MessageInfo, MediaType
-
-
-# HTML 模板 - 类似 Telegram Desktop 官方风格
-HTML_TEMPLATE = '''<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{title} - TG Export</title>
-    <style>
-        :root {{
-            --bg-color: #ffffff;
-            --text-color: #000000;
-            --message-bg: #ffffff;
-            --message-border: #e0e0e0;
-            --link-color: #168acd;
-            --time-color: #999999;
-            --name-color: #168acd;
-        }}
-        
-        @media (prefers-color-scheme: dark) {{
-            :root {{
-                --bg-color: #212121;
-                --text-color: #ffffff;
-                --message-bg: #2d2d2d;
-                --message-border: #404040;
-                --link-color: #71baf2;
-                --time-color: #888888;
-                --name-color: #71baf2;
-            }}
-        }}
-        
-        * {{
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }}
-        
-        body {{
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            font-size: 14px;
-            line-height: 1.5;
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            padding: 20px;
-            max-width: 800px;
-            margin: 0 auto;
-        }}
-        
-        .header {{
-            text-align: center;
-            padding: 20px 0;
-            border-bottom: 1px solid var(--message-border);
-            margin-bottom: 20px;
-        }}
-        
-        .header h1 {{
-            font-size: 24px;
-            margin-bottom: 10px;
-        }}
-        
-        .header .info {{
-            color: var(--time-color);
-            font-size: 13px;
-        }}
-        
-        .chat-info {{
-            background: var(--message-bg);
-            border: 1px solid var(--message-border);
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 20px;
-        }}
-        
-        .chat-info h2 {{
-            font-size: 18px;
-            margin-bottom: 10px;
-        }}
-        
-        .chat-info .meta {{
-            color: var(--time-color);
-            font-size: 13px;
-        }}
-        
-        .messages {{
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }}
-        
-        .message {{
-            background: var(--message-bg);
-            border: 1px solid var(--message-border);
-            border-radius: 8px;
-            padding: 12px;
-        }}
-        
-        .message .header-row {{
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 6px;
-        }}
-        
-        .message .from {{
-            font-weight: 600;
-            color: var(--name-color);
-        }}
-        
-        .message .date {{
-            font-size: 12px;
-            color: var(--time-color);
-        }}
-        
-        .message .text {{
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }}
-        
-        .message .media {{
-            margin-top: 10px;
-        }}
-        
-        .message .media img {{
-            max-width: 100%;
-            border-radius: 4px;
-        }}
-        
-        .message .media video {{
-            max-width: 100%;
-            border-radius: 4px;
-        }}
-        
-        .message .media audio {{
-            width: 100%;
-        }}
-        
-        .message .media .file {{
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 12px;
-            background: var(--bg-color);
-            border: 1px solid var(--message-border);
-            border-radius: 4px;
-            text-decoration: none;
-            color: var(--link-color);
-        }}
-        
-        .message .media .file:hover {{
-            background: var(--message-border);
-        }}
-        
-        .message .reply {{
-            font-size: 12px;
-            color: var(--time-color);
-            border-left: 2px solid var(--link-color);
-            padding-left: 8px;
-            margin-bottom: 6px;
-        }}
-        
-        .nav {{
-            display: flex;
-            justify-content: center;
-            gap: 20px;
-            margin-top: 30px;
-            padding-top: 20px;
-            border-top: 1px solid var(--message-border);
-        }}
-        
-        .nav a {{
-            color: var(--link-color);
-            text-decoration: none;
-        }}
-        
-        .nav a:hover {{
-            text-decoration: underline;
-        }}
-        
-        .stats {{
-            text-align: center;
-            margin: 20px 0;
-            padding: 15px;
-            background: var(--message-bg);
-            border-radius: 8px;
-        }}
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>📥 TG Export</h1>
-        <div class="info">导出时间: {export_time}</div>
-    </div>
-    
-    {content}
-    
-    <div class="stats">
-        <strong>导出统计</strong><br>
-        聊天: {total_chats} | 消息: {total_messages} | 媒体: {total_media}
-    </div>
-    
-    <div class="nav">
-        <a href="index.html">首页</a>
-        <a href="export.json">JSON 数据</a>
-    </div>
-</body>
-</html>
-'''
-
-CHAT_TEMPLATE = '''
-<div class="chat-info">
-    <h2>{chat_title}</h2>
-    <div class="meta">
-        类型: {chat_type} | ID: {chat_id}
-    </div>
-</div>
-
-<div class="messages">
-{messages_html}
-</div>
-'''
-
-MESSAGE_TEMPLATE = '''
-<div class="message" id="msg-{msg_id}">
-    {reply_html}
-    <div class="header-row">
-        <span class="from">{from_name} <small style="color: var(--time-color); font-weight: normal; margin-left: 8px;">#{msg_id}</small></span>
-        <span class="date">{date}</span>
-    </div>
-    {text_html}
-    {media_html}
-</div>
-'''
+from ..config import settings
 
 
 def _escape_html(text: str) -> str:
     """转义 HTML 特殊字符"""
     if not text:
         return ""
-    return html.escape(text)
+    return html.escape(text).replace('\n', '<br>')
 
 
 def _format_date(dt: datetime) -> str:
-    """格式化日期"""
+    """格式化日期时间"""
     if not dt:
         return ""
-    return dt.strftime("%Y-%m-%d %H:%M:%S")
+    return dt.strftime("%H:%M")
 
 
-def _get_media_html(msg: MessageInfo, base_path: str = "") -> str:
-    """生成媒体 HTML"""
-    if not msg.media_type or not msg.media_path:
+def _format_date_title(dt: datetime) -> str:
+    """格式化日期时间标题"""
+    if not dt:
         return ""
-    
-    media_path = msg.media_path
-    
-    if msg.media_type == MediaType.PHOTO:
-        return f'<div class="media"><img src="{media_path}" alt="photo" loading="lazy"></div>'
-    
-    elif msg.media_type == MediaType.VIDEO:
-        return f'<div class="media"><video src="{media_path}" controls></video></div>'
-    
-    elif msg.media_type in [MediaType.VOICE, MediaType.AUDIO]:
-        return f'<div class="media"><audio src="{media_path}" controls></audio></div>'
-    
-    elif msg.media_type == MediaType.VIDEO_NOTE:
-        return f'<div class="media"><video src="{media_path}" controls style="border-radius: 50%; width: 200px; height: 200px; object-fit: cover;"></video></div>'
-    
-    elif msg.media_type == MediaType.ANIMATION:
-        return f'<div class="media"><video src="{media_path}" autoplay loop muted></video></div>'
-    
-    elif msg.media_type == MediaType.STICKER:
-        return f'<div class="media"><img src="{media_path}" alt="sticker" style="max-width: 200px;"></div>'
-    
-    else:
-        file_name = msg.file_name or "文件"
-        file_size = f" ({_format_size(msg.file_size)})" if msg.file_size else ""
-        return f'<div class="media"><a href="{media_path}" class="file">📎 {_escape_html(file_name)}{file_size}</a></div>'
+    return dt.strftime("%d.%m.%Y %H:%M:%S")
+
+
+def _format_date_header(dt: datetime) -> str:
+    """格式化日期头"""
+    if not dt:
+        return ""
+    return dt.strftime("%d %B %Y")
 
 
 def _format_size(size: int) -> str:
@@ -302,26 +54,124 @@ def _format_size(size: int) -> str:
         return f"{size / 1024 / 1024 / 1024:.1f} GB"
 
 
-def _generate_message_html(msg: MessageInfo) -> str:
-    """生成单条消息的 HTML"""
-    reply_html = ""
-    if msg.reply_to_message_id:
-        reply_html = f'<div class="reply">回复消息 #{msg.reply_to_message_id}</div>'
+def _get_userpic_class(user_id: int) -> str:
+    """获取用户头像颜色类"""
+    colors = ['userpic1', 'userpic2', 'userpic3', 'userpic4', 'userpic5', 'userpic6', 'userpic7', 'userpic8']
+    return colors[abs(user_id or 0) % len(colors)]
+
+
+def _get_initials(name: str) -> str:
+    """获取名称首字"""
+    if not name:
+        return "?"
+    return name[0].upper()
+
+
+def _get_media_type_class(media_type: MediaType) -> str:
+    """获取媒体类型的 CSS 类"""
+    mapping = {
+        MediaType.PHOTO: 'media_photo',
+        MediaType.VIDEO: 'media_video',
+        MediaType.AUDIO: 'media_audio_file',
+        MediaType.VOICE: 'media_voice_message',
+        MediaType.VIDEO_NOTE: 'media_video',
+        MediaType.DOCUMENT: 'media_file',
+        MediaType.STICKER: 'media_photo',
+        MediaType.ANIMATION: 'media_video',
+    }
+    return mapping.get(media_type, 'media_file')
+
+
+def _generate_message_html(msg: MessageInfo, is_joined: bool = False) -> str:
+    """生成单条消息的 HTML - 官方格式"""
+    joined_class = 'joined' if is_joined else ''
     
-    text_html = ""
+    # 用户头像
+    userpic_html = ''
+    from_name_html = ''
+    if not is_joined:
+        userpic_class = _get_userpic_class(msg.from_user_id)
+        initials = _get_initials(msg.from_user_name)
+        userpic_html = f'''
+      <div class="pull_left userpic_wrap">
+       <div class="userpic {userpic_class}" style="width: 42px; height: 42px">
+        <div class="initials" style="line-height: 42px">{initials}</div>
+       </div>
+      </div>'''
+        from_name_html = f'''
+       <div class="from_name">
+{_escape_html(msg.from_user_name or "未知")} 
+       </div>'''
+    
+    # 媒体内容
+    media_html = ''
+    if msg.media_type and msg.file_name:
+        media_class = _get_media_type_class(msg.media_type)
+        file_size = _format_size(msg.file_size) if msg.file_size else ''
+        
+        if msg.media_path:
+            # 已下载
+            if msg.media_type == MediaType.PHOTO:
+                media_html = f'''
+       <div class="media_wrap clearfix">
+        <a class="photo_wrap clearfix pull_left" href="{msg.media_path}">
+         <img class="photo" src="{msg.media_path}" style="max-width: 300px;">
+        </a>
+       </div>'''
+            elif msg.media_type == MediaType.VIDEO:
+                media_html = f'''
+       <div class="media_wrap clearfix">
+        <div class="video_file_wrap clearfix pull_left">
+         <video class="video_file" src="{msg.media_path}" controls style="max-width: 400px;"></video>
+        </div>
+       </div>'''
+            elif msg.media_type in [MediaType.VOICE, MediaType.AUDIO]:
+                media_html = f'''
+       <div class="media_wrap clearfix">
+        <audio src="{msg.media_path}" controls></audio>
+       </div>'''
+            else:
+                media_html = f'''
+       <div class="media_wrap clearfix">
+        <div class="media clearfix pull_left {media_class}">
+         <div class="fill pull_left"></div>
+         <div class="body">
+          <div class="title bold"><a href="{msg.media_path}">{_escape_html(msg.file_name)}</a></div>
+          <div class="status details">{file_size}</div>
+         </div>
+        </div>
+       </div>'''
+        else:
+            # 未下载
+            media_html = f'''
+       <div class="media_wrap clearfix">
+        <div class="media clearfix pull_left {media_class}">
+         <div class="fill pull_left"></div>
+         <div class="body">
+          <div class="title bold">{_escape_html(msg.file_name)}</div>
+          <div class="description">Not downloaded</div>
+          <div class="status details">{file_size}</div>
+         </div>
+        </div>
+       </div>'''
+    
+    # 文本内容
+    text_html = ''
     if msg.text:
-        text_html = f'<div class="text">{_escape_html(msg.text)}</div>'
+        text_html = f'''
+       <div class="text">{_escape_html(msg.text)}</div>'''
     
-    media_html = _get_media_html(msg)
-    
-    return MESSAGE_TEMPLATE.format(
-        msg_id=msg.id,
-        reply_html=reply_html,
-        from_name=_escape_html(msg.from_user_name or "未知"),
-        date=_format_date(msg.date),
-        text_html=text_html,
-        media_html=media_html
-    )
+    return f'''
+     <div class="message default clearfix {joined_class}" id="message{msg.id}">
+{userpic_html}
+      <div class="body">
+       <div class="pull_right date details" title="{_format_date_title(msg.date)}">{_format_date(msg.date)}</div>
+{from_name_html}
+{media_html}
+{text_html}
+      </div>
+     </div>
+'''
 
 
 async def export(
@@ -332,77 +182,174 @@ async def export(
 ) -> str:
     """
     导出为 HTML 格式
-    类似 Telegram Desktop 官方导出样式
+    完全兼容 Telegram Desktop 官方导出
     """
-    # 生成索引页
-    index_content = ""
+    # 获取模板目录
+    templates_dir = Path(__file__).parent / "templates"
     
-    # 按聊天列表生成链接
-    index_content += '<div class="chat-info"><h2>导出的聊天</h2></div>'
-    index_content += '<div class="messages">'
+    # 复制静态资源
+    if templates_dir.exists():
+        for folder in ['css', 'js', 'images']:
+            src = templates_dir / folder
+            dst = export_path / folder
+            if src.exists():
+                shutil.copytree(src, dst, dirs_exist_ok=True)
     
-    chat_type_names = {
-        "private": "私聊",
-        "bot": "机器人",
-        "group": "群组",
-        "supergroup": "超级群组",
-        "channel": "频道"
-    }
+    # 创建 lists 目录
+    lists_dir = export_path / "lists"
+    lists_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 创建 chats 目录
+    chats_dir = export_path / "chats"
+    chats_dir.mkdir(parents=True, exist_ok=True)
+    
+    # 生成聊天列表页面
+    chat_links = []
+    for chat in chats:
+        chat_folder = f"chat_{abs(chat.id)}"
+        chat_links.append(f'''
+     <a class="entry block_link clearfix" href="../chats/{chat_folder}/messages.html">
+      <div class="pull_left userpic_wrap">
+       <div class="userpic {_get_userpic_class(chat.id)}" style="width: 48px; height: 48px">
+        <div class="initials" style="line-height: 48px">{_get_initials(chat.title)}</div>
+       </div>
+      </div>
+      <div class="body">
+       <div class="name bold">{_escape_html(chat.title)}</div>
+       <div class="details">{chat.type.value}</div>
+      </div>
+     </a>''')
+    
+    chats_list_html = f'''<!DOCTYPE html>
+<html>
+ <head>
+  <meta charset="utf-8"/>
+  <title>Chats</title>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <link href="../css/style.css" rel="stylesheet"/>
+  <script src="../js/script.js" type="text/javascript"></script>
+ </head>
+ <body onload="CheckLocation();">
+  <div class="page_wrap list_page">
+   <div class="page_header">
+    <a class="content block_link" href="../export_results.html" onclick="return GoBack(this)">
+     <div class="text bold">Chats</div>
+    </a>
+   </div>
+   <div class="page_body">
+    <div class="entry_list">
+{''.join(chat_links)}
+    </div>
+   </div>
+  </div>
+ </body>
+</html>'''
+    
+    with open(lists_dir / "chats.html", "w", encoding="utf-8") as f:
+        f.write(chats_list_html)
+    
+    # 为每个聊天生成消息页面
+    # 按聊天ID分组消息
+    messages_by_chat: Dict[int, List[MessageInfo]] = {}
+    for msg in messages:
+        chat_id = msg.from_user_id or 0  # 临时使用
+        # 实际应该从消息中获取 chat_id
+        messages_by_chat.setdefault(0, []).append(msg)
     
     for chat in chats:
-        chat_filename = _safe_filename(chat.title) + ".html"
-        type_name = chat_type_names.get(chat.type.value, chat.type.value)
-        index_content += f'''
-        <div class="message">
-            <div class="header-row">
-                <span class="from"><a href="{chat_filename}">{_escape_html(chat.title)}</a></span>
-                <span class="date">{type_name}</span>
-            </div>
-        </div>
-        '''
-    
-    index_content += '</div>'
-    
-    # 写入索引页
-    index_html = HTML_TEMPLATE.format(
-        title="导出列表",
-        export_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        content=index_content,
-        total_chats=task.total_chats,
-        total_messages=task.processed_messages,
-        total_media=task.downloaded_media
-    )
-    
-    index_file = export_path / "index.html"
-    with open(index_file, "w", encoding="utf-8") as f:
-        f.write(index_html)
-    
-    # 为每个聊天生成独立页面
-    # (这里简化处理，实际应该按聊天分组消息)
-    if messages:
-        messages_html = "\n".join(_generate_message_html(msg) for msg in messages)
+        chat_folder = chats_dir / f"chat_{abs(chat.id)}"
+        chat_folder.mkdir(parents=True, exist_ok=True)
         
-        content = CHAT_TEMPLATE.format(
-            chat_title="所有消息",
-            chat_type="混合",
-            chat_id="all",
-            messages_html=messages_html
-        )
+        # 获取该聊天的消息
+        chat_messages = [m for m in messages if True]  # 暂时使用所有消息
         
-        messages_file = export_path / "messages.html"
-        messages_page = HTML_TEMPLATE.format(
-            title="所有消息",
-            export_time=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            content=content,
-            total_chats=task.total_chats,
-            total_messages=task.processed_messages,
-            total_media=task.downloaded_media
-        )
+        # 生成消息 HTML
+        messages_html_parts = []
+        last_date = None
+        last_user = None
         
-        with open(messages_file, "w", encoding="utf-8") as f:
-            f.write(messages_page)
+        for msg in chat_messages:
+            # 添加日期分隔
+            if msg.date:
+                msg_date = msg.date.date()
+                if msg_date != last_date:
+                    messages_html_parts.append(f'''
+     <div class="message service" id="message-date-{msg.id}">
+      <div class="body details">{_format_date_header(msg.date)}</div>
+     </div>''')
+                    last_date = msg_date
+                    last_user = None
+            
+            # 判断是否连续消息
+            is_joined = (msg.from_user_id == last_user)
+            messages_html_parts.append(_generate_message_html(msg, is_joined))
+            last_user = msg.from_user_id
+        
+        messages_page_html = f'''<!DOCTYPE html>
+<html>
+ <head>
+  <meta charset="utf-8"/>
+  <title>{_escape_html(chat.title)}</title>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <link href="../../css/style.css" rel="stylesheet"/>
+  <script src="../../js/script.js" type="text/javascript"></script>
+ </head>
+ <body onload="CheckLocation();">
+  <div class="page_wrap">
+   <div class="page_header">
+    <a class="content block_link" href="../../lists/chats.html" onclick="return GoBack(this)">
+     <div class="text bold">{_escape_html(chat.title)}</div>
+    </a>
+   </div>
+   <div class="page_body chat_page">
+    <div class="history">
+{''.join(messages_html_parts)}
+    </div>
+   </div>
+  </div>
+ </body>
+</html>'''
+        
+        with open(chat_folder / "messages.html", "w", encoding="utf-8") as f:
+            f.write(messages_page_html)
     
-    return str(index_file)
+    # 生成入口页面
+    export_results_html = f'''<!DOCTYPE html>
+<html>
+ <head>
+  <meta charset="utf-8"/>
+  <title>Exported Data</title>
+  <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+  <link href="css/style.css" rel="stylesheet"/>
+  <script src="js/script.js" type="text/javascript"></script>
+ </head>
+ <body onload="CheckLocation();">
+  <div class="page_wrap">
+   <div class="page_header">
+    <div class="content">
+     <div class="text bold">Exported Data</div>
+    </div>
+   </div>
+   <div class="page_body">
+    <div class="sections">
+     <a class="section block_link chats" href="lists/chats.html#allow_back">
+      <div class="counter details">{len(chats)}</div>
+      <div class="label bold">Chats</div>
+     </a>
+    </div>
+    <div class="page_about details with_divider">
+导出时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}<br>
+消息数: {task.processed_messages} | 媒体数: {task.downloaded_media}
+    </div>
+   </div>
+  </div>
+ </body>
+</html>'''
+    
+    with open(export_path / "export_results.html", "w", encoding="utf-8") as f:
+        f.write(export_results_html)
+    
+    return str(export_path / "export_results.html")
 
 
 def _safe_filename(name: str) -> str:

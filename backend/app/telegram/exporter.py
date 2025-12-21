@@ -214,8 +214,11 @@ class ExportManager:
         """执行导出任务"""
         try:
             options = task.options
-            export_path = Path(options.export_path)
+            # 使用 EXPORT_DIR + task.id 作为导出路径
+            export_path = settings.EXPORT_DIR / task.id
             export_path.mkdir(parents=True, exist_ok=True)
+            # 更新 options 中的路径以便前端显示
+            options.export_path = str(export_path)
             
             # 阶段 1: 提取消息和元数据
             task.status = TaskStatus.EXTRACTING
