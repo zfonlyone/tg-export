@@ -26,11 +26,52 @@ logger = logging.getLogger(__name__)
 class ExportManager:
     """导出管理器"""
     
+    TASKS_FILE = "tasks.json"
+    
     def __init__(self):
         self.tasks: Dict[str, ExportTask] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
         self._progress_callbacks: Dict[str, List[Callable]] = {}
         self._paused_tasks: set = set()  # 暂停的任务ID
+        self._tasks_file = settings.DATA_DIR / self.TASKS_FILE
+        # 确保数据目录存在
+        settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        # 启动时加载任务
+        self._load_tasks()
+    
+    def _load_tasks(self):
+        """从文件加载任务"""
+        try:
+            if self._tasks_file.exists():
+                with open(self._tasks_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for task_data in data:
+                    try:
+                        task = ExportTask.model_validate(task_data)
+                        
+                        # 容器重启后，运行中的任务需要暂停（因为没有活动的协程）
+                        if task.status in [TaskStatus.RUNNING, TaskStatus.EXTRACTING]:
+                            task.status = TaskStatus.PAUSED
+                            self._paused_tasks.add(task.id)
+                            logger.info(f"任务 {task.name} 已从运行中恢复为暂停状态")
+                        elif task.status == TaskStatus.PAUSED:
+                            self._paused_tasks.add(task.id)
+                            
+                        self.tasks[task.id] = task
+                    except Exception as e:
+                        logger.error(f"加载任务失败: {e}")
+                logger.info(f"已加载 {len(self.tasks)} 个任务")
+        except Exception as e:
+            logger.error(f"加载任务文件失败: {e}")
+    
+    def _save_tasks(self):
+        """保存任务到文件"""
+        try:
+            data = [task.model_dump(mode='json') for task in self.tasks.values()]
+            with open(self._tasks_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+        except Exception as e:
+            logger.error(f"保存任务失败: {e}")
     
     def create_task(self, name: str, options: ExportOptions) -> ExportTask:
         """创建导出任务"""
@@ -40,6 +81,7 @@ class ExportManager:
             options=options
         )
         self.tasks[task.id] = task
+        self._save_tasks()  # 保存到文件
         return task
     
     def get_task(self, task_id: str) -> Optional[ExportTask]:
@@ -58,6 +100,9 @@ class ExportManager:
     
     async def _notify_progress(self, task_id: str, task: ExportTask):
         """通知进度更新"""
+        # 保存任务状态到文件
+        self._save_tasks()
+        
         callbacks = self._progress_callbacks.get(task_id, [])
         for callback in callbacks:
             try:
@@ -393,6 +438,12 @@ class ExportManager:
         async for msg in telegram_client.get_chat_history(chat.id):
             if task.status == TaskStatus.CANCELLED:
                 break
+            
+            # 等待暂停状态结束
+            while task.status == TaskStatus.PAUSED:
+                await asyncio.sleep(1)
+                if task.status == TaskStatus.CANCELLED:
+                    break
             
             # 消息ID范围筛选 (1-0 表示全部, 1-100 表示1到100)
             if msg_to > 0 and msg.id > msg_to:

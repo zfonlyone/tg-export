@@ -8,7 +8,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from ..config import settings
 from ..models import (
-    ExportTask, ExportOptions, ChatInfo, TaskStatus,
+    ExportTask, ExportOptions, ChatInfo, TaskStatus, DownloadStatus,
     LoginRequest, TokenResponse, User
 )
 from ..telegram import telegram_client, export_manager
@@ -228,6 +228,30 @@ async def get_download_queue(
     return queue
 
 
+@router.post("/export/{task_id}/retry")
+async def retry_all_failed(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """重试所有失败的下载"""
+    task = export_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    count = 0
+    for item in task.download_queue:
+        if item.status == DownloadStatus.FAILED:
+            item.status = DownloadStatus.WAITING
+            item.error = None
+            count += 1
+    
+    if count > 0:
+        export_manager._save_tasks()
+        return {"status": "ok", "message": f"已重置 {count} 个失败文件"}
+    
+    raise HTTPException(status_code=400, detail="没有失败的文件")
+
+
 @router.post("/export/{task_id}/download/{item_id}/pause")
 async def pause_download_item(
     task_id: str,
@@ -254,6 +278,27 @@ async def resume_download_item(
     raise HTTPException(status_code=400, detail="恢复失败")
 
 
+@router.post("/export/{task_id}/retry/{item_id}")
+async def retry_single_file(
+    task_id: str,
+    item_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """重试单个失败的下载"""
+    task = export_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    for item in task.download_queue:
+        if item.id == item_id and item.status == DownloadStatus.FAILED:
+            item.status = DownloadStatus.WAITING
+            item.error = None
+            export_manager._save_tasks()
+            return {"status": "ok", "message": "已重置为等待状态"}
+    
+    raise HTTPException(status_code=400, detail="文件不存在或不是失败状态")
+
+
 @router.delete("/export/{task_id}")
 async def delete_task(
     task_id: str,
@@ -269,6 +314,7 @@ async def delete_task(
         await export_manager.cancel_export(task_id)
     
     del export_manager.tasks[task_id]
+    export_manager._save_tasks()  # 保存更改
     return {"status": "ok", "message": "任务已删除"}
 
 
