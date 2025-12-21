@@ -42,6 +42,11 @@ if not frontend_path.exists():
     # 尝试 Docker 环境路径
     frontend_path = Path("/app/frontend/dist")
 
+# 导出文件访问 - 必须在前端 catch-all 路由之前挂载
+exports_path = settings.EXPORT_DIR
+if exports_path.exists():
+    app.mount("/exports", StaticFiles(directory=exports_path, html=True), name="exports")
+
 if frontend_path.exists():
     app.mount("/assets", StaticFiles(directory=frontend_path / "assets"), name="assets")
     
@@ -55,11 +60,6 @@ if frontend_path.exists():
         if file_path.exists() and file_path.is_file():
             return FileResponse(file_path)
         return FileResponse(frontend_path / "index.html")
-
-# 导出文件访问
-exports_path = settings.EXPORT_DIR
-if exports_path.exists():
-    app.mount("/exports", StaticFiles(directory=exports_path), name="exports")
 
 
 @app.on_event("startup")

@@ -104,11 +104,17 @@ class ExportManager:
     async def pause_export(self, task_id: str) -> bool:
         """暂停导出任务"""
         task = self.tasks.get(task_id)
-        if not task or task.status != TaskStatus.RUNNING:
+        if not task or task.status not in [TaskStatus.RUNNING, TaskStatus.EXTRACTING]:
             return False
         
         self._paused_tasks.add(task_id)
         task.status = TaskStatus.PAUSED
+        
+        # 将所有正在下载的项目也设为暂停，这样下载循环会在当前文件完成后暂停
+        for item in task.download_queue:
+            if item.status == DownloadStatus.DOWNLOADING:
+                item.status = DownloadStatus.PAUSED
+        
         await self._notify_progress(task_id, task)
         return True
     
@@ -120,6 +126,12 @@ class ExportManager:
         
         self._paused_tasks.discard(task_id)
         task.status = TaskStatus.RUNNING
+        
+        # 将所有暂停的下载项恢复为等待状态
+        for item in task.download_queue:
+            if item.status == DownloadStatus.PAUSED:
+                item.status = DownloadStatus.WAITING
+        
         await self._notify_progress(task_id, task)
         return True
     

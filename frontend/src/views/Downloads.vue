@@ -109,8 +109,8 @@
             <span>📊 传输明细 ({{ task.downloaded_media }}/{{ task.total_media }})</span>
             <span>{{ isDetailedExpanded(task) ? '▼' : '▶' }}</span>
           </div>
-          <div v-if="isDetailedExpanded(task)" class="failed-list">
-             <div v-for="item in task.download_queue.slice(0, 50)" :key="item.id" class="download-item-row">
+          <div v-if="isDetailedExpanded(task)" class="failed-list" style="max-height: 400px; overflow-y: auto;">
+             <div v-for="item in task.download_queue" :key="item.id" class="download-item-row">
                 <div style="flex: 1; min-width: 0;">
                   <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 11px;">
                     <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace;">{{ item.file_name }}</span>
@@ -123,9 +123,6 @@
                 <div style="margin-left: 10px; display: flex; align-items: center; gap: 5px;">
                    <span :class="'item-status ' + item.status">{{ item.status }}</span>
                 </div>
-             </div>
-             <div v-if="task.download_queue.length > 50" class="download-item-row" style="justify-content: center; color: #888; font-size: 12px; border: none;">
-                ... 及其他 {{ task.download_queue.length - 50 }} 个文件
              </div>
           </div>
         </div>

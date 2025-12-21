@@ -5,7 +5,7 @@ TG Export - Telegram Bot
 import asyncio
 from typing import Optional
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, BotCommand
 
 from ..config import settings
 from ..models import ExportOptions, ExportFormat, TaskStatus
@@ -86,6 +86,21 @@ class TelegramBot:
         """启动 Bot"""
         if self._bot:
             await self._bot.start()
+            # 注册命令菜单
+            await self._bot.set_bot_commands([
+                BotCommand("start", "显示欢迎信息"),
+                BotCommand("help", "查看详细帮助"),
+                BotCommand("status", "查看连接状态"),
+                BotCommand("list", "列出所有对话"),
+                BotCommand("export", "开始导出"),
+                BotCommand("tasks", "查看任务列表"),
+                BotCommand("pause", "暂停任务"),
+                BotCommand("resume", "恢复任务"),
+                BotCommand("cancel", "取消任务"),
+                BotCommand("failed", "查看失败下载"),
+                BotCommand("retry", "重试失败下载"),
+            ])
+            print("✅ TG Export Bot 已启动，命令菜单已注册")
     
     async def stop(self):
         """停止 Bot"""
