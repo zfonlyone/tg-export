@@ -2,10 +2,45 @@
   <div class="fade-in">
     <h1 style="margin-bottom: 20px;">⚙️ 设置</h1>
     
+    <!-- Telegram App API 配置 -->
+    <div class="card">
+      <div class="card-header">
+        <h2>🔗 Telegram App API</h2>
+      </div>
+      
+      <p style="color: #666; margin-bottom: 15px;">
+        从 <a href="https://my.telegram.org/apps" target="_blank" style="color: var(--primary);">my.telegram.org</a> 获取应用 API 凭证（仅需配置一次）
+      </p>
+      
+      <div style="display: flex; gap: 15px; align-items: flex-end;">
+        <div class="form-group" style="flex: 1; margin-bottom: 0;">
+          <label class="form-label">API ID</label>
+          <input v-model="apiId" type="number" class="form-input" placeholder="例如: 12345678" :disabled="apiConfigured && !editingApi">
+        </div>
+        <div class="form-group" style="flex: 2; margin-bottom: 0;">
+          <label class="form-label">API Hash</label>
+          <input v-model="apiHash" type="text" class="form-input" placeholder="例如: abcdef1234567890..." :disabled="apiConfigured && !editingApi">
+        </div>
+        <button v-if="!apiConfigured" @click="initTelegram" class="btn btn-primary" :disabled="!apiId || !apiHash || loading" style="white-space: nowrap;">
+          {{ loading ? '保存中...' : '保存配置' }}
+        </button>
+        <button v-else-if="!editingApi" @click="editingApi = true" class="btn btn-outline" style="white-space: nowrap;">
+          修改
+        </button>
+        <button v-else @click="initTelegram" class="btn btn-primary" :disabled="!apiId || !apiHash || loading" style="white-space: nowrap;">
+          {{ loading ? '保存中...' : '保存' }}
+        </button>
+      </div>
+      
+      <div v-if="apiConfigured && !editingApi" style="margin-top: 10px; color: #28a745; font-size: 13px;">
+        ✅ API 已配置
+      </div>
+    </div>
+    
     <!-- Telegram 账号登录 -->
     <div class="card">
       <div class="card-header">
-        <h2>📱 Telegram 账号</h2>
+        <h2>📱 Telegram 账号登录</h2>
       </div>
       
       <!-- 已连接状态 -->
@@ -26,38 +61,23 @@
         </button>
       </div>
       
+      <!-- 未连接 - 需要先配置 API -->
+      <div v-else-if="!apiConfigured" style="text-align: center; padding: 30px; color: #666;">
+        <div style="font-size: 48px; margin-bottom: 15px;">🔒</div>
+        <p>请先在上方配置 Telegram App API</p>
+      </div>
+      
       <!-- 未连接 - 登录流程 -->
       <div v-else>
         <!-- 步骤指示器 -->
         <div style="display: flex; gap: 10px; margin-bottom: 20px;">
-          <div :class="['login-step', loginStep >= 1 ? 'active' : '']">1. API 配置</div>
-          <div :class="['login-step', loginStep >= 2 ? 'active' : '']">2. 手机号</div>
-          <div :class="['login-step', loginStep >= 3 ? 'active' : '']">3. 验证码</div>
-          <div :class="['login-step', loginStep >= 4 ? 'active' : '']">4. 完成</div>
+          <div :class="['login-step', loginStep >= 1 ? 'active' : '']">1. 手机号</div>
+          <div :class="['login-step', loginStep >= 2 ? 'active' : '']">2. 验证码</div>
+          <div :class="['login-step', loginStep >= 3 ? 'active' : '']">3. 完成</div>
         </div>
         
-        <!-- 步骤 1: API 配置 -->
+        <!-- 步骤 1: 手机号 -->
         <div v-if="loginStep === 1">
-          <p style="color: #666; margin-bottom: 15px;">
-            首先需要配置 Telegram API。前往 
-            <a href="https://my.telegram.org/apps" target="_blank" style="color: var(--primary);">my.telegram.org</a> 
-            获取 API ID 和 Hash。
-          </p>
-          <div class="form-group">
-            <label class="form-label">API ID</label>
-            <input v-model="apiId" type="number" class="form-input" placeholder="例如: 12345678">
-          </div>
-          <div class="form-group">
-            <label class="form-label">API Hash</label>
-            <input v-model="apiHash" type="text" class="form-input" placeholder="例如: abcdef1234567890...">
-          </div>
-          <button @click="initTelegram" class="btn btn-primary" :disabled="!apiId || !apiHash || loading">
-            {{ loading ? '初始化中...' : '下一步 →' }}
-          </button>
-        </div>
-        
-        <!-- 步骤 2: 手机号 -->
-        <div v-if="loginStep === 2">
           <p style="color: #666; margin-bottom: 15px;">
             输入您的 Telegram 手机号码（含国际区号）
           </p>
@@ -65,16 +85,13 @@
             <label class="form-label">手机号码</label>
             <input v-model="phone" type="tel" class="form-input" placeholder="+86 138xxxxxxxx">
           </div>
-          <div style="display: flex; gap: 10px;">
-            <button @click="loginStep = 1" class="btn btn-outline">← 上一步</button>
-            <button @click="sendCode" class="btn btn-primary" :disabled="!phone || loading">
-              {{ loading ? '发送中...' : '发送验证码' }}
-            </button>
-          </div>
+          <button @click="sendCode" class="btn btn-primary" :disabled="!phone || loading">
+            {{ loading ? '发送中...' : '发送验证码' }}
+          </button>
         </div>
         
-        <!-- 步骤 3: 验证码 -->
-        <div v-if="loginStep === 3">
+        <!-- 步骤 2: 验证码 -->
+        <div v-if="loginStep === 2">
           <p style="color: #666; margin-bottom: 15px;">
             验证码已发送到您的 Telegram 应用，请查收
           </p>
@@ -83,15 +100,15 @@
             <input v-model="code" type="text" class="form-input" placeholder="输入5位验证码" maxlength="5">
           </div>
           <div style="display: flex; gap: 10px;">
-            <button @click="loginStep = 2" class="btn btn-outline">← 上一步</button>
+            <button @click="loginStep = 1" class="btn btn-outline">← 上一步</button>
             <button @click="signIn" class="btn btn-primary" :disabled="!code || loading">
               {{ loading ? '验证中...' : '验证登录' }}
             </button>
           </div>
         </div>
         
-        <!-- 步骤 3.5: 两步验证密码 -->
-        <div v-if="loginStep === 35">
+        <!-- 步骤 2.5: 两步验证密码 -->
+        <div v-if="loginStep === 25">
           <p style="color: #666; margin-bottom: 15px;">
             您的账号已启用两步验证，请输入密码
           </p>
@@ -100,7 +117,7 @@
             <input v-model="password" type="password" class="form-input" placeholder="输入两步验证密码">
           </div>
           <div style="display: flex; gap: 10px;">
-            <button @click="loginStep = 3" class="btn btn-outline">← 上一步</button>
+            <button @click="loginStep = 2" class="btn btn-outline">← 上一步</button>
             <button @click="signIn" class="btn btn-primary" :disabled="!password || loading">
               {{ loading ? '验证中...' : '确认登录' }}
             </button>
@@ -155,7 +172,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import axios from 'axios'
 
 const apiId = ref('')
@@ -167,12 +184,18 @@ const phoneCodeHash = ref('')
 const botToken = ref('')
 const exportPath = ref('/downloads')
 const maxConcurrent = ref(5)
+const editingApi = ref(false)
 
 const telegramStatus = ref({ authorized: false, user: null })
 const loginStep = ref(1)
 const loading = ref(false)
 const message = ref('')
 const messageType = ref('success')
+
+// API 是否已配置
+const apiConfigured = computed(() => {
+  return apiId.value && apiHash.value && !editingApi.value
+})
 
 function getAuthHeader() {
   return { Authorization: `Bearer ${localStorage.getItem('token')}` }
@@ -188,14 +211,10 @@ async function fetchStatus() {
     
     if (settingsRes.data.api_id) {
       apiId.value = settingsRes.data.api_id
+      apiHash.value = settingsRes.data.api_hash || '***已保存***'
     }
     exportPath.value = settingsRes.data.export_path || '/downloads'
     maxConcurrent.value = settingsRes.data.max_concurrent_downloads || 5
-    
-    // 如果已有 API 配置但未登录，跳到步骤2
-    if (apiId.value && !telegramStatus.value.authorized) {
-      loginStep.value = 2
-    }
   } catch (err) {
     console.error('获取设置失败:', err)
   }
@@ -205,10 +224,10 @@ async function initTelegram() {
   loading.value = true
   try {
     await axios.post(`/api/telegram/init?api_id=${apiId.value}&api_hash=${apiHash.value}`, {}, { headers: getAuthHeader() })
-    loginStep.value = 2
-    showMessage('API 配置成功，请输入手机号', 'success')
+    editingApi.value = false
+    showMessage('API 配置已保存', 'success')
   } catch (err) {
-    showMessage('初始化失败: ' + (err.response?.data?.detail || err.message), 'error')
+    showMessage('配置失败: ' + (err.response?.data?.detail || err.message), 'error')
   } finally {
     loading.value = false
   }
@@ -219,7 +238,7 @@ async function sendCode() {
   try {
     const res = await axios.post(`/api/telegram/send-code?phone=${encodeURIComponent(phone.value)}`, {}, { headers: getAuthHeader() })
     phoneCodeHash.value = res.data.phone_code_hash
-    loginStep.value = 3
+    loginStep.value = 2
     showMessage('验证码已发送，请查看 Telegram 应用', 'success')
   } catch (err) {
     showMessage('发送失败: ' + (err.response?.data?.detail || err.message), 'error')
@@ -245,7 +264,7 @@ async function signIn() {
   } catch (err) {
     const detail = err.response?.data?.detail || err.message
     if (detail.includes('2FA') || detail.includes('password') || detail.includes('two-step')) {
-      loginStep.value = 35  // 两步验证
+      loginStep.value = 25  // 两步验证
       showMessage('请输入两步验证密码', 'success')
     } else {
       showMessage('登录失败: ' + detail, 'error')

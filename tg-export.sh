@@ -600,10 +600,11 @@ get_input_info() {
 
     echo -e "${CYAN}${BOLD}===== 配置向导 =====${PLAIN}"
     echo
-    echo -e "${YELLOW}获取 API ID 和 API Hash:${PLAIN}"
+    echo -e "${YELLOW}Telegram API 配置 (用于连接 Telegram):${PLAIN}"
     echo "  1. 访问 https://my.telegram.org"
     echo "  2. 登录后进入 API development tools"
     echo "  3. 创建应用获取 API ID 和 API Hash"
+    echo -e "  ${CYAN}注: 这只是 API 配置，账号登录在 Web 面板完成${PLAIN}"
     echo
     
     # API ID
@@ -804,6 +805,14 @@ YAML
     echo -e "下载目录: ${CYAN}${DOWNLOAD_DIR}${PLAIN}"
     echo -e "管理命令: ${CYAN}tge${PLAIN}"
     echo -e "${GREEN}=============================================${PLAIN}"
+    echo
+    echo -e "${YELLOW}📱 下一步: 打开 Web 面板 -> 设置${PLAIN}"
+    echo -e "  ${CYAN}App API 配置:${PLAIN} 输入 API ID 和 API Hash (首次需要)"
+    echo -e "  ${CYAN}账号登录:${PLAIN}"
+    echo -e "    1. 输入手机号 (含国际区号)"
+    echo -e "    2. 输入 Telegram 收到的验证码"
+    echo -e "    3. 如有两步验证，输入密码"
+    echo
 }
 
 # ===== 自动配置 Nginx (使用保存的配置) =====
