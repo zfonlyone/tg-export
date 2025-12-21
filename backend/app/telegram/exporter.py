@@ -14,7 +14,8 @@ from pyrogram.types import Message
 from ..config import settings
 from ..models import (
     ExportTask, ExportOptions, TaskStatus, ChatInfo, 
-    MessageInfo, MediaType, ChatType, ExportFormat, FailedDownload
+    MessageInfo, MediaType, ChatType, ExportFormat, FailedDownload,
+    DownloadItem, DownloadStatus
 )
 from .client import telegram_client
 from .retry_manager import DownloadRetryManager
