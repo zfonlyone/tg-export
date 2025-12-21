@@ -195,6 +195,17 @@ const parsedMessageIds = ref([])
 const refreshInterval = ref(3000)
 let intervalId = null
 
+// 状态文字映射
+const statusText = {
+  pending: '等待中',
+  extracting: '扫描中',
+  running: '下载中',
+  paused: '已暂停',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已取消'
+}
+
 function isDetailedExpanded(task) {
   // 如果用户手动点击过，按用户的选择来
   if (expandedDetailed.value[task.id] !== undefined) {
