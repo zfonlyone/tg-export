@@ -276,6 +276,16 @@ class ExportManager:
                 task.processed_messages += 1
                 continue
             
+            # 消息过滤
+            if options.filter_mode == "skip":
+                # 跳过模式: 跳过指定的消息
+                if msg.id in options.filter_messages:
+                    continue
+            elif options.filter_mode == "specify":
+                # 指定模式: 只处理指定的消息
+                if msg.id not in options.filter_messages:
+                    continue
+            
             task.total_messages += 1
             
             # 处理媒体
@@ -399,18 +409,45 @@ class ExportManager:
         return mapping.get(media_type, False)
     
     def _safe_filename(self, name: str) -> str:
-        """生成安全的文件名"""
-        invalid_chars = '<>:"/\\|?*'
-        for char in invalid_chars:
-            name = name.replace(char, '_')
-        return name[:100]  # 限制长度
+        """生成安全的文件名 - 移除 emoji 和特殊符号"""
+        import re
+        # 移除 emoji (Unicode 表情符号范围)
+        emoji_pattern = re.compile(
+            "["
+            "\U0001F600-\U0001F64F"  # 表情符号
+            "\U0001F300-\U0001F5FF"  # 符号和象形文字
+            "\U0001F680-\U0001F6FF"  # 交通和地图符号
+            "\U0001F1E0-\U0001F1FF"  # 旗帜
+            "\U00002702-\U000027B0"  # 杂项符号
+            "\U0001F900-\U0001F9FF"  # 补充符号
+            "\U0001FA00-\U0001FA6F"  # 国际象棋符号
+            "\U0001FA70-\U0001FAFF"  # 扩展符号
+            "\U00002600-\U000026FF"  # 杂项符号
+            "]+", 
+            flags=re.UNICODE
+        )
+        name = emoji_pattern.sub('', name)
+        
+        # 只保留: 字母、数字、中文、下划线、点、连字符
+        name = re.sub(r'[^\w\u4e00-\u9fff.\-]', '_', name)
+        
+        # 合并连续下划线
+        name = re.sub(r'_+', '_', name)
+        
+        # 去除首尾下划线
+        name = name.strip('_')
+        
+        return name[:100] if name else 'unnamed'
     
     def _get_media_filename(self, msg: Message, media_type: MediaType) -> str:
-        """获取媒体文件名"""
-        date_str = msg.date.strftime("%Y%m%d_%H%M%S")
+        """获取媒体文件名 - 格式: 消息id-群id-文件名"""
+        chat_id = abs(msg.chat.id)  # 去掉负号
+        msg_id = msg.id
         
         if msg.document and msg.document.file_name:
-            return f"{date_str}_{msg.document.file_name}"
+            # 有原始文件名: msg_id-chat_id-格式化后的文件名
+            safe_name = self._safe_filename(msg.document.file_name)
+            return f"{msg_id}-{chat_id}-{safe_name}"
         
         ext_map = {
             MediaType.PHOTO: "jpg",
@@ -422,7 +459,9 @@ class ExportManager:
             MediaType.ANIMATION: "mp4",
         }
         ext = ext_map.get(media_type, "bin")
-        return f"{date_str}_{msg.id}.{ext}"
+        # 无原始文件名: msg_id-chat_id-日期时间.扩展名
+        date_str = msg.date.strftime("%Y%m%d_%H%M%S")
+        return f"{msg_id}-{chat_id}-{date_str}.{ext}"
     
     def _get_user_name(self, user) -> str:
         """获取用户名"""

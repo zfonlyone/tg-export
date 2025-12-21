@@ -53,42 +53,63 @@
       </div>
       
       <!-- 指定聊天 -->
-      <div style="margin-top: 20px;">
-        <h3 style="margin-bottom: 10px;">指定聊天 (可选)</h3>
-        <p style="color: #666; margin-bottom: 10px; font-size: 14px;">
-          输入聊天 ID，多个用逗号分隔。留空则导出所有符合条件的聊天。
-        </p>
-        <input 
-          v-model="specificChatsInput" 
-          class="form-input" 
-          placeholder="例如: -1001234567890, -1009876543210"
-        >
+      <div style="margin-top: 20px; padding: 15px; border: 1px solid var(--border); border-radius: 8px;">
+        <label class="form-checkbox" style="margin-bottom: 0;">
+          <input type="checkbox" v-model="enableSpecificChats">
+          <span style="font-weight: 600;">📌 指定聊天</span>
+        </label>
+        <div v-if="enableSpecificChats" style="margin-top: 12px;">
+          <p style="color: #666; margin-bottom: 8px; font-size: 13px;">输入聊天 ID，自动识别数字</p>
+          <div style="display: flex; gap: 15px;">
+            <input v-model="specificChatsInput" @input="parseSpecificChats" class="form-input" style="flex: 1;" placeholder="粘贴聊天 ID 或链接">
+            <div v-if="parsedChatIds.length > 0" style="flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+              <span v-for="(id, idx) in parsedChatIds" :key="idx" class="id-tag" @click="removeChatId(idx)">{{ id }} ×</span>
+            </div>
+          </div>
+        </div>
       </div>
       
       <!-- 消息范围 -->
-      <div style="margin-top: 20px;">
-        <h3 style="margin-bottom: 10px;">消息范围 (可选)</h3>
-        <p style="color: #666; margin-bottom: 10px; font-size: 14px;">
-          指定导出的消息 ID 范围。“1-0” 表示从第1条到最新，“1-100” 表示第1条到第100条。
-        </p>
-        <div style="display: flex; gap: 15px; align-items: center;">
-          <input 
-            v-model.number="options.message_from" 
-            type="number" 
-            class="form-input" 
-            style="width: 120px;"
-            placeholder="起始 ID"
-            min="1"
-          >
-          <span>-</span>
-          <input 
-            v-model.number="options.message_to" 
-            type="number" 
-            class="form-input" 
-            style="width: 120px;"
-            placeholder="结束 ID (0=最新)"
-            min="0"
-          >
+      <div style="margin-top: 15px; padding: 15px; border: 1px solid var(--border); border-radius: 8px;">
+        <label class="form-checkbox" style="margin-bottom: 0;">
+          <input type="checkbox" v-model="enableMessageRange">
+          <span style="font-weight: 600;">📊 消息范围</span>
+        </label>
+        <div v-if="enableMessageRange" style="margin-top: 12px;">
+          <p style="color: #666; margin-bottom: 8px; font-size: 13px;">"1-0" 全部，"1-100" 前100条</p>
+          <div style="display: flex; gap: 15px; align-items: center;">
+            <input v-model.number="options.message_from" type="number" class="form-input" style="width: 120px;" placeholder="起始" min="1">
+            <span>-</span>
+            <input v-model.number="options.message_to" type="number" class="form-input" style="width: 120px;" placeholder="结束(0=最新)" min="0">
+          </div>
+        </div>
+      </div>
+      
+      <!-- 消息过滤 -->
+      <div style="margin-top: 15px; padding: 15px; border: 1px solid var(--border); border-radius: 8px;">
+        <label class="form-checkbox" style="margin-bottom: 0;">
+          <input type="checkbox" v-model="enableMessageFilter">
+          <span style="font-weight: 600;">🎯 过滤消息</span>
+        </label>
+        <div v-if="enableMessageFilter" style="margin-top: 12px;">
+          <p style="color: #666; margin-bottom: 8px; font-size: 13px;">TG 链接: https://t.me/c/<strong>群组ID</strong>/<strong>消息ID</strong></p>
+          <div style="display: flex; gap: 20px; margin-bottom: 12px;">
+            <label class="form-checkbox">
+              <input type="radio" v-model="options.filter_mode" value="skip">
+              <span>跳过指定消息</span>
+            </label>
+            <label class="form-checkbox">
+              <input type="radio" v-model="options.filter_mode" value="specify">
+              <span>只下载指定消息</span>
+            </label>
+          </div>
+          <div style="display: flex; gap: 15px;">
+            <textarea v-model="filterMessagesInput" @input="parseFilterMessages" class="form-input" rows="4" style="flex: 1; resize: vertical;" placeholder="粘贴消息 ID 或链接，自动识别数字&#10;例如: 669, https://t.me/c/123/670"></textarea>
+            <div v-if="parsedMessageIds.length > 0" style="flex: 1; max-height: 120px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start;">
+              <span v-for="(id, idx) in parsedMessageIds" :key="idx" class="id-tag" @click="removeMessageId(idx)">{{ id }} ×</span>
+            </div>
+          </div>
+          <p style="color: #888; font-size: 12px; margin-top: 8px;">💡 文件名格式: 消息ID-群ID-文件名</p>
         </div>
       </div>
       
@@ -207,35 +228,17 @@
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
           <div class="form-group">
             <label class="form-label">并发下载数</label>
-            <input 
-              v-model.number="options.max_concurrent_downloads" 
-              type="number" 
-              class="form-input"
-              min="1" 
-              max="10"
-            >
+            <input v-model.number="options.max_concurrent_downloads" type="number" class="form-input" min="1" max="10">
             <p style="color: #666; font-size: 12px; margin-top: 4px;">Telegram 免费用户限制 10</p>
           </div>
           <div class="form-group">
             <label class="form-label">下载线程数</label>
-            <input 
-              v-model.number="options.download_threads" 
-              type="number" 
-              class="form-input"
-              min="1" 
-              max="10"
-            >
+            <input v-model.number="options.download_threads" type="number" class="form-input" min="1" max="10">
             <p style="color: #666; font-size: 12px; margin-top: 4px;">推荐 10</p>
           </div>
           <div class="form-group">
             <label class="form-label">速度限制 (KB/s)</label>
-            <input 
-              v-model.number="options.download_speed_limit" 
-              type="number" 
-              class="form-input"
-              min="0"
-              placeholder="0 = 无限制"
-            >
+            <input v-model.number="options.download_speed_limit" type="number" class="form-input" min="0" placeholder="0 = 无限制">
             <p style="color: #666; font-size: 12px; margin-top: 4px;">0 = 不限速</p>
           </div>
         </div>
@@ -303,8 +306,40 @@ const loading = ref(false)
 const error = ref('')
 const taskName = ref('')
 const specificChatsInput = ref('')
+const filterMessagesInput = ref('')
 const dateFrom = ref('')
 const dateTo = ref('')
+
+// 启用开关
+const enableSpecificChats = ref(false)
+const enableMessageRange = ref(false)
+const enableMessageFilter = ref(false)
+
+// 解析后的 ID 列表
+const parsedChatIds = ref([])
+const parsedMessageIds = ref([])
+
+// 智能解析: 从任何文本中提取数字
+function parseNumbers(text) {
+  const matches = text.match(/-?\d+/g)
+  return matches ? [...new Set(matches.map(n => parseInt(n)))].filter(n => !isNaN(n)) : []
+}
+
+function parseSpecificChats() {
+  parsedChatIds.value = parseNumbers(specificChatsInput.value)
+}
+
+function parseFilterMessages() {
+  parsedMessageIds.value = parseNumbers(filterMessagesInput.value).filter(n => n > 0)
+}
+
+function removeChatId(idx) {
+  parsedChatIds.value.splice(idx, 1)
+}
+
+function removeMessageId(idx) {
+  parsedMessageIds.value.splice(idx, 1)
+}
 
 const options = reactive({
   // 聊天类型
@@ -338,10 +373,14 @@ const options = reactive({
   export_path: '/downloads',
   export_format: 'html',
   
-  // 下载设置 (Telegram 免费用户限制)
+  // 下载设置
   max_concurrent_downloads: 10,
   download_threads: 10,
-  download_speed_limit: 0  // 0 = 无限制
+  download_speed_limit: 0,
+  
+  // 消息过滤
+  filter_mode: 'skip',
+  filter_messages: []
 })
 
 const formatText = {
@@ -386,11 +425,14 @@ async function startExport() {
   
   try {
     // 处理指定聊天
-    if (specificChatsInput.value) {
-      options.specific_chats = specificChatsInput.value
-        .split(',')
-        .map(s => parseInt(s.trim()))
-        .filter(n => !isNaN(n))
+    if (enableSpecificChats.value && parsedChatIds.value.length > 0) {
+      options.specific_chats = parsedChatIds.value
+    }
+    
+    // 处理消息范围
+    if (!enableMessageRange.value) {
+      options.message_from = 1
+      options.message_to = 0
     }
     
     // 处理日期
@@ -399,6 +441,13 @@ async function startExport() {
     }
     if (dateTo.value) {
       options.date_to = new Date(dateTo.value).toISOString()
+    }
+    
+    // 处理消息过滤
+    if (enableMessageFilter.value && parsedMessageIds.value.length > 0) {
+      options.filter_messages = parsedMessageIds.value
+    } else {
+      options.filter_mode = 'none'
     }
     
     const headers = { Authorization: `Bearer ${localStorage.getItem('token')}` }
@@ -435,5 +484,21 @@ async function startExport() {
 .step.active {
   background: var(--primary);
   color: white;
+}
+
+.id-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  background: var(--primary);
+  color: white;
+  border-radius: 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.id-tag:hover {
+  background: var(--danger);
 }
 </style>

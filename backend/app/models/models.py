@@ -104,6 +104,10 @@ class ExportOptions(BaseModel):
     max_download_retries: int = 5        # 最大重试次数
     retry_delay: float = 2.0             # 重试初始延迟 (秒)
     auto_retry_failed: bool = True       # 自动重试失败的下载
+    
+    # 消息过滤 (skip=跳过指定消息, specify=只下载指定消息)
+    filter_mode: str = "none"            # none/skip/specify
+    filter_messages: List[int] = Field(default_factory=list)  # 过滤的消息 ID 列表
 
 
 class ChatInfo(BaseModel):

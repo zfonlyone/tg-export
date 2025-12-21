@@ -62,6 +62,22 @@ class TelegramBot:
         async def cancel_handler(client: Client, message: Message):
             await self._handle_cancel(message)
         
+        @self._bot.on_message(filters.command("pause"))
+        async def pause_handler(client: Client, message: Message):
+            await self._handle_pause(message)
+        
+        @self._bot.on_message(filters.command("resume"))
+        async def resume_handler(client: Client, message: Message):
+            await self._handle_resume(message)
+        
+        @self._bot.on_message(filters.command("retry"))
+        async def retry_handler(client: Client, message: Message):
+            await self._handle_retry(message)
+        
+        @self._bot.on_message(filters.command("failed"))
+        async def failed_handler(client: Client, message: Message):
+            await self._handle_failed(message)
+        
         @self._bot.on_callback_query()
         async def callback_handler(client: Client, callback: CallbackQuery):
             await self._handle_callback(callback)
@@ -98,7 +114,8 @@ Telegram 全功能导出工具，支持：
 `/export <ID>` - 导出指定聊天
 `/export <ID> 1-100` - 导出指定消息范围
 `/tasks` - 查看任务列表
-`/cancel <ID>` - 取消任务
+`/pause` `/resume` `/cancel` - 任务控制
+`/failed` `/retry` - 失败处理
 
 👉 点击下方按钮快速开始
         """
@@ -138,7 +155,11 @@ Telegram 全功能导出工具，支持：
 
 ━━━━━ **任务管理** ━━━━━
 `/tasks` - 查看所有导出任务及进度
+`/pause <task_id>` - 暂停指定任务
+`/resume <task_id>` - 恢复暂停的任务
 `/cancel <task_id>` - 取消指定任务
+`/failed <task_id>` - 查看失败的下载列表
+`/retry <task_id>` - 重试失败的下载
 
 ━━━━━ **导出选项** ━━━━━
 📤 **聊天类型:**
@@ -324,6 +345,122 @@ Telegram 全功能导出工具，支持：
             await message.reply(f"✅ 任务已取消: {task_id[:8]}...")
         else:
             await message.reply("❌ 取消失败，任务不存在或已完成")
+    
+    async def _handle_pause(self, message: Message):
+        """处理 /pause 命令"""
+        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+        
+        if not args:
+            await message.reply("用法: /pause <task_id>")
+            return
+        
+        task_id = args[0]
+        task = export_manager.get_task(task_id)
+        
+        if not task:
+            await message.reply("❌ 任务不存在")
+            return
+        
+        if task.status != TaskStatus.RUNNING:
+            await message.reply(f"❌ 任务状态为 {task.status.value}，无法暂停")
+            return
+        
+        export_manager.pause_export(task_id)
+        await message.reply(f"⏸ 任务已暂停: {task_id[:8]}...")
+    
+    async def _handle_resume(self, message: Message):
+        """处理 /resume 命令"""
+        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+        
+        if not args:
+            await message.reply("用法: /resume <task_id>")
+            return
+        
+        task_id = args[0]
+        task = export_manager.get_task(task_id)
+        
+        if not task:
+            await message.reply("❌ 任务不存在")
+            return
+        
+        if task.status != TaskStatus.PAUSED:
+            await message.reply(f"❌ 任务状态为 {task.status.value}，无法恢复")
+            return
+        
+        export_manager.resume_export(task_id)
+        await message.reply(f"▶ 任务已恢复: {task_id[:8]}...")
+    
+    async def _handle_retry(self, message: Message):
+        """处理 /retry 命令"""
+        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+        
+        if not args:
+            await message.reply("用法: /retry <task_id>")
+            return
+        
+        task_id = args[0]
+        task = export_manager.get_task(task_id)
+        
+        if not task:
+            await message.reply("❌ 任务不存在")
+            return
+        
+        if not task.failed_downloads:
+            await message.reply("✅ 没有失败的下载需要重试")
+            return
+        
+        count = len(task.failed_downloads)
+        # 标记为待重试
+        for fail in task.failed_downloads:
+            fail.resolved = False
+        
+        await message.reply(f"🔄 已标记 {count} 个失败下载待重试\n使用 /resume {task_id[:8]} 开始重试")
+    
+    async def _handle_failed(self, message: Message):
+        """处理 /failed 命令"""
+        args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+        
+        if not args:
+            # 显示所有任务的失败统计
+            tasks = export_manager.get_all_tasks()
+            failed_tasks = [t for t in tasks if t.failed_downloads]
+            
+            if not failed_tasks:
+                await message.reply("✅ 没有失败的下载")
+                return
+            
+            text = "⚠️ **失败下载统计**\n\n"
+            for t in failed_tasks[:10]:
+                text += f"• {t.name}: {len(t.failed_downloads)} 个失败\n"
+                text += f"  ID: `{t.id[:8]}...`\n\n"
+            
+            text += "使用 /failed <task_id> 查看详情"
+            await message.reply(text)
+            return
+        
+        task_id = args[0]
+        task = export_manager.get_task(task_id)
+        
+        if not task:
+            await message.reply("❌ 任务不存在")
+            return
+        
+        if not task.failed_downloads:
+            await message.reply("✅ 该任务没有失败的下载")
+            return
+        
+        text = f"⚠️ **失败下载列表** ({len(task.failed_downloads)} 个)\n\n"
+        for fail in task.failed_downloads[:20]:
+            text += f"• 消息 #{fail.message_id}\n"
+            if fail.file_name:
+                text += f"  文件: {fail.file_name[:30]}...\n" if len(fail.file_name) > 30 else f"  文件: {fail.file_name}\n"
+            text += f"  错误: {fail.error_type}\n\n"
+        
+        if len(task.failed_downloads) > 20:
+            text += f"... 还有 {len(task.failed_downloads) - 20} 个\n"
+        
+        text += f"\n使用 /retry {task_id[:8]} 重试全部"
+        await message.reply(text)
     
     async def _handle_callback(self, callback: CallbackQuery):
         """处理回调查询"""
