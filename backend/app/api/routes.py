@@ -218,23 +218,40 @@ async def get_failed_downloads(
     }
 
 
-@router.post("/export/{task_id}/retry")
-async def retry_failed_downloads(
+@router.get("/export/{task_id}/downloads")
+async def get_download_queue(
     task_id: str,
     current_user: User = Depends(get_current_user)
 ):
-    """重试所有失败的下载 (目前记录失败供后续重试)"""
-    task = export_manager.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    
-    failed_count = len(task.failed_downloads)
-    # TODO: 实现实际的重试逻辑
-    return {
-        "status": "ok",
-        "message": f"已标记 {failed_count} 个失败项待重试",
-        "failed_count": failed_count
-    }
+    """获取详细下载队列"""
+    queue = export_manager.get_download_queue(task_id)
+    return queue
+
+
+@router.post("/export/{task_id}/download/{item_id}/pause")
+async def pause_download_item(
+    task_id: str,
+    item_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """暂停单个下载项"""
+    success = await export_manager.pause_download_item(task_id, item_id)
+    if success:
+        return {"status": "ok", "message": "已暂停"}
+    raise HTTPException(status_code=400, detail="暂停失败")
+
+
+@router.post("/export/{task_id}/download/{item_id}/resume")
+async def resume_download_item(
+    task_id: str,
+    item_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """恢复单个下载项"""
+    success = await export_manager.resume_download_item(task_id, item_id)
+    if success:
+        return {"status": "ok", "message": "已恢复"}
+    raise HTTPException(status_code=400, detail="恢复失败")
 
 
 @router.delete("/export/{task_id}")

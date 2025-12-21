@@ -7,7 +7,7 @@
       <div class="stat-card">
         <div class="icon">📋</div>
         <div class="value">{{ stats.totalTasks }}</div>
-        <div class="label">总任务数</div>
+        <div class="label">总下载数</div>
       </div>
       <div class="stat-card">
         <div class="icon">✅</div>
@@ -22,7 +22,7 @@
       <div class="stat-card">
         <div class="icon">💾</div>
         <div class="value">{{ formatSize(stats.totalSize) }}</div>
-        <div class="label">导出大小</div>
+        <div class="label">下载大小</div>
       </div>
     </div>
     
@@ -60,18 +60,18 @@
     <!-- 最近任务 -->
     <div class="card">
       <div class="card-header">
-        <h2>📋 最近任务</h2>
+        <h2>📋 最近下载</h2>
         <router-link to="/tasks" class="btn btn-outline">查看全部</router-link>
       </div>
       
       <div v-if="recentTasks.length === 0" style="text-align: center; padding: 30px; color: #666;">
-        暂无导出任务
+        暂无下载历史
       </div>
       
       <table v-else class="table">
         <thead>
           <tr>
-            <th>任务名称</th>
+            <th>下载名称</th>
             <th>状态</th>
             <th>进度</th>
             <th>创建时间</th>
@@ -81,7 +81,7 @@
           <tr v-for="task in recentTasks" :key="task.id">
             <td>{{ task.name }}</td>
             <td>
-              <span :class="'status-badge status-' + task.status">
+              <span :class="'status-badge status-' + (task.status === 'extracting' ? 'extracting' : task.status)">
                 {{ statusText[task.status] }}
               </span>
             </td>
@@ -103,10 +103,10 @@
       </div>
       <div style="display: flex; gap: 15px; flex-wrap: wrap;">
         <router-link to="/export" class="btn btn-primary">
-          📥 新建导出
+          📥 新建下载
         </router-link>
         <router-link to="/tasks" class="btn btn-outline">
-          📋 查看任务
+          📋 查看下载
         </router-link>
         <a href="/exports" target="_blank" class="btn btn-outline">
           📁 浏览文件
@@ -131,6 +131,7 @@ const stats = ref({
 })
 
 const statusText = {
+  extracting: '正在提取',
   pending: '等待中',
   running: '运行中',
   completed: '已完成',

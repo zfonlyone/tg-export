@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================================
-# TG Export 一键部署脚本 v1.1.3
+# TG Export 一键部署脚本 v1.1.6
 # 功能: 安装/卸载 TG Export + Nginx + SSL证书管理 + UFW端口
 # 新增: 下载重试机制 + 暂停/恢复 + 失败记录 + AList 风格 UI
 # ==========================================================
@@ -16,7 +16,7 @@ PLAIN='\033[0m'
 
 # ===== 统一配置 =====
 APP_NAME="TG Export"
-APP_VERSION="1.1.3"
+APP_VERSION="1.1.6"
 APP_DIR="/opt/tg-export"
 CONFIG_FILE=".tge_config"
 DOCKER_IMAGE="zfonlyone/tg-export:latest"
@@ -36,6 +36,11 @@ info() { echo -e "${CYAN}[i]${PLAIN} $1"; }
 
 # Docker Compose 兼容封装
 docker_compose() {
+    # 如果安装目录已存在，尝试切换过去
+    if [[ -d "$APP_DIR" ]]; then
+        cd "$APP_DIR" || exit
+    fi
+    
     if command -v docker-compose &> /dev/null; then
         docker-compose "$@"
     elif docker compose version &> /dev/null; then
@@ -973,8 +978,9 @@ NC='\033[0m'
 APP_DIR="/opt/tg-export"
 UNIFIED_CERT_DIR="/etc/ssl/wildcard"
 
-# Docker Compose 封装
+# Docker Compose 封装 (含目录切换)
 function docker_compose() {
+    cd "$APP_DIR" || exit
     if command -v docker-compose &> /dev/null; then
         docker-compose "$@"
     else

@@ -21,7 +21,7 @@
         <li>
           <router-link to="/tasks" active-class="active">
             <span class="icon">📋</span>
-            <span>任务管理</span>
+            <span>下载管理</span>
           </router-link>
         </li>
         <li>

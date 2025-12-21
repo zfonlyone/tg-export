@@ -10,7 +10,7 @@ const routes = [
     { path: '/login', component: () => import('./views/Login.vue') },
     { path: '/dashboard', component: () => import('./views/Dashboard.vue'), meta: { requiresAuth: true } },
     { path: '/export', component: () => import('./views/Export.vue'), meta: { requiresAuth: true } },
-    { path: '/tasks', component: () => import('./views/Tasks.vue'), meta: { requiresAuth: true } },
+    { path: '/tasks', component: () => import('./views/Downloads.vue'), meta: { requiresAuth: true } },
     { path: '/settings', component: () => import('./views/Settings.vue'), meta: { requiresAuth: true } },
 ]
 

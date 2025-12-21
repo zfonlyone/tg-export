@@ -211,6 +211,30 @@ class TelegramClient:
             return ChatType.CHANNEL
         return ChatType.PRIVATE
     
+    def get_media_type(self, msg: Message) -> Optional[MediaType]:
+        """获取消息中的媒体类型"""
+        if not msg:
+            return None
+            
+        if msg.photo:
+            return MediaType.PHOTO
+        elif msg.video:
+            return MediaType.VIDEO
+        elif msg.audio:
+            return MediaType.AUDIO
+        elif msg.voice:
+            return MediaType.VOICE
+        elif msg.video_note:
+            return MediaType.VIDEO_NOTE
+        elif msg.document:
+            return MediaType.DOCUMENT
+        elif msg.sticker:
+            return MediaType.STICKER
+        elif msg.animation:
+            return MediaType.ANIMATION
+            
+        return None
+    
     async def get_dialogs(self, limit: int = 100) -> List[ChatInfo]:
         """获取对话列表"""
         await self._ensure_connected()
@@ -232,6 +256,50 @@ class TelegramClient:
         except Exception as e:
             print(f"[TG] 获取对话列表出错: {e}")
         return dialogs
+    
+    def get_message_link(self, chat_id: int, message_id: int, username: Optional[str] = None) -> str:
+        """
+        生成消息直链 (参考 telegram_media_downloader)
+        1. 公开群组/频道: https://t.me/username/123
+        2. 私密群组/频道: https://t.me/c/1234567890/123
+        """
+        if username:
+            return f"https://t.me/{username}/{message_id}"
+        
+        # 私密链接需要去掉 -100 前缀
+        clean_id = str(chat_id)
+        if clean_id.startswith("-100"):
+            clean_id = clean_id[4:]
+        elif clean_id.startswith("-"):
+            clean_id = clean_id[1:]
+            
+        return f"https://t.me/c/{clean_id}/{message_id}"
+
+    def resolve_chat_id(self, chat_id_input: str) -> int:
+        """
+        解析并标准化 Chat ID (参考 telegram_media_downloader)
+        确保私密频道/超级群组带有 -100 前缀
+        """
+        try:
+            # 如果是纯数字字符串
+            if chat_id_input.isdigit():
+                # 对于 10 位的 ID (常见的超级群组/频道 ID 长度)，添加 -100 前缀
+                if len(chat_id_input) >= 10:
+                    return int(f"-100{chat_id_input}")
+                return int(chat_id_input)
+            
+            # 如果已经是带负号的
+            if chat_id_input.startswith("-"):
+                # 如果是 -1234567... 且长度不够，可能需要补齐 -100 (有些用户只输后面部分)
+                if not chat_id_input.startswith("-100") and len(chat_id_input) > 5:
+                     # 谨慎操作，常规群组是 - 开头但不是 -100
+                     pass 
+                return int(chat_id_input)
+                
+            return int(chat_id_input)
+        except (ValueError, TypeError):
+            # 如果无法转为数字，可能是用户名，由 Pyrogram 自行解析
+            return chat_id_input
     
     async def get_chat_history(
         self,

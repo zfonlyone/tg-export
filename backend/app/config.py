@@ -4,54 +4,40 @@ TG Export - 配置管理
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from typing import Optional
-
 
 class Settings(BaseSettings):
     """应用配置"""
     
     # 基础配置
     APP_NAME: str = "TG Export"
-    APP_VERSION: str = "1.1.3"
+    APP_VERSION: str = "1.1.6"
     DEBUG: bool = False
     
     # 路径配置
-    BASE_DIR: Path = Path(__file__).parent.parent.parent
-    DATA_DIR: Path = BASE_DIR / "data"
-    EXPORT_DIR: Path = DATA_DIR / "exports"
-    SESSIONS_DIR: Path = DATA_DIR / "sessions"
+    BASE_DIR: Path = Path(__file__).resolve().parent.parent
+    DATA_DIR: Path = Path(os.getenv("DATA_DIR", BASE_DIR.parent / "data"))
+    EXPORT_DIR: Path = Path(os.getenv("EXPORT_DIR", DATA_DIR / "exports"))
+    SESSIONS_DIR: Path = Path(os.getenv("SESSIONS_DIR", DATA_DIR / "sessions"))
     
-    # Telegram API 配置
-    API_ID: Optional[int] = None
-    API_HASH: Optional[str] = None
-    BOT_TOKEN: Optional[str] = None
+    # 数据库/配置路径
+    SESSION_NAME: str = "tg_export"
     
-    # Web 配置
-    WEB_HOST: str = "0.0.0.0"
-    WEB_PORT: int = 9528
+    # Telegram API
+    API_ID: int = int(os.getenv("API_ID", 0))
+    API_HASH: str = os.getenv("API_HASH", "")
+    BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
     
-    # 认证配置
-    SECRET_KEY: str = "your-secret-key-change-in-production"
-    ADMIN_USERNAME: str = "admin"
-    ADMIN_PASSWORD: str = ""  # 首次运行自动生成
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 天
+    # Web 认证
+    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
+    ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "")
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "your-fallback-secret-key")
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
     
-    # 导出配置
-    MAX_CONCURRENT_DOWNLOADS: int = 10  # Telegram 免费用户限制
-    DOWNLOAD_THREADS: int = 10          # 下载线程数
-    DOWNLOAD_SPEED_LIMIT: int = 0       # 下载速度限制 (KB/s, 0=无限制)
-    CHUNK_SIZE: int = 1024 * 1024       # 1MB
+    # 导出设置
+    MAX_CONCURRENT_DOWNLOADS: int = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", 5))
+    CHUNK_SIZE: int = 1024 * 1024  # 1MB
     
     class Config:
         env_file = ".env"
-        env_file_encoding = "utf-8"
-    
-    def init_dirs(self):
-        """初始化目录"""
-        self.DATA_DIR.mkdir(parents=True, exist_ok=True)
-        self.EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-        self.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-
 
 settings = Settings()
-settings.init_dirs()

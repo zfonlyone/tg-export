@@ -234,7 +234,7 @@ MESSAGE_TEMPLATE = '''
 <div class="message" id="msg-{msg_id}">
     {reply_html}
     <div class="header-row">
-        <span class="from">{from_name}</span>
+        <span class="from">{from_name} <small style="color: var(--time-color); font-weight: normal; margin-left: 8px;">#{msg_id}</small></span>
         <span class="date">{date}</span>
     </div>
     {text_html}

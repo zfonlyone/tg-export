@@ -126,12 +126,42 @@ class ExportManager:
         """检查任务是否暂停"""
         return task_id in self._paused_tasks
     
+    async def pause_download_item(self, task_id: str, item_id: str) -> bool:
+        """暂停单个下载项"""
+        task = self.tasks.get(task_id)
+        if not task: return False
+        for item in task.download_queue:
+            if item.id == item_id:
+                if item.status == DownloadStatus.DOWNLOADING or item.status == DownloadStatus.WAITING:
+                    item.status = DownloadStatus.PAUSED
+                    return True
+        return False
+
+    async def resume_download_item(self, task_id: str, item_id: str) -> bool:
+        """恢复单个下载项"""
+        task = self.tasks.get(task_id)
+        if not task: return False
+        for item in task.download_queue:
+            if item.id == item_id:
+                if item.status == DownloadStatus.PAUSED:
+                    item.status = DownloadStatus.WAITING
+                    return True
+        return False
+
+    def get_download_queue(self, task_id: str) -> List[DownloadItem]:
+        """获取任务的下载队列"""
+        task = self.tasks.get(task_id)
+        return task.download_queue if task else []
     async def _run_export(self, task: ExportTask):
         """执行导出任务"""
         try:
             options = task.options
             export_path = Path(options.export_path)
             export_path.mkdir(parents=True, exist_ok=True)
+            
+            # 阶段 1: 提取消息和元数据
+            task.status = TaskStatus.EXTRACTING
+            task.is_extracting = True
             
             # 获取要导出的聊天列表
             chats = await self._get_chats_to_export(options)
@@ -151,7 +181,7 @@ class ExportManager:
                 task.processed_chats += 1
                 await self._notify_progress(task.id, task)
             
-            # 生成最终输出文件
+            # 生成初步输出文件 (文本已导出)
             if task.status != TaskStatus.CANCELLED:
                 from ..exporters import json_exporter, html_exporter
                 
@@ -161,16 +191,102 @@ class ExportManager:
                 if options.export_format in [ExportFormat.HTML, ExportFormat.BOTH]:
                     await html_exporter.export(task, chats, all_messages, export_path)
                 
-                task.status = TaskStatus.COMPLETED
-                task.completed_at = datetime.now()
+                # 阶段 2: 下载媒体
+                task.is_extracting = False
+                if task.total_media > task.downloaded_media:
+                    task.status = TaskStatus.RUNNING
+                    await self._notify_progress(task.id, task)
+                    await self._process_download_queue(task, export_path)
+                
+                if task.status != TaskStatus.CANCELLED:
+                    task.status = TaskStatus.COMPLETED
+                    task.completed_at = datetime.now()
             
         except asyncio.CancelledError:
             task.status = TaskStatus.CANCELLED
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.error = str(e)
+            logger.exception("导出任务执行出错")
         finally:
             await self._notify_progress(task.id, task)
+
+    async def _process_download_queue(self, task: ExportTask, export_path: Path):
+        """处理下载队列"""
+        options = task.options
+        
+        # 限制并发下载数
+        semaphore = asyncio.Semaphore(options.max_concurrent_downloads)
+        
+        async def download_worker(item: DownloadItem):
+            async with semaphore:
+                if task.status == TaskStatus.CANCELLED or item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
+                    return
+
+                # 等待暂停状态结束 (整体任务暂停 或 个人文件暂停)
+                while (self.is_paused(task.id) or item.status == DownloadStatus.PAUSED) and task.status != TaskStatus.CANCELLED:
+                    await asyncio.sleep(1)
+                
+                if task.status == TaskStatus.CANCELLED:
+                    return
+
+                # 获取原始消息对象用于下载
+                msg = await telegram_client.get_message_by_id(item.chat_id, item.message_id)
+                if not msg:
+                    item.status = DownloadStatus.FAILED
+                    item.error = "无法获取消息对象"
+                    return
+
+                item.status = DownloadStatus.DOWNLOADING
+                full_path = export_path / item.file_path
+                temp_file_path = full_path.with_suffix(full_path.suffix + ".downloading")
+                
+                retry_manager = DownloadRetryManager(
+                    max_retries=options.max_download_retries,
+                    initial_delay=options.retry_delay
+                )
+                
+                def progress_cb(current, total):
+                    item.downloaded_size = current
+                    item.file_size = total
+                    if total > 0:
+                        item.progress = (current / total) * 100
+                
+                success, downloaded, failure_info = await retry_manager.download_with_retry(
+                    download_func=telegram_client.download_media,
+                    message=msg,
+                    file_path=temp_file_path,
+                    refresh_message_func=telegram_client.get_message_by_id,
+                    progress_callback=progress_cb
+                )
+                
+                if success and downloaded:
+                    if temp_file_path.exists():
+                        temp_file_path.rename(full_path)
+                    item.status = DownloadStatus.COMPLETED
+                    item.progress = 100.0
+                    task.downloaded_media += 1
+                    # 每完成一个下载，通知一次进度 (对于大批量下载，可以考虑节流)
+                    await self._notify_progress(task.id, task)
+                elif failure_info:
+                    item.status = DownloadStatus.FAILED
+                    item.error = failure_info.get("error_message")
+                    # 记录到任务的失败列表
+                    from ..models import FailedDownload
+                    failed_download = FailedDownload(
+                        message_id=item.message_id,
+                        chat_id=item.chat_id,
+                        file_name=item.file_name,
+                        error_type=failure_info["error_type"],
+                        error_message=failure_info["error_message"],
+                        retry_count=failure_info["retry_count"],
+                        last_retry=datetime.fromisoformat(failure_info["last_retry"])
+                    )
+                    task.failed_downloads.append(failed_download)
+
+        # 创建并启动所有下载任务
+        download_tasks = [download_worker(item) for item in task.download_queue]
+        await asyncio.gather(*download_tasks)
     
     async def _get_chats_to_export(self, options: ExportOptions) -> List[ChatInfo]:
         """获取要导出的聊天列表"""
@@ -301,63 +417,34 @@ class ExportManager:
                 should_download = self._should_download_media(media_type, options)
                 
                 if should_download:
-                    # 下载媒体
+                    # 准备下载目录
                     media_dir = media_dirs.get(media_type, chat_dir / "other")
                     media_dir.mkdir(parents=True, exist_ok=True)
                     
                     file_name = self._get_media_filename(msg, media_type)
                     file_path = media_dir / file_name
                     
-                    # 断点续传 - 检查文件是否已存在
+                    # 创建下载项并加入队列
+                    item_id = f"{chat.id}_{msg.id}"
+                    download_item = DownloadItem(
+                        id=item_id,
+                        message_id=msg.id,
+                        chat_id=chat.id,
+                        file_name=file_name,
+                        file_size=self._get_file_size(msg) or 0,
+                        media_type=media_type,
+                        file_path=str(file_path.relative_to(export_path))
+                    )
+                    
+                    # 检查是否已经存在
                     if options.skip_existing and file_path.exists():
-                        media_path = str(file_path.relative_to(export_path))
+                        download_item.status = DownloadStatus.SKIPPED
+                        download_item.downloaded_size = download_item.file_size
+                        download_item.progress = 100.0
+                        media_path = download_item.file_path
                         task.downloaded_media += 1
-                    else:
-                        # 使用临时文件名下载 (.downloading 后缀)
-                        temp_file_path = file_path.with_suffix(file_path.suffix + ".downloading")
-                        
-                        # 等待暂停状态结束
-                        while self.is_paused(task.id):
-                            await asyncio.sleep(1)
-                            if task.status == TaskStatus.CANCELLED:
-                                break
-                        
-                        if task.status == TaskStatus.CANCELLED:
-                            break
-                        
-                        # 使用重试管理器下载
-                        retry_manager = DownloadRetryManager(
-                            max_retries=options.max_download_retries,
-                            initial_delay=options.retry_delay
-                        )
-                        
-                        success, downloaded, failure_info = await retry_manager.download_with_retry(
-                            download_func=telegram_client.download_media,
-                            message=msg,
-                            file_path=temp_file_path,
-                            refresh_message_func=telegram_client.get_message_by_id,
-                            progress_callback=lambda c, t: self._update_download_progress(task, c)
-                        )
-                        
-                        if success and downloaded:
-                            # 下载完成，重命名为正式文件名
-                            if temp_file_path.exists():
-                                temp_file_path.rename(file_path)
-                            media_path = str(file_path.relative_to(export_path))
-                            task.downloaded_media += 1
-                        elif failure_info:
-                            # 记录失败
-                            failed_download = FailedDownload(
-                                message_id=failure_info["message_id"],
-                                chat_id=failure_info["chat_id"],
-                                file_name=failure_info["file_name"],
-                                error_type=failure_info["error_type"],
-                                error_message=failure_info["error_message"],
-                                retry_count=failure_info["retry_count"],
-                                last_retry=datetime.fromisoformat(failure_info["last_retry"])
-                            )
-                            task.failed_downloads.append(failed_download)
-                            logger.warning(f"下载失败已记录: {file_name} ({failure_info['error_type']})")
+                    
+                    task.download_queue.append(download_item)
             
             # 构建消息信息
             msg_info = MessageInfo(
@@ -370,7 +457,8 @@ class ExportManager:
                 media_path=media_path,
                 file_name=self._get_file_name(msg),
                 file_size=self._get_file_size(msg),
-                reply_to_message_id=msg.reply_to_message_id
+                reply_to_message_id=msg.reply_to_message_id,
+                message_link=telegram_client.get_message_link(msg.chat.id, msg.id, msg.chat.username)
             )
             
             messages.append(msg_info)

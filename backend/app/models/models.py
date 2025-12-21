@@ -38,11 +38,37 @@ class ExportFormat(str, Enum):
 class TaskStatus(str, Enum):
     """任务状态"""
     PENDING = "pending"           # 等待中
-    RUNNING = "running"           # 运行中
+    EXTRACTING = "extracting"     # 正在提取消息
+    RUNNING = "running"           # 正在下载媒体
     PAUSED = "paused"             # 已暂停
     COMPLETED = "completed"       # 已完成
     FAILED = "failed"             # 失败
     CANCELLED = "cancelled"       # 已取消
+
+
+class DownloadStatus(str, Enum):
+    """单独文件的下载状态"""
+    WAITING = "waiting"
+    DOWNLOADING = "downloading"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+class DownloadItem(BaseModel):
+    """单个媒体文件的下载项"""
+    id: str                               # 唯一ID (chat_id-msg_id)
+    message_id: int
+    chat_id: int
+    file_name: str
+    file_size: int = 0
+    downloaded_size: int = 0
+    status: DownloadStatus = DownloadStatus.WAITING
+    error: Optional[str] = None
+    media_type: MediaType
+    file_path: Optional[str] = None
+    progress: float = 0.0
 
 
 class ExportOptions(BaseModel):
@@ -131,8 +157,9 @@ class MessageInfo(BaseModel):
     media_type: Optional[MediaType] = None
     media_path: Optional[str] = None
     file_name: Optional[str] = None
-    file_size: Optional[int] = None
-    reply_to_message_id: Optional[int] = None
+    file_size: Optional[int] = None      # 文件大小 (字节)
+    reply_to_message_id: Optional[int] = None # 回复的消息 ID
+    message_link: Optional[str] = None    # 消息原始直链 (t.me)
 
 
 class FailedDownload(BaseModel):
@@ -167,6 +194,10 @@ class ExportTask(BaseModel):
     total_size: int = 0
     downloaded_size: int = 0
     
+    # 下载管理
+    is_extracting: bool = False           # 是否处于消息提取阶段
+    download_queue: List[DownloadItem] = Field(default_factory=list) # 下载队列
+    
     # 错误信息
     error: Optional[str] = None
     
@@ -177,9 +208,24 @@ class ExportTask(BaseModel):
     @property
     def progress(self) -> float:
         """计算总进度"""
-        if self.total_messages == 0:
-            return 0.0
-        return (self.processed_messages / self.total_messages) * 100
+        if self.status == TaskStatus.EXTRACTING:
+            if self.total_chats == 0: return 0.0
+            return (self.processed_chats / self.total_chats) * 100
+            
+        if self.total_media == 0:
+            if self.total_messages == 0: return 0.0
+            return (self.processed_messages / self.total_messages) * 100
+            
+        # 媒体下载进度
+        return (self.downloaded_media / self.total_media) * 100
+
+    def get_download_item(self, message_id: int, chat_id: int) -> Optional[DownloadItem]:
+        """获取特定的下载项"""
+        item_id = f"{chat_id}_{message_id}"
+        for item in self.download_queue:
+            if item.id == item_id:
+                return item
+        return None
 
 
 class User(BaseModel):
