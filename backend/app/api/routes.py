@@ -262,7 +262,7 @@ async def update_settings(
     max_concurrent_downloads: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
-    \"\"\"更新设置\"\"\"
+    """更新设置"""
     # 这里可以实现设置保存逻辑
     return {"status": "ok"}
 
