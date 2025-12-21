@@ -110,8 +110,8 @@ async def sign_in(
         if "flood" in error_msg.lower():
             raise HTTPException(status_code=429, detail=error_msg)
         if "password" in error_msg.lower() or "2FA" in error_msg:
-            # 这是一个特定流程，前端需要这个信息
-            raise HTTPException(status_code=401, detail="SESSION_PASSWORD_NEEDED")
+            # 这是一个特定流程，使用 403 区分于 401 (Web Token 过期)
+            raise HTTPException(status_code=403, detail="SESSION_PASSWORD_NEEDED")
         raise HTTPException(status_code=400, detail=error_msg)
 
 

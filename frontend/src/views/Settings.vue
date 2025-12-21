@@ -172,7 +172,7 @@
 
     <!-- 版本信息 -->
     <div style="text-align: center; margin-top: 30px; color: #999; font-size: 12px; padding-bottom: 20px;">
-      <p>TG Export v1.1.2</p>
+      <p>TG Export v1.1.3</p>
       <p>© 2024 TG Export Team</p>
     </div>
   </div>
@@ -287,8 +287,9 @@ async function signIn() {
     await fetchStatus()
   } catch (err) {
     const detail = err.response?.data?.detail || err.message
-    // 增加对 401 状态码且包含特定字符串的判断
-    if (err.response?.status === 401 && (detail === 'SESSION_PASSWORD_NEEDED' || detail.includes('2FA') || detail.includes('password'))) {
+    // 监听 403 (专门给 2FA 准备) 或 401 (带 2FA 提示)
+    if ((err.response?.status === 403 || err.response?.status === 401) && 
+        (detail === 'SESSION_PASSWORD_NEEDED' || detail.includes('2FA') || detail.includes('password'))) {
       loginStep.value = 3  // 跳转至两步验证
       showMessage('请提供两步验证密码 (Cloud Password)', 'success')
     } else {

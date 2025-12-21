@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     
     # 基础配置
     APP_NAME: str = "TG Export"
-    APP_VERSION: str = "1.1.2"
+    APP_VERSION: str = "1.1.3"
     DEBUG: bool = False
     
     # 路径配置
