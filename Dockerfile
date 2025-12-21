@@ -2,10 +2,18 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# 安装系统依赖
+# 安装系统依赖 (tgcrypto ARM64 编译需要完整的 C 开发环境)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    g++ \
+    libc-dev \
+    libffi-dev \
+    python3-dev \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
+
+# 升级 pip
+RUN pip install --upgrade pip setuptools wheel
 
 # 安装 Python 依赖
 COPY backend/requirements.txt .
