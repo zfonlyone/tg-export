@@ -1,8 +1,20 @@
+FROM node:18-alpine AS frontend-builder
+
+WORKDIR /frontend
+
+# 安装前端依赖并构建
+COPY frontend/package*.json ./
+RUN npm install
+
+COPY frontend/ ./
+RUN npm run build
+
+
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# 安装系统依赖 (tgcrypto ARM64 编译需要完整的 C 开发环境)
+# 安装系统依赖 (tgcrypto ARM64 编译需要)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
@@ -21,6 +33,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制后端代码
 COPY backend/app ./app
+
+# 复制前端构建产物
+COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
 # 创建数据目录
 RUN mkdir -p /app/data/exports /app/data/sessions

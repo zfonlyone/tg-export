@@ -36,7 +36,12 @@ app.include_router(router, prefix="/api")
 app.websocket("/ws")(websocket_endpoint)
 
 # 静态文件 - 前端
-frontend_path = Path(__file__).parent.parent.parent / "frontend" / "dist"
+# Docker 中路径为 /app/frontend/dist，开发环境为相对路径
+frontend_path = Path(__file__).parent.parent / "frontend" / "dist"
+if not frontend_path.exists():
+    # 尝试 Docker 环境路径
+    frontend_path = Path("/app/frontend/dist")
+
 if frontend_path.exists():
     app.mount("/assets", StaticFiles(directory=frontend_path / "assets"), name="assets")
     
