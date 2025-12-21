@@ -8,6 +8,7 @@ from typing import Optional, List, AsyncGenerator
 from pyrogram import Client
 from pyrogram.types import Chat, Message, Dialog
 from pyrogram.enums import ChatType as PyChatType
+from pyrogram.errors import SessionPasswordNeeded
 
 from ..config import settings
 from ..models import ChatInfo, ChatType, MessageInfo, MediaType
@@ -19,19 +20,33 @@ class TelegramClient:
     def __init__(self):
         self._client: Optional[Client] = None
         self._is_authorized = False
+        self._api_id: Optional[int] = None
+        self._api_hash: Optional[str] = None
+        self._phone: Optional[str] = None
+        self._phone_code_hash: Optional[str] = None
     
     @property
     def is_authorized(self) -> bool:
         return self._is_authorized
     
+    @property
+    def is_initialized(self) -> bool:
+        return self._client is not None
+    
     async def init(self, api_id: int, api_hash: str, session_name: str = "tg_export"):
-        """初始化并连接客户端"""
-        # 如果已有客户端，先停止
+        """初始化客户端（只创建实例，不连接）"""
+        # 保存凭证
+        self._api_id = api_id
+        self._api_hash = api_hash
+        
+        # 如果已有客户端，先清理
         if self._client:
             try:
-                await self._client.stop()
+                if self._client.is_connected:
+                    await self._client.disconnect()
             except:
                 pass
+            self._client = None
         
         session_path = settings.SESSIONS_DIR / session_name
         self._client = Client(
@@ -40,69 +55,101 @@ class TelegramClient:
             api_hash=api_hash,
             workdir=str(settings.SESSIONS_DIR)
         )
-        # 连接客户端 (但不登录)
-        await self._client.connect()
+        print(f"[TG] 客户端已初始化: api_id={api_id}")
+    
+    async def _ensure_connected(self):
+        """确保客户端已连接"""
+        if not self._client:
+            raise RuntimeError("客户端未初始化，请先配置 API ID 和 API Hash")
+        
+        if not self._client.is_connected:
+            print("[TG] 正在连接...")
+            await self._client.connect()
+            print("[TG] 已连接")
+    
+    async def send_code(self, phone: str) -> str:
+        """发送验证码"""
+        await self._ensure_connected()
+        
+        self._phone = phone
+        print(f"[TG] 发送验证码到 {phone}...")
+        
+        try:
+            sent_code = await self._client.send_code(phone)
+            self._phone_code_hash = sent_code.phone_code_hash
+            print(f"[TG] 验证码已发送，hash: {self._phone_code_hash[:10]}...")
+            return self._phone_code_hash
+        except Exception as e:
+            print(f"[TG] 发送验证码失败: {e}")
+            raise
+    
+    async def sign_in(self, phone: str, code: str, phone_code_hash: str, password: str = None) -> bool:
+        """登录验证"""
+        await self._ensure_connected()
+        
+        try:
+            if password:
+                # 两步验证
+                print(f"[TG] 使用两步验证密码登录...")
+                await self._client.check_password(password)
+            else:
+                # 验证码登录
+                print(f"[TG] 使用验证码登录: {code}")
+                await self._client.sign_in(phone, phone_code_hash, code)
+            
+            self._is_authorized = True
+            print("[TG] 登录成功!")
+            return True
+            
+        except SessionPasswordNeeded:
+            print("[TG] 需要两步验证密码")
+            raise RuntimeError("需要两步验证密码 (2FA)")
+        except Exception as e:
+            print(f"[TG] 登录失败: {e}")
+            raise
     
     async def start(self) -> bool:
         """启动客户端（如果已有会话则直接登录）"""
         if not self._client:
             return False
         try:
-            # 如果未连接则连接
-            if not self._client.is_connected:
-                await self._client.connect()
+            await self._ensure_connected()
             # 尝试获取当前用户，如果成功说明已登录
             me = await self._client.get_me()
             if me:
                 self._is_authorized = True
+                print(f"[TG] 已登录: {me.first_name} (@{me.username})")
                 return True
         except Exception as e:
-            print(f"启动失败: {e}")
+            print(f"[TG] 启动失败: {e}")
         return False
     
     async def stop(self):
         """停止客户端"""
         if self._client:
             try:
-                await self._client.disconnect()
+                if self._client.is_connected:
+                    await self._client.disconnect()
+                print("[TG] 已断开连接")
             except:
                 pass
             self._is_authorized = False
     
-    async def send_code(self, phone: str) -> str:
-        """发送验证码"""
-        if not self._client:
-            raise RuntimeError("客户端未初始化")
-        if not self._client.is_connected:
-            await self._client.connect()
-        sent_code = await self._client.send_code(phone)
-        return sent_code.phone_code_hash
-    
-    async def sign_in(self, phone: str, code: str, phone_code_hash: str, password: str = None) -> bool:
-        """登录验证"""
-        try:
-            if password:
-                await self._client.check_password(password)
-            else:
-                await self._client.sign_in(phone, phone_code_hash, code)
-            self._is_authorized = True
-            return True
-        except Exception as e:
-            print(f"登录失败: {e}")
-            return False
-    
     async def get_me(self) -> dict:
         """获取当前用户信息"""
-        if not self._client:
+        if not self._client or not self._is_authorized:
             return {}
-        me = await self._client.get_me()
-        return {
-            "id": me.id,
-            "first_name": me.first_name,
-            "last_name": me.last_name,
-            "username": me.username,
-            "phone": me.phone_number
-        }
+        try:
+            me = await self._client.get_me()
+            return {
+                "id": me.id,
+                "first_name": me.first_name,
+                "last_name": me.last_name,
+                "username": me.username,
+                "phone": me.phone_number
+            }
+        except:
+            return {}
     
     def _convert_chat_type(self, chat: Chat) -> ChatType:
         """转换聊天类型"""
@@ -118,20 +165,21 @@ class TelegramClient:
             return ChatType.CHANNEL
         return ChatType.PRIVATE
     
-    async def get_dialogs(self) -> List[ChatInfo]:
-        """获取所有对话列表"""
-        if not self._client:
+    async def get_dialogs(self, limit: int = 100) -> List[ChatInfo]:
+        """获取对话列表"""
+        if not self._client or not self._is_authorized:
             return []
         
-        dialogs: List[ChatInfo] = []
-        async for dialog in self._client.get_dialogs():
+        dialogs = []
+        async for dialog in self._client.get_dialogs(limit):
             chat = dialog.chat
             dialogs.append(ChatInfo(
                 id=chat.id,
-                title=chat.title or chat.first_name or "未知",
+                title=chat.title or chat.first_name or "Unknown",
                 type=self._convert_chat_type(chat),
                 username=chat.username,
-                members_count=chat.members_count
+                members_count=getattr(chat, 'members_count', None),
+                photo_url=None
             ))
         return dialogs
     
@@ -139,40 +187,33 @@ class TelegramClient:
         self,
         chat_id: int,
         limit: int = 0,
-        offset_date: int = None
+        offset_id: int = 0,
+        min_id: int = 0,
+        max_id: int = 0
     ) -> AsyncGenerator[Message, None]:
-        """获取聊天历史记录"""
-        if not self._client:
+        """获取聊天历史"""
+        if not self._client or not self._is_authorized:
             return
         
         async for message in self._client.get_chat_history(
-            chat_id=chat_id,
+            chat_id,
             limit=limit,
-            offset_date=offset_date
+            offset_id=offset_id
         ):
+            # 过滤消息范围
+            if min_id and message.id < min_id:
+                continue
+            if max_id and message.id > max_id:
+                break
             yield message
     
-    async def get_messages_count(self, chat_id: int) -> int:
-        """获取消息总数"""
-        if not self._client:
-            return 0
-        try:
-            # 获取第一条消息来估算总数
-            async for msg in self._client.get_chat_history(chat_id, limit=1):
-                return msg.id
-        except:
-            return 0
-        return 0
-    
     async def get_message_by_id(self, chat_id: int, message_id: int) -> Optional[Message]:
-        """根据消息ID获取消息（用于刷新文件引用）"""
-        if not self._client:
+        """获取单条消息（用于刷新 file_reference）"""
+        if not self._client or not self._is_authorized:
             return None
         try:
             messages = await self._client.get_messages(chat_id, message_id)
-            if messages:
-                return messages if isinstance(messages, Message) else messages[0]
-            return None
+            return messages if isinstance(messages, Message) else None
         except Exception as e:
             print(f"获取消息失败: {e}")
             return None
@@ -180,41 +221,24 @@ class TelegramClient:
     async def download_media(
         self,
         message: Message,
-        file_path: Path,
-        progress_callback = None
+        file_path: str,
+        progress_callback=None
     ) -> Optional[str]:
         """下载媒体文件"""
-        if not self._client or not message.media:
+        if not self._client:
             return None
         
-        # 直接调用下载，不捕获异常，让上层处理重试逻辑
-        path = await self._client.download_media(
-            message,
-            file_name=str(file_path),
-            progress=progress_callback
-        )
-        return path
-    
-    def get_media_type(self, message: Message) -> Optional[MediaType]:
-        """获取消息的媒体类型"""
-        if message.photo:
-            return MediaType.PHOTO
-        elif message.video:
-            return MediaType.VIDEO
-        elif message.audio:
-            return MediaType.AUDIO
-        elif message.voice:
-            return MediaType.VOICE
-        elif message.video_note:
-            return MediaType.VIDEO_NOTE
-        elif message.document:
-            return MediaType.DOCUMENT
-        elif message.sticker:
-            return MediaType.STICKER
-        elif message.animation:
-            return MediaType.ANIMATION
-        return None
+        try:
+            result = await self._client.download_media(
+                message,
+                file_name=file_path,
+                progress=progress_callback
+            )
+            return result
+        except Exception as e:
+            # 抛出异常让上层处理重试
+            raise
 
 
-# 全局客户端实例
+# 全局实例
 telegram_client = TelegramClient()
