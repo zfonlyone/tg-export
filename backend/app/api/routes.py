@@ -246,12 +246,13 @@ async def get_task(
 @router.get("/settings")
 async def get_settings(current_user: User = Depends(get_current_user)):
     """获取设置"""
+    import os
     return {
-        "export_path": str(settings.EXPORT_DIR),
+        "export_path": os.environ.get("DOWNLOAD_DIR", "/downloads"),
         "max_concurrent_downloads": settings.MAX_CONCURRENT_DOWNLOADS,
         "api_id": settings.API_ID,
-        "has_api_hash": bool(settings.API_HASH),
-        "has_bot_token": bool(settings.BOT_TOKEN)
+        "api_hash": "***" if settings.API_HASH else "",
+        "has_bot_token": bool(os.environ.get("BOT_TOKEN", settings.BOT_TOKEN))
     }
 
 
@@ -261,7 +262,18 @@ async def update_settings(
     max_concurrent_downloads: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
-    """更新设置"""
+    \"\"\"更新设置\"\"\"
     # 这里可以实现设置保存逻辑
     return {"status": "ok"}
 
+
+@router.post("/settings/bot-token")
+async def save_bot_token(
+    token: str,
+    current_user: User = Depends(get_current_user)
+):
+    """保存 Bot Token"""
+    # 保存到环境变量或配置文件
+    import os
+    os.environ["BOT_TOKEN"] = token
+    return {"status": "ok", "message": "Bot Token 已保存"}

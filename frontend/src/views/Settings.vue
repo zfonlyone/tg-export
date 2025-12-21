@@ -135,6 +135,7 @@
     <div class="card">
       <div class="card-header">
         <h2>🤖 Bot 配置 (可选)</h2>
+        <span v-if="botSaved" class="status-badge status-completed">已配置</span>
       </div>
       
       <p style="color: #666; margin-bottom: 15px;">
@@ -147,7 +148,9 @@
         <input v-model="botToken" type="text" class="form-input" placeholder="例如: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz">
       </div>
       
-      <button @click="saveBotToken" class="btn btn-primary" :disabled="!botToken">保存</button>
+      <button @click="saveBotToken" class="btn btn-primary" :disabled="!botToken || savingBot">
+        {{ savingBot ? '保存中...' : '保存' }}
+      </button>
     </div>
     
     <!-- 导出设置 -->
@@ -191,6 +194,8 @@ const loginStep = ref(1)
 const loading = ref(false)
 const message = ref('')
 const messageType = ref('success')
+const botSaved = ref(false)
+const savingBot = ref(false)
 
 // API 是否已配置
 const apiConfigured = computed(() => {
@@ -215,6 +220,7 @@ async function fetchStatus() {
     }
     exportPath.value = settingsRes.data.export_path || '/downloads'
     maxConcurrent.value = settingsRes.data.max_concurrent_downloads || 5
+    botSaved.value = settingsRes.data.has_bot_token || false
   } catch (err) {
     console.error('获取设置失败:', err)
   }
@@ -288,11 +294,15 @@ async function disconnectTelegram() {
 }
 
 async function saveBotToken() {
+  savingBot.value = true
   try {
-    await axios.post('/api/settings/bot-token', { token: botToken.value }, { headers: getAuthHeader() })
+    await axios.post(`/api/settings/bot-token?token=${encodeURIComponent(botToken.value)}`, {}, { headers: getAuthHeader() })
+    botSaved.value = true
     showMessage('Bot Token 已保存', 'success')
   } catch (err) {
     showMessage('保存失败: ' + (err.response?.data?.detail || err.message), 'error')
+  } finally {
+    savingBot.value = false
   }
 }
 

@@ -1081,31 +1081,86 @@ SCRIPT
 # ===== 卸载 =====
 uninstall_app() {
     echo -e "${RED}${BOLD}===== 卸载 TG Export =====${PLAIN}"
-    read -p "是否删除数据? (y/N): " DELETE_DATA
-    read -p "是否删除 Nginx 配置? (y/N): " DELETE_NGINX  
-    read -p "确认卸载? (y/N): " CONFIRM
+    echo
+    echo "请选择清理级别:"
+    echo -e "  ${GREEN}1)${PLAIN} 仅停止服务 (保留所有数据)"
+    echo -e "  ${GREEN}2)${PLAIN} 标准卸载 (保留下载数据)"
+    echo -e "  ${GREEN}3)${PLAIN} 完全清理 (删除所有数据，重新安装用)"
+    echo -e "  ${GREEN}0)${PLAIN} 取消"
+    read -p "请选择 [0-3]: " CLEAN_LEVEL
     
-    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
-        log "取消卸载"
-        return
-    fi
-    
-    cd "$APP_DIR" 2>/dev/null
-    docker-compose down 2>/dev/null || docker compose down
-    docker stop tg-export 2>/dev/null
-    docker rm tg-export 2>/dev/null
-    
-    if [[ "$DELETE_DATA" =~ ^[Yy]$ ]]; then
-        rm -rf "$APP_DIR"
-    fi
-    
-    if [[ "$DELETE_NGINX" =~ ^[Yy]$ ]]; then
-        rm -f "$NGINX_CONF"
-        nginx -s reload 2>/dev/null || true
-    fi
-    
-    rm -f /usr/bin/tge
-    log "TG Export 卸载完成！"
+    case $CLEAN_LEVEL in
+        0)
+            log "取消卸载"
+            return
+            ;;
+        1)
+            log "仅停止服务..."
+            cd "$APP_DIR" 2>/dev/null && docker-compose down 2>/dev/null || docker compose down
+            log "服务已停止，数据保留在 $APP_DIR"
+            ;;
+        2)
+            log "标准卸载..."
+            cd "$APP_DIR" 2>/dev/null
+            docker-compose down 2>/dev/null || docker compose down
+            docker stop tg-export 2>/dev/null
+            docker rm tg-export 2>/dev/null
+            
+            # 保留下载数据，删除配置和会话
+            rm -rf "$APP_DIR/data" 2>/dev/null
+            rm -f "$APP_DIR/.env" 2>/dev/null
+            rm -f "$APP_DIR/docker-compose.yml" 2>/dev/null
+            rm -f "$NGINX_CONF" 2>/dev/null
+            nginx -s reload 2>/dev/null || true
+            rm -f /usr/bin/tge 2>/dev/null
+            
+            log "卸载完成！下载数据保留在 ${DOWNLOAD_DIR:-/storage/downloads}"
+            ;;
+        3)
+            echo -e "${RED}警告: 将删除所有数据，包括:${PLAIN}"
+            echo "  - 安装目录 $APP_DIR"
+            echo "  - 所有配置和会话文件"
+            echo "  - Docker 容器和镜像 (tg-export)"
+            echo "  - Nginx 配置"
+            echo "  - SSL 证书 (可选)"
+            echo
+            read -p "是否同时删除 SSL 证书? (y/N): " DELETE_SSL
+            read -p "${RED}确认完全清理?${PLAIN} (输入 'YES' 确认): " CONFIRM
+            
+            if [[ "$CONFIRM" != "YES" ]]; then
+                log "取消卸载"
+                return
+            fi
+            
+            log "正在完全清理..."
+            
+            # 停止并删除容器
+            cd "$APP_DIR" 2>/dev/null
+            docker-compose down -v 2>/dev/null || docker compose down -v
+            docker stop tg-export 2>/dev/null
+            docker rm tg-export 2>/dev/null
+            docker rmi $(docker images | grep tg-export | awk '{print $3}') 2>/dev/null || true
+            
+            # 删除安装目录
+            rm -rf "$APP_DIR"
+            
+            # 删除 Nginx 配置
+            rm -f "$NGINX_CONF"
+            nginx -s reload 2>/dev/null || true
+            
+            # 删除 SSL 证书
+            if [[ "$DELETE_SSL" =~ ^[Yy]$ ]]; then
+                rm -rf "$UNIFIED_CERT_DIR"
+                rm -f "$CRON_FILE"
+                log "SSL 证书已删除"
+            fi
+            
+            # 删除快捷命令
+            rm -f /usr/bin/tge
+            
+            log "完全清理完成！可以重新安装。"
+            ;;
+    esac
 }
 
 # ===== 更新 =====

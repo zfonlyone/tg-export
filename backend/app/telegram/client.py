@@ -25,7 +25,14 @@ class TelegramClient:
         return self._is_authorized
     
     async def init(self, api_id: int, api_hash: str, session_name: str = "tg_export"):
-        """初始化客户端"""
+        """初始化并连接客户端"""
+        # 如果已有客户端，先停止
+        if self._client:
+            try:
+                await self._client.stop()
+            except:
+                pass
+        
         session_path = settings.SESSIONS_DIR / session_name
         self._client = Client(
             name=str(session_path),
@@ -33,29 +40,41 @@ class TelegramClient:
             api_hash=api_hash,
             workdir=str(settings.SESSIONS_DIR)
         )
+        # 连接客户端 (但不登录)
+        await self._client.connect()
     
     async def start(self) -> bool:
-        """启动客户端"""
+        """启动客户端（如果已有会话则直接登录）"""
         if not self._client:
             return False
         try:
-            await self._client.start()
-            self._is_authorized = True
-            return True
+            # 如果未连接则连接
+            if not self._client.is_connected:
+                await self._client.connect()
+            # 尝试获取当前用户，如果成功说明已登录
+            me = await self._client.get_me()
+            if me:
+                self._is_authorized = True
+                return True
         except Exception as e:
             print(f"启动失败: {e}")
-            return False
+        return False
     
     async def stop(self):
         """停止客户端"""
         if self._client:
-            await self._client.stop()
+            try:
+                await self._client.disconnect()
+            except:
+                pass
             self._is_authorized = False
     
     async def send_code(self, phone: str) -> str:
         """发送验证码"""
         if not self._client:
             raise RuntimeError("客户端未初始化")
+        if not self._client.is_connected:
+            await self._client.connect()
         sent_code = await self._client.send_code(phone)
         return sent_code.phone_code_hash
     
