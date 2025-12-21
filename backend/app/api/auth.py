@@ -27,12 +27,16 @@ USERS_FILE = settings.DATA_DIR / "users.json"
 
 
 def hash_password(password: str) -> str:
-    """加密密码"""
+    """加密密码 (bcrypt 限制最大 72 字节)"""
+    # bcrypt 只支持最多 72 字节的密码
+    password = password[:72] if len(password.encode('utf-8')) > 72 else password
     return pwd_context.hash(password)
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """验证密码"""
+    # bcrypt 只支持最多 72 字节的密码
+    plain_password = plain_password[:72] if len(plain_password.encode('utf-8')) > 72 else plain_password
     return pwd_context.verify(plain_password, hashed_password)
 
 

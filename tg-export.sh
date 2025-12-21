@@ -19,6 +19,8 @@ APP_DIR="/opt/tg-export"
 CONFIG_FILE=".tge_config"
 DOCKER_IMAGE="zfonlyone/tg-export:latest"
 WEB_PORT=9528
+HTTP_PORT=8443      # Nginx HTTP 监听端口
+HTTPS_PORT=9443     # Nginx HTTPS 监听端口
 UNIFIED_CERT_DIR="/etc/ssl/wildcard"
 NGINX_CONF="/etc/nginx/conf.d/tg-export.conf"
 CRON_FILE="/etc/cron.d/wildcard-cert-renewal"
@@ -438,8 +440,8 @@ setup_nginx() {
     MAIN_DOMAIN=$(echo "$DOMAIN" | sed 's/^[^.]*\.//')
     
     echo -e "${CYAN}请选择配置类型:${PLAIN}"
-    echo -e "  ${GREEN}1)${PLAIN} 仅 HTTP (端口 80)"
-    echo -e "  ${GREEN}2)${PLAIN} HTTPS (需要证书)"
+    echo -e "  ${GREEN}1)${PLAIN} 仅 HTTP (端口 $HTTP_PORT)"
+    echo -e "  ${GREEN}2)${PLAIN} HTTPS (端口 $HTTPS_PORT)"
     echo -e "  ${GREEN}3)${PLAIN} HTTPS + HTTP 自动跳转"
     read -p "请选择 [1-3]: " NGINX_TYPE
     
@@ -448,7 +450,7 @@ setup_nginx() {
             cat > "$NGINX_CONF" <<NGINX
 # TG Export - HTTP
 server {
-    listen 80;
+    listen $HTTP_PORT;
     server_name $DOMAIN;
     
     location / {
@@ -484,13 +486,13 @@ NGINX
                 cat > "$NGINX_CONF" <<NGINX
 # TG Export - HTTPS with HTTP redirect
 server {
-    listen 80;
+    listen $HTTP_PORT;
     server_name $DOMAIN;
-    return 301 https://\$host\$request_uri;
+    return 301 https://\$host:$HTTPS_PORT\$request_uri;
 }
 
 server {
-    listen 443 ssl http2;
+    listen $HTTPS_PORT ssl http2;
     server_name $DOMAIN;
     
     ssl_certificate $CERT_PATH;
@@ -524,7 +526,7 @@ NGINX
                 cat > "$NGINX_CONF" <<NGINX
 # TG Export - HTTPS
 server {
-    listen 443 ssl http2;
+    listen $HTTPS_PORT ssl http2;
     server_name $DOMAIN;
     
     ssl_certificate $CERT_PATH;
@@ -552,8 +554,8 @@ NGINX
         log "Nginx 配置成功！"
         
         # 开放端口
-        open_ufw_port 80
-        open_ufw_port 443
+        open_ufw_port $HTTP_PORT
+        open_ufw_port $HTTPS_PORT
         
         echo -e "访问地址: ${CYAN}https://$DOMAIN${PLAIN}"
     else
@@ -822,7 +824,7 @@ setup_nginx_auto() {
             cat > "$NGINX_CONF" <<NGINX
 # TG Export - HTTP
 server {
-    listen 80;
+    listen $HTTP_PORT;
     server_name $DOMAIN;
     
     location / {
@@ -857,13 +859,13 @@ NGINX
                 cat > "$NGINX_CONF" <<NGINX
 # TG Export - HTTPS with redirect
 server {
-    listen 80;
+    listen $HTTP_PORT;
     server_name $DOMAIN;
-    return 301 https://\$host\$request_uri;
+    return 301 https://\$host:$HTTPS_PORT\$request_uri;
 }
 
 server {
-    listen 443 ssl http2;
+    listen $HTTPS_PORT ssl http2;
     server_name $DOMAIN;
     
     ssl_certificate $CERT_PATH;
@@ -892,7 +894,7 @@ NGINX
                 cat > "$NGINX_CONF" <<NGINX
 # TG Export - HTTPS
 server {
-    listen 443 ssl http2;
+    listen $HTTPS_PORT ssl http2;
     server_name $DOMAIN;
     
     ssl_certificate $CERT_PATH;
@@ -915,8 +917,8 @@ NGINX
     nginx -t && nginx -s reload
     if [ $? -eq 0 ]; then
         log "Nginx 配置成功！"
-        open_ufw_port 80
-        open_ufw_port 443
+        open_ufw_port $HTTP_PORT
+        open_ufw_port $HTTPS_PORT
     else
         error "Nginx 配置有误"
     fi
