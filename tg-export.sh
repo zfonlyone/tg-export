@@ -951,7 +951,7 @@ function show_menu() {
     echo "5. 查看日志"
     echo "6. 更新镜像"
     echo "7. 证书管理"
-    echo "8. 查看密码"
+    echo "8. 密码管理"
     echo "0. 退出"
     echo
     read -p "请选择 [0-8]: " choice
@@ -976,16 +976,66 @@ function handle_choice() {
         5) docker logs -f --tail=100 tg-export ;;
         6) cd "$APP_DIR" && docker-compose pull && docker-compose up -d; read -p "按回车继续..."; show_menu ;;
         7) manage_certs; show_menu ;;
-        8)
-            if [ -f "$APP_DIR/.env" ]; then
-                echo -e "管理员密码: ${YELLOW}$(grep ADMIN_PASSWORD "$APP_DIR/.env" | cut -d= -f2)${NC}"
-            fi
-            read -p "按回车继续..."
-            show_menu
-            ;;
+        8) manage_password; show_menu ;;
         0) exit 0 ;;
         *) show_menu ;;
     esac
+}
+
+function manage_password() {
+    echo -e "${CYAN}=== 密码管理 ===${NC}"
+    echo
+    if [ -f "$APP_DIR/.env" ]; then
+        CURRENT_PWD=$(grep ADMIN_PASSWORD "$APP_DIR/.env" | cut -d= -f2)
+        echo -e "当前密码: ${YELLOW}$CURRENT_PWD${NC}"
+    else
+        echo -e "${RED}未找到配置文件${NC}"
+    fi
+    echo
+    echo "1. 修改密码"
+    echo "2. 重置密码 (随机生成)"
+    echo "0. 返回"
+    read -p "请选择: " pwd_choice
+    
+    case $pwd_choice in
+        1)
+            read -p "请输入新密码: " NEW_PWD
+            if [ -n "$NEW_PWD" ]; then
+                update_password "$NEW_PWD"
+            else
+                echo -e "${RED}密码不能为空${NC}"
+            fi
+            ;;
+        2)
+            NEW_PWD=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 12)
+            update_password "$NEW_PWD"
+            ;;
+    esac
+    read -p "按回车继续..."
+}
+
+function update_password() {
+    local NEW_PWD=$1
+    
+    # 更新 .env 文件
+    if [ -f "$APP_DIR/.env" ]; then
+        sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$NEW_PWD/" "$APP_DIR/.env"
+    fi
+    
+    # 更新配置文件
+    if [ -f "$APP_DIR/.tge_config" ]; then
+        sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=\"$NEW_PWD\"/" "$APP_DIR/.tge_config"
+    fi
+    
+    # 删除用户数据，让系统重新创建
+    rm -f "$APP_DIR/data/users.json"
+    
+    # 重启容器
+    cd "$APP_DIR" && docker-compose restart
+    
+    echo
+    echo -e "${GREEN}密码已更新！${NC}"
+    echo -e "新密码: ${YELLOW}$NEW_PWD${NC}"
 }
 
 function manage_certs() {
