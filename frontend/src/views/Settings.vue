@@ -70,7 +70,8 @@
         <div style="display: flex; gap: 10px; margin-bottom: 20px;">
           <div :class="['login-step', loginStep >= 1 ? 'active' : '']">1. 手机号</div>
           <div :class="['login-step', loginStep >= 2 ? 'active' : '']">2. 验证码</div>
-          <div :class="['login-step', loginStep >= 3 ? 'active' : '']">3. 完成</div>
+          <div :class="['login-step', loginStep >= 3 ? 'active' : '']">3. 二次验证</div>
+          <div :class="['login-step', loginStep >= 4 ? 'active' : '']">4. 完成</div>
         </div>
         
         <!-- 步骤 1: 手机号 -->
@@ -104,14 +105,14 @@
           </div>
         </div>
         
-        <!-- 步骤 2.5: 两步验证密码 -->
-        <div v-if="loginStep === 25">
+        <!-- 步骤 3: 两步验证密码 -->
+        <div v-if="loginStep === 3">
           <p style="color: #666; margin-bottom: 15px;">
             您的账号已启用两步验证，请输入密码
           </p>
           <div class="form-group">
             <label class="form-label">两步验证密码</label>
-            <input v-model="password" type="password" class="form-input" placeholder="输入两步验证密码">
+            <input v-model="password" type="password" class="form-input" placeholder="输入两步验证密码" @keyup.enter="signIn">
           </div>
           <div style="display: flex; gap: 10px;">
             <button @click="loginStep = 2" class="btn btn-outline">← 上一步</button>
@@ -171,7 +172,7 @@
 
     <!-- 版本信息 -->
     <div style="text-align: center; margin-top: 30px; color: #999; font-size: 12px; padding-bottom: 20px;">
-      <p>TG Export v1.1.1</p>
+      <p>TG Export v1.1.2</p>
       <p>© 2024 TG Export Team</p>
     </div>
   </div>
@@ -282,12 +283,14 @@ async function signIn() {
       }
     })
     showMessage('🎉 登录成功!', 'success')
+    loginStep.value = 4
     await fetchStatus()
   } catch (err) {
     const detail = err.response?.data?.detail || err.message
-    if (detail === 'SESSION_PASSWORD_NEEDED' || detail.includes('2FA') || detail.includes('password') || detail.includes('two-step')) {
-      loginStep.value = 25  // 两步验证视图 2.5
-      showMessage('请输入两步验证密码', 'success')
+    // 增加对 401 状态码且包含特定字符串的判断
+    if (err.response?.status === 401 && (detail === 'SESSION_PASSWORD_NEEDED' || detail.includes('2FA') || detail.includes('password'))) {
+      loginStep.value = 3  // 跳转至两步验证
+      showMessage('请提供两步验证密码 (Cloud Password)', 'success')
     } else {
       showMessage('登录失败: ' + detail, 'error')
     }
