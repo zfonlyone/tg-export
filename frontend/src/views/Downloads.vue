@@ -41,6 +41,9 @@
           <div class="progress-stats">
             <span>{{ task.downloaded_media || 0 }}/{{ task.total_media || 0 }} 文件</span>
             <span>{{ formatSize(task.downloaded_size) }}</span>
+            <span v-if="isRunning(task) && task.download_speed > 0" class="speed">
+              ⚡ {{ formatSpeed(task.download_speed) }}
+            </span>
             <span v-if="getFailedCount(task) > 0" class="failed-count">
               ⚠️ {{ getFailedCount(task) }} 失败
             </span>
@@ -57,12 +60,18 @@
           <div v-if="expandedTasks[task.id]" class="file-list">
             <div v-for="file in task.download_queue" :key="file.id" class="file-item">
               <div class="file-info">
-                <span class="file-name">{{ file.file_name || '未知文件' }}</span>
+                <div class="file-name-row">
+                  <span class="file-name">{{ file.file_name || '未知文件' }}</span>
+                  <span class="file-size">{{ formatSize(file.downloaded_size) }} / {{ formatSize(file.file_size) }}</span>
+                </div>
                 <div class="file-progress-bar">
                   <div class="file-progress-fill" :style="{ width: (file.progress || 0) + '%' }"></div>
                 </div>
               </div>
               <div class="file-status">
+                <span v-if="file.status === 'downloading' && file.speed > 0" class="file-speed">
+                  {{ formatSpeed(file.speed) }}
+                </span>
                 <span class="file-percent">{{ (file.progress || 0).toFixed(0) }}%</span>
                 <span :class="['file-state', 'state-' + file.status]">
                   {{ getFileStatusText(file.status) }}
@@ -263,6 +272,17 @@ function formatSize(bytes) {
   return bytes.toFixed(1) + ' ' + units[i]
 }
 
+function formatSpeed(bytesPerSecond) {
+  if (!bytesPerSecond || bytesPerSecond < 0) return ''
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
+  let i = 0
+  while (bytesPerSecond >= 1024 && i < units.length - 1) {
+    bytesPerSecond /= 1024
+    i++
+  }
+  return bytesPerSecond.toFixed(1) + ' ' + units[i]
+}
+
 onMounted(() => {
   fetchTasks()
   // 每3秒刷新
@@ -409,6 +429,17 @@ onUnmounted(() => {
   color: #e53935;
 }
 
+.speed {
+  color: #2e7d32;
+  font-weight: 500;
+}
+
+.file-speed {
+  color: #2e7d32;
+  font-size: 11px;
+  margin-right: 4px;
+}
+
 /* 文件列表 */
 .file-section {
   border-top: 1px solid #eee;
@@ -454,14 +485,28 @@ onUnmounted(() => {
   min-width: 0;
 }
 
+.file-name-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
 .file-name {
-  display: block;
   font-size: 12px;
   color: #333;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  margin-bottom: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.file-size {
+  font-size: 11px;
+  color: #888;
+  margin-left: 8px;
+  white-space: nowrap;
 }
 
 .file-progress-bar {

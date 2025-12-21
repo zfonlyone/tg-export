@@ -276,6 +276,9 @@ class ExportManager:
         """处理下载队列"""
         options = task.options
         
+        # 按 message_id 升序排序，先下载较早的消息
+        task.download_queue.sort(key=lambda x: x.message_id)
+        
         # 限制并发下载数
         semaphore = asyncio.Semaphore(options.max_concurrent_downloads)
         
@@ -298,20 +301,51 @@ class ExportManager:
                     item.error = "无法获取消息对象"
                     return
 
+
                 item.status = DownloadStatus.DOWNLOADING
                 full_path = export_path / item.file_path
-                temp_file_path = full_path.with_suffix(full_path.suffix + ".downloading")
+                
+                # 日志：记录下载路径
+                logger.info(f"开始下载文件: {item.file_name}")
+                logger.info(f"  → 目标路径: {full_path}")
+                logger.info(f"  → export_path: {export_path}")
+                
+                # 使用 temp 目录存放下载中的文件
+                temp_dir = Path("/tmp/tg-export-downloads")
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                temp_file_path = temp_dir / f"{item.id}_{full_path.name}"
+                logger.info(f"  → 临时路径: {temp_file_path}")
                 
                 retry_manager = DownloadRetryManager(
                     max_retries=options.max_download_retries,
                     initial_delay=options.retry_delay
                 )
                 
+                # 速度计算需要的变量
+                import time
+                last_update = {'size': 0, 'time': time.time()}
+                
                 def progress_cb(current, total):
+                    now = time.time()
+                    elapsed = now - last_update['time']
+                    
                     item.downloaded_size = current
                     item.file_size = total
                     if total > 0:
                         item.progress = (current / total) * 100
+                    
+                    # 计算速度 (至少间隔 0.5 秒更新一次)
+                    if elapsed >= 0.5:
+                        bytes_diff = current - last_update['size']
+                        item.speed = bytes_diff / elapsed if elapsed > 0 else 0
+                        last_update['size'] = current
+                        last_update['time'] = now
+                        
+                        # 更新任务总速度 (所有下载中文件的速度之和)
+                        task.download_speed = sum(
+                            i.speed for i in task.download_queue 
+                            if i.status == DownloadStatus.DOWNLOADING
+                        )
                 
                 success, downloaded, failure_info = await retry_manager.download_with_retry(
                     download_func=telegram_client.download_media,
@@ -323,11 +357,16 @@ class ExportManager:
                 
                 if success and downloaded:
                     if temp_file_path.exists():
-                        temp_file_path.rename(full_path)
+                        # 确保目标目录存在
+                        full_path.parent.mkdir(parents=True, exist_ok=True)
+                        # 从 temp 移动到最终位置
+                        import shutil
+                        shutil.move(str(temp_file_path), str(full_path))
+                        logger.info(f"✅ 文件已保存: {full_path}")
                     item.status = DownloadStatus.COMPLETED
                     item.progress = 100.0
                     task.downloaded_media += 1
-                    # 每完成一个下载，通知一次进度 (对于大批量下载，可以考虑节流)
+                    # 每完成一个下载，通知一次进度
                     await self._notify_progress(task.id, task)
                 elif failure_info:
                     item.status = DownloadStatus.FAILED

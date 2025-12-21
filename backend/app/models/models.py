@@ -69,6 +69,7 @@ class DownloadItem(BaseModel):
     media_type: MediaType
     file_path: Optional[str] = None
     progress: float = 0.0
+    speed: float = 0.0                    # 下载速度 (字节/秒)
 
 
 class ExportOptions(BaseModel):
@@ -204,6 +205,7 @@ class ExportTask(BaseModel):
     # 失败下载跟踪
     failed_downloads: List["FailedDownload"] = Field(default_factory=list)
     retry_downloads: int = 0              # 重试成功的数量
+    download_speed: float = 0.0           # 总下载速度 (字节/秒)
     
     @computed_field
     @property
