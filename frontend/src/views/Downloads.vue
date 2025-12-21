@@ -192,6 +192,8 @@ const tasks = ref([])
 const expandedDetailed = ref({})
 const parsedChatIds = ref([])
 const parsedMessageIds = ref([])
+const refreshInterval = ref(3000)
+let intervalId = null
 
 function isDetailedExpanded(task) {
   // 如果用户手动点击过，按用户的选择来

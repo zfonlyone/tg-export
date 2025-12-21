@@ -694,3 +694,36 @@ a:hover {
   padding-bottom: 15px;
   border-bottom: 1px solid var(--border);
 }
+
+/* ========== 表格样式 ========== */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+.table th, .table td {
+  padding: 12px 15px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.table th {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 13px;
+  background: #fafafa;
+}
+
+.table tr:hover {
+  background: #f8f9fa;
+}
+
+.table td {
+  font-size: 14px;
+}
+
+.table .progress {
+  margin: 0;
+  width: 100px;
+}
