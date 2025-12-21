@@ -111,7 +111,7 @@ async def sign_in(
             raise HTTPException(status_code=429, detail=error_msg)
         if "password" in error_msg.lower() or "2FA" in error_msg:
             # 这是一个特定流程，前端需要这个信息
-            return {"status": "needs_password", "message": "需要两步验证密码"}
+            raise HTTPException(status_code=401, detail="SESSION_PASSWORD_NEEDED")
         raise HTTPException(status_code=400, detail=error_msg)
 
 

@@ -171,7 +171,7 @@
 
     <!-- 版本信息 -->
     <div style="text-align: center; margin-top: 30px; color: #999; font-size: 12px; padding-bottom: 20px;">
-      <p>TG Export v1.1.0</p>
+      <p>TG Export v1.1.1</p>
       <p>© 2024 TG Export Team</p>
     </div>
   </div>
@@ -285,8 +285,8 @@ async function signIn() {
     await fetchStatus()
   } catch (err) {
     const detail = err.response?.data?.detail || err.message
-    if (detail.includes('2FA') || detail.includes('password') || detail.includes('two-step')) {
-      loginStep.value = 25  // 两步验证
+    if (detail === 'SESSION_PASSWORD_NEEDED' || detail.includes('2FA') || detail.includes('password') || detail.includes('two-step')) {
+      loginStep.value = 25  // 两步验证视图 2.5
       showMessage('请输入两步验证密码', 'success')
     } else {
       showMessage('登录失败: ' + detail, 'error')
