@@ -4,7 +4,7 @@ TG Export - 数据模型
 from datetime import datetime
 from enum import Enum
 from typing import Optional, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class ChatType(str, Enum):
@@ -205,6 +205,7 @@ class ExportTask(BaseModel):
     failed_downloads: List["FailedDownload"] = Field(default_factory=list)
     retry_downloads: int = 0              # 重试成功的数量
     
+    @computed_field
     @property
     def progress(self) -> float:
         """计算总进度"""
