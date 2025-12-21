@@ -13,7 +13,7 @@ from pyrogram.enums import ChatType as PyChatType
 from pyrogram.errors import (
     SessionPasswordNeeded, FloodWait, PhoneCodeInvalid, 
     PhoneCodeExpired, PhoneNumberInvalid, Unauthorized,
-    UserDeactivated, ActiveIdInvalid
+    UserDeactivated
 )
 
 from ..config import settings

@@ -168,6 +168,12 @@
       
       <button @click="saveSettings" class="btn btn-primary">保存设置</button>
     </div>
+
+    <!-- 版本信息 -->
+    <div style="text-align: center; margin-top: 30px; color: #999; font-size: 12px; padding-bottom: 20px;">
+      <p>TG Export v1.1.0</p>
+      <p>© 2024 TG Export Team</p>
+    </div>
   </div>
 </template>
 

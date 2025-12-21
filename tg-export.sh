@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================================
-# TG Export 一键部署脚本 v1.1
+# TG Export 一键部署脚本 v1.1.0
 # 功能: 安装/卸载 TG Export + Nginx + SSL证书管理 + UFW端口
 # 新增: 下载重试机制 + 暂停/恢复 + 失败记录 + AList 风格 UI
 # ==========================================================
@@ -16,6 +16,7 @@ PLAIN='\033[0m'
 
 # ===== 统一配置 =====
 APP_NAME="TG Export"
+APP_VERSION="1.1.0"
 APP_DIR="/opt/tg-export"
 CONFIG_FILE=".tge_config"
 DOCKER_IMAGE="zfonlyone/tg-export:latest"
@@ -1202,6 +1203,7 @@ update_app() {
 # ===== 查看状态 =====
 show_status() {
     echo -e "${CYAN}${BOLD}===== TG Export 状态 =====${PLAIN}"
+    echo -e "当前版本: ${GREEN}${APP_VERSION}${PLAIN}"
     echo
     
     if docker ps | grep -q tg-export; then
