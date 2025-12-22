@@ -1,371 +1,312 @@
 <template>
   <div class="fade-in">
-    <!-- 页面标题 -->
     <div class="page-header">
-      <h1>📋 任务管理</h1>
-      <router-link to="/export" class="btn btn-primary">+ 新建导出</router-link>
-    </div>
-    
-    <!-- 统计卡片 -->
-    <div class="stats-row">
-      <div class="stat-card completed">
-        <div class="stat-icon">✅</div>
-        <div class="stat-info">
-          <div class="stat-value">{{ completedCount }}</div>
-          <div class="stat-label">已完成</div>
-        </div>
+      <div class="header-text">
+        <h1>📋 下载进度</h1>
+        <p class="subtitle">实时管理您的 Telegram 导出队列</p>
       </div>
-      <div class="stat-card pending">
-        <div class="stat-icon">⏳</div>
-        <div class="stat-info">
-          <div class="stat-value">{{ pendingCount }}</div>
-          <div class="stat-label">进行中</div>
-        </div>
-      </div>
-      <div class="stat-card failed">
-        <div class="stat-icon">❌</div>
-        <div class="stat-info">
-          <div class="stat-value">{{ failedCount }}</div>
-          <div class="stat-label">异常</div>
-        </div>
+      <div class="header-actions">
+        <button @click="pauseAll" class="btn-premium ghost sm" :disabled="runningCount === 0">⏸ 暂停所有</button>
+        <button @click="resumeAll" class="btn-premium ghost sm" :disabled="pausedCount === 0">▶ 恢复所有</button>
+        <button @click="removeCompleted" class="btn-premium danger sm" :disabled="completedCount === 0">🗑 清理已完成</button>
       </div>
     </div>
-    
-    <!-- 操作栏 -->
-    <div class="actions-bar" v-if="tasks.length > 0">
-      <button @click="pauseAll" class="btn btn-outline btn-sm" :disabled="runningCount === 0">
-        ⏸ 暂停所有
-      </button>
-      <button @click="resumeAll" class="btn btn-outline btn-sm" :disabled="pausedCount === 0">
-        ▶ 恢复所有
-      </button>
-      <button @click="removeCompleted" class="btn btn-outline btn-sm" :disabled="completedCount === 0">
-        🗑 移除已完成
-      </button>
-      <span class="refresh-label">更新间隔: {{ refreshInterval / 1000 }}s</span>
+
+    <!-- 核心统计概览 -->
+    <div class="stats-ribbon">
+      <div class="stat-pill">
+        <span class="p-icon">📦</span>
+        <span class="p-label">总任务: {{ tasks.length }}</span>
+      </div>
+      <div class="stat-pill success">
+        <span class="p-icon">✅</span>
+        <span class="p-label">已完成: {{ completedCount }}</span>
+      </div>
+      <div class="stat-pill info" :class="{ pulse: runningCount > 0 }">
+        <span class="p-icon">⚡</span>
+        <span class="p-label">活跃中: {{ runningCount }}</span>
+      </div>
     </div>
-    
-    <!-- 加载中 -->
-    <div v-if="loading" class="loading">
-      <div class="spinner"></div>
-    </div>
-    
+
     <!-- 空状态 -->
-    <div v-else-if="tasks.length === 0" class="empty-state">
-      <div class="icon">📭</div>
-      <p>暂无任务</p>
-      <router-link to="/export" class="btn btn-primary">创建第一个导出任务</router-link>
+    <div v-if="!loading && tasks.length === 0" class="empty-state animate-fade">
+      <div class="empty-icon">📂</div>
+      <h3>暂无导出任务</h3>
+      <p>快去创建一个新的导出任务吧！</p>
+      <router-link to="/export" class="btn-premium">📥 新建导出</router-link>
     </div>
-    
+
     <!-- 任务列表 -->
-    <div v-else class="task-list">
-      <div 
-        v-for="task in tasks" 
-        :key="task.id" 
-        :class="['task-card', task.status]"
-      >
-        <!-- 任务头部 -->
-        <div class="task-header">
-          <div>
-            <div class="task-title">{{ task.name }}</div>
-            <div class="task-meta">创建于 {{ formatDate(task.created_at) }}</div>
-          </div>
-          <span :class="'status-badge status-' + (task.status === 'extracting' ? 'extracting' : task.status)">
-            {{ statusText[task.status] }}
-          </span>
-        </div>
-        
-        <!-- 进度条 -->
-        <div v-if="['extracting', 'running', 'paused'].includes(task.status)">
-          <div class="progress">
-            <div class="progress-bar" :style="{ width: task.progress + '%' }"></div>
-          </div>
-          <div class="progress-text">
-            <span>{{ (task.progress || 0).toFixed(1) }}%</span>
-            <span v-if="task.status === 'extracting'">🔍 正在扫描消息: {{ task.processed_messages }}</span>
-            <span v-else>📥 下载文件: {{ task.downloaded_media }} / {{ task.total_media }}</span>
-          </div>
-        </div>
-        
-        <!-- 任务概览信息 -->
-        <div class="task-info">
-          <div class="task-info-item">
-            📨 消息: {{ task.processed_messages }}
-          </div>
-          <div class="task-info-item">
-            📁 媒体: {{ task.downloaded_media }}/{{ task.total_media }}
-          </div>
-          <div class="task-info-item">
-            💾 容量: {{ formatSize(task.downloaded_size) }}
-          </div>
-          <div class="task-info-item" v-if="task.failed_downloads?.length > 0">
-            ⚠️ 失败: {{ task.failed_downloads.length }}
-          </div>
-        </div>
-        
-        <!-- 下载清单详情 (运行中默认展开) -->
-        <div v-if="task.download_queue?.length > 0" class="failed-section">
-          <div class="failed-header" @click="toggleDetailed(task.id)">
-            <span>📊 传输明细 ({{ task.downloaded_media }}/{{ task.total_media }})</span>
-            <span>{{ isDetailedExpanded(task) ? '▼' : '▶' }}</span>
-          </div>
-          <div v-if="isDetailedExpanded(task)" class="failed-list">
-             <div v-for="item in task.download_queue.slice(0, 50)" :key="item.id" class="download-item-row">
-                <div style="flex: 1; min-width: 0;">
-                  <div style="display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 11px;">
-                    <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace;">{{ item.file_name }}</span>
-                    <span>{{ item.progress.toFixed(0) }}%</span>
-                  </div>
-                  <div class="progress" style="height: 4px; margin: 0; background: rgba(0,0,0,0.05);">
-                    <div class="progress-bar" :style="{ width: item.progress + '%' }"></div>
-                  </div>
-                </div>
-                <div style="margin-left: 10px; display: flex; align-items: center; gap: 5px;">
-                   <span :class="'item-status ' + item.status">{{ item.status }}</span>
-                </div>
-             </div>
-             <div v-if="task.download_queue.length > 50" class="download-item-row" style="justify-content: center; color: #888; font-size: 12px; border: none;">
-                ... 及其他 {{ task.download_queue.length - 50 }} 个文件
-             </div>
-          </div>
-        </div>
-        
-        <!-- 导出成功 (精简样式) -->
-        <div v-if="task.status === 'completed'" class="completed-info-box">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="color: #27ae60; font-size: 14px; display: flex; align-items: center; gap: 6px;">
-              <span style="font-size: 18px;">✅</span> 导出成功，共计 {{ task.downloaded_media }} 个文件
+    <div v-else class="tasks-grid">
+      <div v-for="task in tasks" :key="task.id" class="task-premium-card" :class="task.status">
+        <div class="task-inner">
+          <div class="task-main-info">
+            <div class="t-head">
+              <div class="t-title-row">
+                <h3 class="t-name text-truncate">{{ task.name }}</h3>
+                <span class="t-status-pill" :class="task.status">{{ statusText[task.status] || task.status }}</span>
+              </div>
+              <p class="t-date">创建于 {{ formatDate(task.created_at) }}</p>
             </div>
-            <a :href="'/exports/' + task.id" target="_blank" class="btn btn-success btn-sm">
-              📁 浏览文件
-            </a>
+
+            <!-- 主进度展示 -->
+            <div class="t-progress-section">
+              <div class="t-progress-header">
+                <span class="t-percent">{{ (task.progress || 0).toFixed(1) }}%</span>
+                <span class="t-eta" v-if="task.status === 'running' && stats[task.id]?.etr">
+                  剩余时间约为: {{ stats[task.id].etr }}
+                </span>
+                <span class="t-speed" v-if="task.status === 'running' && stats[task.id]?.speed">
+                  {{ stats[task.id].speed }} MB/s
+                </span>
+              </div>
+              <div class="t-progress-track">
+                <div class="t-progress-fill" :style="{ width: task.progress + '%' }" :class="task.status"></div>
+              </div>
+            </div>
+
+            <!-- 详细指标 -->
+            <div class="t-metrics">
+              <div class="m-item">
+                <span class="m-icon">📨</span>
+                <span class="m-data">消息: <b>{{ task.processed_messages }}</b></span>
+              </div>
+              <div class="m-item">
+                <span class="m-icon">📁</span>
+                <span class="m-data">媒体: <b>{{ task.downloaded_media }} / {{ task.total_media }}</b></span>
+              </div>
+              <div class="m-item">
+                <span class="m-icon">💾</span>
+                <span class="m-data">大小: <b>{{ formatSize(task.downloaded_size) }}</b></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 侧边操作栏 -->
+          <div class="task-side-actions">
+            <button v-if="['running', 'extracting'].includes(task.status)" @click="pauseTask(task.id)" class="a-btn v-warn" title="暂停">⏸</button>
+            <button v-if="task.status === 'paused'" @click="resumeTask(task.id)" class="a-btn v-success" title="继续">▶</button>
+            <button v-if="['extracting', 'running', 'paused'].includes(task.status)" @click="cancelTask(task.id)" class="a-btn v-danger" title="取消">✖</button>
+            <button v-if="task.status === 'completed'" @click="resumeTask(task.id)" class="a-btn v-primary" title="重新运行">🔄</button>
+            <button v-if="['completed', 'failed', 'cancelled'].includes(task.status)" @click="deleteTask(task.id)" class="a-btn v-outline" title="删除">🗑</button>
+            <a v-if="task.status === 'completed'" :href="'/exports/' + task.id" target="_blank" class="a-btn v-info" title="浏览文件">📂</a>
           </div>
         </div>
-        
-        <!-- 错误信息 -->
-        <div v-if="task.status === 'failed'" style="margin-top: 12px; padding: 12px; background: #f8d7da; border-radius: 6px; color: #721c24;">
-          ❌ {{ task.error || '导出失败' }}
-        </div>
-        
-        <!-- 操作按钮 -->
-        <div class="task-actions">
-          <button 
-            v-if="task.status === 'running' || task.status === 'extracting'" 
-            @click="pauseTask(task.id)"
-            class="btn btn-warning btn-sm"
-          >
-            ⏸ 暂停
+
+        <!-- 文件详情展开 (仅在活跃状态显示) -->
+        <div v-if="task.download_queue?.length > 0" class="task-details">
+          <button class="details-toggle" @click="toggleDetailed(task.id)">
+            文件列表明细 ({{ task.download_queue.length }} 个) {{ isDetailedExpanded(task) ? '▲' : '▼' }}
           </button>
-          <button 
-            v-if="task.status === 'paused'" 
-            @click="resumeTask(task.id)"
-            class="btn btn-success btn-sm"
-          >
-            ▶ 恢复
-          </button>
-          <button 
-            v-if="['extracting', 'running', 'paused'].includes(task.status)" 
-            @click="cancelTask(task.id)"
-            class="btn btn-danger btn-sm"
-          >
-            ✖ 取消
-          </button>
-          <button 
-            v-if="task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled'"
-            @click="deleteTask(task.id)"
-            class="btn btn-outline btn-sm"
-          >
-            🗑 删除
-          </button>
+          
+          <div v-if="isDetailedExpanded(task)" class="details-list-wrap animate-fade">
+            <div v-for="item in task.download_queue.slice(0, 50)" :key="item.id" class="queue-item">
+              <div class="q-info">
+                <span class="q-name">{{ item.file_name }}</span>
+                <span class="q-percent">{{ item.progress.toFixed(0) }}%</span>
+              </div>
+              <div class="q-bar-wrap">
+                <div class="q-bar" :style="{ width: item.progress + '%' }" :class="item.status"></div>
+                <span class="q-status-text">{{ item.status }}</span>
+                <button v-if="['failed', 'completed'].includes(item.status)" class="q-retry-btn" @click="retryFile(task.id, item.id)">
+                  {{ item.status === 'failed' ? '重试' : '重新下载' }}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
+    </div>
+
+    <!-- 加载遮罩 -->
+    <div v-if="loading && tasks.length === 0" class="global-loading">
+      <div class="loader-ring"></div>
+      <p>正在同步任务状态...</p>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, reactive } from 'vue'
 import axios from 'axios'
 
 const loading = ref(true)
 const tasks = ref([])
 const expandedDetailed = ref({})
-const parsedChatIds = ref([])
-const parsedMessageIds = ref([])
+const stats = reactive({})
+
+const statusText = {
+  extracting: '扫描中',
+  pending: '等待中',
+  running: '正在下载',
+  completed: '已完成',
+  failed: '失败',
+  cancelled: '已停止',
+  paused: '已暂停'
+}
+
+function getAuthHeader() { return { Authorization: `Bearer ${localStorage.getItem('token')}` } }
 
 function isDetailedExpanded(task) {
-  // 如果用户手动点击过，按用户的选择来
-  if (expandedDetailed.value[task.id] !== undefined) {
-    return expandedDetailed.value[task.id]
-  }
-  // 运行中或暂停的任务默认展示详情
+  if (expandedDetailed.value[task.id] !== undefined) return expandedDetailed.value[task.id]
   return ['running', 'paused', 'extracting'].includes(task.status)
 }
 
-// 统计
-const completedCount = computed(() => tasks.value.filter(t => t.status === 'completed').length)
-const pendingCount = computed(() => tasks.value.filter(t => ['extracting', 'pending', 'running', 'paused'].includes(t.status)).length)
-const failedCount = computed(() => tasks.value.filter(t => t.status === 'failed').length)
-const runningCount = computed(() => tasks.value.filter(t => ['extracting', 'running'].includes(t.status)).length)
-const pausedCount = computed(() => tasks.value.filter(t => t.status === 'paused').length)
+function toggleDetailed(taskId) { expandedDetailed.value[taskId] = !expandedDetailed.value[taskId] }
 
-function getAuthHeader() {
-  return { Authorization: `Bearer ${localStorage.getItem('token')}` }
-}
+// ETR & Speed Calculation
+const lastProgress = {}
+function updateLiveStats() {
+  tasks.value.forEach(task => {
+    if (task.status !== 'running') return
+    const prev = lastProgress[task.id] || { progress: 0, time: Date.now(), size: 0 }
+    const now = Date.now()
+    const dt = (now - prev.time) / 1000
+    if (dt < 1) return
 
-function getProgress(task) {
-  if (task.total_messages === 0) return 0
-  return (task.processed_messages / task.total_messages) * 100
+    const ds = (task.downloaded_size - prev.size) / (1024 * 1024)
+    const speed = ds / dt
+    
+    if (!stats[task.id]) stats[task.id] = {}
+    stats[task.id].speed = speed > 0 ? speed.toFixed(1) : '0.0'
+    
+    if (speed > 0.01) {
+      const remainingSize = (task.total_media_size || 0) - task.downloaded_size
+      const etrSeconds = (remainingSize / (1024 * 1024)) / speed
+      if (etrSeconds > 0) {
+        const h = Math.floor(etrSeconds / 3600)
+        const m = Math.floor((etrSeconds % 3600) / 60)
+        const s = Math.floor(etrSeconds % 60)
+        stats[task.id].etr = h > 0 ? `${h}h ${m}m` : (m > 0 ? `${m}m ${s}s` : `${s}s`)
+      }
+    }
+    
+    lastProgress[task.id] = { progress: task.progress, time: now, size: task.downloaded_size }
+  })
 }
 
 async function fetchTasks() {
   try {
     const res = await axios.get('/api/export/tasks', { headers: getAuthHeader() })
     tasks.value = res.data.reverse()
-  } catch (err) {
-    console.error('获取任务失败:', err)
-  } finally {
-    loading.value = false
-  }
+    updateLiveStats()
+  } catch (err) { console.error('Fetch failed:', err) }
+  finally { loading.value = false }
 }
 
-async function pauseTask(taskId) {
-  try {
-    await axios.post(`/api/export/${taskId}/pause`, {}, { headers: getAuthHeader() })
-    await fetchTasks()
-  } catch (err) {
-    alert('暂停失败: ' + (err.response?.data?.detail || err.message))
-  }
-}
+// 统计
+const completedCount = computed(() => tasks.value.filter(t => t.status === 'completed').length)
+const pendingCount = computed(() => tasks.value.filter(t => ['extracting', 'pending', 'running', 'paused'].includes(t.status)).length)
+const runningCount = computed(() => tasks.value.filter(t => ['extracting', 'running'].includes(t.status)).length)
+const pausedCount = computed(() => tasks.value.filter(t => t.status === 'paused').length)
 
-async function resumeTask(taskId) {
-  try {
-    await axios.post(`/api/export/${taskId}/resume`, {}, { headers: getAuthHeader() })
-    await fetchTasks()
-  } catch (err) {
-    alert('恢复失败: ' + (err.response?.data?.detail || err.message))
-  }
-}
+// Actions
+async function pauseTask(id) { await axios.post(`/api/export/${id}/pause`, {}, { headers: getAuthHeader() }); fetchTasks() }
+async function resumeTask(id) { await axios.post(`/api/export/${id}/resume`, {}, { headers: getAuthHeader() }); fetchTasks() }
+async function cancelTask(id) { if(confirm('确定取消该任务？')) { await axios.post(`/api/export/${id}/cancel`, {}, { headers: getAuthHeader() }); fetchTasks() } }
+async function deleteTask(id) { if(confirm('确定删除该记录？')) { await axios.delete(`/api/export/${id}`, { headers: getAuthHeader() }); tasks.value = tasks.value.filter(t => t.id !== id) } }
+async function retryFile(taskId, fileId) { await axios.post(`/api/export/${taskId}/retry_file/${fileId}`, {}, { headers: getAuthHeader() }); fetchTasks() }
 
-async function cancelTask(taskId) {
-  try {
-    await axios.post(`/api/export/${taskId}/cancel`, {}, { headers: getAuthHeader() })
-    await fetchTasks()
-  } catch (err) {
-    alert('取消失败: ' + (err.response?.data?.detail || err.message))
-  }
-}
+async function pauseAll() { tasks.value.filter(t => ['running', 'extracting'].includes(t.status)).forEach(t => pauseTask(t.id)) }
+async function resumeAll() { tasks.value.filter(t => t.status === 'paused').forEach(t => resumeTask(t.id)) }
+async function removeCompleted() { if(confirm('清空已完成的历史记录？')) { tasks.value.filter(t => t.status === 'completed').forEach(t => deleteTask(t.id)) } }
 
-async function retryFailed(taskId) {
-  try {
-    const res = await axios.post(`/api/export/${taskId}/retry`, {}, { headers: getAuthHeader() })
-    alert(res.data.message)
-  } catch (err) {
-    alert('重试失败: ' + (err.response?.data?.detail || err.message))
-  }
-}
+function formatSize(b) { if(!b) return '0 B'; const u=['B','KB','MB','GB','TB']; let i=0; while(b>=1024 && i<u.length-1){b/=1024;i++} return b.toFixed(1)+' '+u[i] }
+function formatDate(s) { return s ? new Date(s).toLocaleString('zh-CN') : '' }
 
-async function deleteTask(taskId) {
-  if (!confirm('确定要删除此任务吗？')) return
-  try {
-    await axios.delete(`/api/export/${taskId}`, { headers: getAuthHeader() })
-    tasks.value = tasks.value.filter(t => t.id !== taskId)
-  } catch (err) {
-    alert('删除失败: ' + (err.response?.data?.detail || err.message))
-  }
-}
-
-async function pauseAll() {
-  for (const task of tasks.value.filter(t => ['extracting', 'running'].includes(t.status))) {
-    await pauseTask(task.id)
-  }
-}
-
-async function resumeAll() {
-  for (const task of tasks.value.filter(t => t.status === 'paused')) {
-    await resumeTask(task.id)
-  }
-}
-
-async function removeCompleted() {
-  if (!confirm('确定要移除所有已完成的任务吗？')) return
-  for (const task of tasks.value.filter(t => t.status === 'completed')) {
-    await deleteTask(task.id)
-  }
-}
-
-function toggleDetailed(taskId) {
-  expandedDetailed.value[taskId] = !expandedDetailed.value[taskId]
-}
-
-function formatDate(dateStr) {
-  if (!dateStr) return ''
-  return new Date(dateStr).toLocaleString('zh-CN')
-}
-
-function formatSize(bytes) {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let i = 0
-  while (bytes >= 1024 && i < units.length - 1) {
-    bytes /= 1024
-    i++
-  }
-  return bytes.toFixed(1) + ' ' + units[i]
-}
-
-onMounted(() => {
-  fetchTasks()
-  // 每 3 秒刷新一次运行中的任务
-  intervalId = setInterval(() => {
-    if (tasks.value.some(t => ['extracting', 'running', 'paused'].includes(t.status))) {
-      fetchTasks()
-    }
-  }, refreshInterval.value)
-})
-
-onUnmounted(() => {
-  if (intervalId) {
-    clearInterval(intervalId)
-  }
-})
+let intervalId = null
+onMounted(() => { fetchTasks(); intervalId = setInterval(fetchTasks, 3000) })
+onUnmounted(() => clearInterval(intervalId))
 </script>
 
 <style scoped>
-.download-item-row {
-  display: flex;
-  align-items: center;
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(0,0,0,0.05);
-}
-.download-item-row:last-child {
-  border-bottom: none;
-}
-.item-status {
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  text-transform: uppercase;
-  font-weight: 600;
-}
-.item-status.waiting { background: #eee; color: #666; }
-.item-status.downloading { background: #e3f2fd; color: #1976d2; }
-.item-status.completed { background: #e8f5e9; color: #2e7d32; }
-.item-status.failed { background: #ffebee; color: #c62828; }
-.item-status.paused { background: #fff3e0; color: #ef6c00; }
-.item-status.skipped { background: #f5f5f5; color: #9e9e9e; }
+.page-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 30px; }
+.header-text h1 { font-size: 2.2rem; font-weight: 800; margin-bottom: 4px; }
+.subtitle { color: #71717a; font-size: 1rem; }
+.header-actions { display: flex; gap: 10px; }
 
-.status-badge.status-extracting {
-  background: #f3e5f5;
-  color: #7b1fa2;
-}
+.stats-ribbon { display: flex; gap: 15px; margin-bottom: 25px; }
+.stat-pill { background: white; padding: 8px 16px; border-radius: 50px; border: 1px solid #f4f4f5; display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 0.85rem; color: #3f3f46; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
+.stat-pill.success { color: #166534; background: #f0fdf4; border-color: #dcfce7; }
+.stat-pill.info { color: #1e40af; background: #eff6ff; border-color: #dbeafe; }
 
-.completed-info-box {
-  margin-top: 12px;
-  padding: 10px 15px;
-  background: #fafffb;
-  border: 1px solid #e7f5ed;
-  border-left: 4px solid #27ae60;
-  border-radius: 4px;
-}
+@keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
+.pulse { animation: pulse 2s infinite; }
+
+.tasks-grid { display: flex; flex-direction: column; gap: 20px; }
+.task-premium-card { background: white; border-radius: 20px; border: 1px solid #f4f4f5; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.03); overflow: hidden; transition: transform 0.2s, box-shadow 0.2s; }
+.task-premium-card:hover { transform: translateY(-2px); box-shadow: 0 12px 20px -8px rgba(0,0,0,0.08); }
+
+.task-inner { display: flex; padding: 24px; gap: 24px; }
+.task-main-info { flex: 1; min-width: 0; }
+
+.t-head { margin-bottom: 20px; }
+.t-title-row { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.t-name { font-size: 1.25rem; font-weight: 800; color: #18181b; }
+.t-date { font-size: 0.8rem; color: #a1a1aa; font-weight: 500; }
+
+.t-status-pill { padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: 800; text-transform: uppercase; }
+.t-status-pill.running { background: #eff6ff; color: #2563eb; }
+.t-status-pill.completed { background: #f0fdf4; color: #16a34a; }
+.t-status-pill.paused { background: #fffbeb; color: #d97706; }
+.t-status-pill.failed { background: #fef2f2; color: #dc2626; }
+
+.t-progress-section { margin-bottom: 20px; }
+.t-progress-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px; }
+.t-percent { font-size: 1.5rem; font-weight: 900; color: #18181b; }
+.t-eta, .t-speed { font-size: 0.8rem; font-weight: 600; color: #71717a; }
+.t-speed { color: var(--primary); }
+
+.t-progress-track { height: 10px; background: #f4f4f5; border-radius: 5px; overflow: hidden; }
+.t-progress-fill { height: 100%; border-radius: 5px; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1); background: #3b82f6; }
+.t-progress-fill.completed { background: #22c55e; }
+.t-progress-fill.failed { background: #ef4444; }
+.t-progress-fill.paused { background: #f59e0b; }
+
+.t-metrics { display: flex; gap: 20px; }
+.m-item { display: flex; align-items: center; gap: 6px; color: #52525b; font-size: 0.85rem; }
+.m-data b { color: #18181b; }
+
+.task-side-actions { display: flex; flex-direction: column; gap: 8px; }
+.a-btn { width: 42px; height: 42px; border-radius: 12px; border: none; font-size: 1.1rem; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; background: #f4f4f5; color: #71717a; }
+.a-btn:hover { transform: scale(1.05); }
+.a-btn.v-success:hover { background: #dcfce7; color: #166534; }
+.a-btn.v-warn:hover { background: #fef3c7; color: #92400e; }
+.a-btn.v-danger:hover { background: #fecaca; color: #991b1b; }
+.a-btn.v-primary { background: #eff6ff; color: #1e40af; }
+.a-btn.v-info { background: #f0fdf4; color: #166534; text-decoration: none; }
+
+.task-details { border-top: 1px solid #f4f4f5; background: #fafafa; }
+.details-toggle { width: 100%; padding: 12px; border: none; background: none; font-size: 0.8rem; font-weight: 700; color: #71717a; cursor: pointer; text-align: left; transition: background 0.2s; }
+.details-toggle:hover { background: #f4f4f5; }
+
+.details-list-wrap { padding: 0 16px 16px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.queue-item { padding: 10px; background: white; border-radius: 12px; border: 1px solid #f1f1f1; }
+.q-info { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 0.75rem; font-weight: 600; }
+.q-name { font-family: monospace; color: #52525b; }
+.q-bar-wrap { display: flex; align-items: center; gap: 10px; }
+.q-bar { flex: 1; height: 4px; background: #f4f4f5; border-radius: 2px; position: relative; overflow: hidden; }
+.q-bar::after { content: ''; position: absolute; left: 0; top: 0; height: 100%; width: var(--w); background: var(--primary); transition: width 0.3s; } /* Dynamic width handled by inline style */
+/* Actually using direct style on q-bar child: */
+.q-bar { position: relative; }
+.q-bar::after { display: none; }
+.q-bar .q-fill { height: 100%; background: #3b82f6; } /* Reference */
+
+/* Using a real child for q-bar fill */
+.q-bar { height: 4px; background: #f4f4f5; }
+.q-bar div { height: 100%; transition: width 0.3s; background: #3b82f6; }
+.q-bar div.completed { background: #22c55e; }
+.q-bar div.failed { background: #ef4444; }
+
+.q-status-text { font-size: 0.65rem; color: #a1a1aa; text-transform: uppercase; font-weight: 800; min-width: 60px; }
+.q-retry-btn { padding: 2px 8px; font-size: 0.65rem; font-weight: 700; border-radius: 4px; border: 1px solid #e4e4e7; background: white; cursor: pointer; white-space: nowrap; }
+.q-retry-btn:hover { background: #f4f4f5; }
+
+.empty-state { padding: 60px; text-align: center; color: #71717a; }
+.empty-icon { font-size: 4rem; margin-bottom: 20px; opacity: 0.5; }
+
+.animate-fade { animation: fadeIn 0.4s ease-out; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+
+.text-truncate { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 </style>

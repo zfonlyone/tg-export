@@ -1,116 +1,141 @@
 <template>
   <div class="fade-in">
-    <h1 style="margin-bottom: 20px;">📊 仪表盘</h1>
-    
-    <!-- 统计卡片 -->
-    <div class="stats-grid">
-      <div class="stat-card">
-        <div class="icon">📋</div>
-        <div class="value">{{ stats.totalTasks }}</div>
-        <div class="label">任务总数</div>
+    <div class="page-header">
+      <div class="header-text">
+        <h1>📊 仪表盘</h1>
+        <p class="subtitle">Telegram 导出任务概览</p>
       </div>
-      <div class="stat-card">
-        <div class="icon">✅</div>
-        <div class="value">{{ stats.completedTasks }}</div>
-        <div class="label">已完成</div>
-      </div>
-      <div class="stat-card">
-        <div class="icon">🔄</div>
-        <div class="value">{{ stats.runningTasks }}</div>
-        <div class="label">进行中</div>
-      </div>
-      <div class="stat-card">
-        <div class="icon">💾</div>
-        <div class="value">{{ formatSize(stats.totalSize) }}</div>
-        <div class="label">下载大小</div>
+      <div class="connection-pill" :class="{ connected: telegramStatus.authorized }">
+        <span class="indicator"></span>
+        {{ telegramStatus.authorized ? 'Telegram 已连接' : '未连接' }}
       </div>
     </div>
     
-    <!-- Telegram 状态 -->
-    <div class="card">
-      <div class="card-header">
-        <h2>🔗 Telegram 连接状态</h2>
-        <button @click="refreshStatus" class="btn btn-outline">刷新</button>
-      </div>
-      
-      <div v-if="loading" class="loading">
-        <div class="spinner"></div>
-      </div>
-      
-      <div v-else-if="telegramStatus.authorized">
-        <div style="display: flex; align-items: center; gap: 15px;">
-          <div style="width: 50px; height: 50px; background: var(--primary); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 24px;">
-            {{ telegramStatus.user?.first_name?.[0] || '?' }}
-          </div>
-          <div>
-            <div style="font-weight: 600;">{{ telegramStatus.user?.first_name }} {{ telegramStatus.user?.last_name }}</div>
-            <div style="color: #666;">@{{ telegramStatus.user?.username || 'N/A' }}</div>
-            <div style="color: #999; font-size: 12px;">ID: {{ telegramStatus.user?.id }}</div>
-          </div>
-          <span class="status-badge status-completed" style="margin-left: auto;">已连接</span>
+    <!-- 核心统计部分 -->
+    <div class="stats-container">
+      <div class="stat-glass-card primary">
+        <div class="s-icon">📦</div>
+        <div class="s-data">
+          <div class="s-value">{{ stats.totalTasks }}</div>
+          <div class="s-label">任务总数</div>
         </div>
       </div>
-      
-      <div v-else>
-        <p style="color: #666; margin-bottom: 15px;">请先登录 Telegram 以使用导出功能</p>
-        <router-link to="/settings" class="btn btn-primary">前往设置</router-link>
+      <div class="stat-glass-card success">
+        <div class="s-icon">✅</div>
+        <div class="s-data">
+          <div class="s-value">{{ stats.completedTasks }}</div>
+          <div class="s-label">已完成</div>
+        </div>
+      </div>
+      <div class="stat-glass-card info">
+        <div class="s-icon">⚡</div>
+        <div class="s-data">
+          <div class="s-value">{{ stats.runningTasks }}</div>
+          <div class="s-label">进行中</div>
+        </div>
+      </div>
+      <div class="stat-glass-card warning">
+        <div class="s-icon">💾</div>
+        <div class="s-data">
+          <div class="s-value">{{ formatSize(stats.totalSize) }}</div>
+          <div class="s-label">已保存数据</div>
+        </div>
       </div>
     </div>
     
-    <!-- 最近任务 -->
-    <div class="card">
-      <div class="card-header">
-        <h2>📋 最近任务</h2>
-        <router-link to="/tasks" class="btn btn-outline">查看全部</router-link>
+    <div class="dashboard-grid">
+      <!-- 会话卡片 -->
+      <div class="premium-card session-card">
+        <div class="p-card-head">
+          <h3>👤 会话详情</h3>
+          <button @click="refreshStatus" class="btn-icon-only">🔄</button>
+        </div>
+        
+        <div v-if="loading" class="card-loading">
+          <div class="skeleton-avatar"></div>
+          <div class="skeleton-text"></div>
+        </div>
+        
+        <div v-else-if="telegramStatus.authorized" class="user-profile animate-slide">
+          <div class="user-avatar">
+            {{ telegramStatus.user?.first_name?.[0] || '?' }}
+          </div>
+          <div class="user-info">
+            <div class="u-name">{{ telegramStatus.user?.first_name }} {{ telegramStatus.user?.last_name }}</div>
+            <div class="u-handle">@{{ telegramStatus.user?.username || '无用户名' }}</div>
+            <div class="u-id">UID: {{ telegramStatus.user?.id }}</div>
+          </div>
+          <div class="u-verified-badge">✓ 已验证会话</div>
+        </div>
+        
+        <div v-else class="auth-required">
+          <div class="empty-mini-icon">🚫</div>
+          <p>请先登录您的 Telegram 账号以开始导出任务。</p>
+          <router-link to="/settings" class="btn-premium sm">前往设置</router-link>
+        </div>
       </div>
-      
-      <div v-if="recentTasks.length === 0" style="text-align: center; padding: 30px; color: #666;">
-        暂无任务历史
+
+      <!-- 快速操作 -->
+      <div class="premium-card actions-card">
+        <div class="p-card-head"><h3>⚡ 快速操作</h3></div>
+        <div class="action-tiles">
+          <router-link to="/export" class="action-tile purple">
+            <span class="t-icon">📥</span>
+            <span class="t-label">新建导出</span>
+          </router-link>
+          <router-link to="/tasks" class="action-tile blue">
+            <span class="t-icon">📋</span>
+            <span class="t-label">下载管理</span>
+          </router-link>
+          <a href="/exports" target="_blank" class="action-tile green">
+            <span class="t-icon">📂</span>
+            <span class="t-label">浏览文件</span>
+          </a>
+        </div>
       </div>
-      
-      <table v-else class="table">
-        <thead>
-          <tr>
-            <th>任务名称</th>
-            <th>状态</th>
-            <th>进度</th>
-            <th>创建时间</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="task in recentTasks" :key="task.id">
-            <td>{{ task.name }}</td>
-            <td>
-              <span :class="'status-badge status-' + (task.status === 'extracting' ? 'extracting' : task.status)">
-                {{ statusText[task.status] }}
-              </span>
-            </td>
-            <td>
-              <div class="progress" style="width: 100px;">
-                <div class="progress-bar" :style="{ width: task.progress + '%' }"></div>
-              </div>
-            </td>
-            <td>{{ formatDate(task.created_at) }}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    
-    <!-- 快速操作 -->
-    <div class="card">
-      <div class="card-header">
-        <h2>⚡ 快速操作</h2>
-      </div>
-      <div style="display: flex; gap: 15px; flex-wrap: wrap;">
-        <router-link to="/export" class="btn btn-primary">
-          📥 新建导出
-        </router-link>
-        <router-link to="/tasks" class="btn btn-outline">
-          📋 任务管理
-        </router-link>
-        <a href="/exports" target="_blank" class="btn btn-outline">
-          📁 浏览文件
-        </a>
+
+      <!-- 最近活动 -->
+      <div class="premium-card table-card full-width">
+        <div class="p-card-head">
+          <h3>🕒 最近活动</h3>
+          <router-link to="/tasks" class="text-link">查看全部任务 →</router-link>
+        </div>
+        
+        <div v-if="recentTasks.length === 0" class="empty-table">
+          <p>暂无任务历史</p>
+        </div>
+        
+        <div v-else class="table-wrapper">
+          <table class="modern-table">
+            <thead>
+              <tr>
+                <th>任务名称</th>
+                <th>状态</th>
+                <th>进度</th>
+                <th>创建时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="task in recentTasks" :key="task.id" class="table-row">
+                <td class="td-name">{{ task.name }}</td>
+                <td>
+                  <span :class="['status-pill', task.status]">
+                    {{ statusText[task.status] || task.status }}
+                  </span>
+                </td>
+                <td>
+                  <div class="row-progress-container">
+                    <div class="row-progress-bar">
+                      <div class="row-fill" :style="{ width: task.progress + '%' }" :class="task.status"></div>
+                    </div>
+                    <span class="row-percent">{{ (task.progress || 0).toFixed(0) }}%</span>
+                  </div>
+                </td>
+                <td class="td-time">{{ formatDate(task.created_at) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -131,12 +156,12 @@ const stats = ref({
 })
 
 const statusText = {
-  extracting: '正在提取',
+  extracting: '正在扫描',
   pending: '等待中',
   running: '运行中',
   completed: '已完成',
   failed: '失败',
-  cancelled: '已取消'
+  cancelled: '已停止'
 }
 
 function getAuthHeader() {
@@ -154,16 +179,15 @@ async function refreshStatus() {
     telegramStatus.value = statusRes.data
     recentTasks.value = tasksRes.data.slice(-5).reverse()
     
-    // 计算统计
     const tasks = tasksRes.data
     stats.value = {
       totalTasks: tasks.length,
       completedTasks: tasks.filter(t => t.status === 'completed').length,
-      runningTasks: tasks.filter(t => t.status === 'running').length,
+      runningTasks: tasks.filter(t => ['running', 'extracting', 'pending'].includes(t.status)).length,
       totalSize: tasks.reduce((sum, t) => sum + (t.downloaded_size || 0), 0)
     }
   } catch (err) {
-    console.error('获取状态失败:', err)
+    console.error('Refresh failed:', err)
   } finally {
     loading.value = false
   }
@@ -173,10 +197,7 @@ function formatSize(bytes) {
   if (!bytes) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let i = 0
-  while (bytes >= 1024 && i < units.length - 1) {
-    bytes /= 1024
-    i++
-  }
+  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++ }
   return bytes.toFixed(1) + ' ' + units[i]
 }
 
@@ -187,3 +208,212 @@ function formatDate(dateStr) {
 
 onMounted(refreshStatus)
 </script>
+
+<style scoped>
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 40px;
+}
+
+.header-text h1 { font-size: 2.5rem; font-weight: 800; margin-bottom: 8px; }
+.subtitle { color: #71717a; font-size: 1.1rem; }
+
+.connection-pill {
+  padding: 8px 16px;
+  background: #f4f4f5;
+  border-radius: 50px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #71717a;
+}
+
+.connection-pill.connected { background: #dcfce7; color: #166534; }
+.connection-pill .indicator { width: 8px; height: 8px; border-radius: 50%; background: #a1a1aa; }
+.connection-pill.connected .indicator { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
+
+/* Stats Container */
+.stats-container {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  margin-bottom: 30px;
+}
+
+@media (max-width: 1000px) {
+  .stats-container { grid-template-columns: repeat(2, 1fr); }
+}
+
+.stat-glass-card {
+  padding: 24px;
+  border-radius: 24px;
+  background: white;
+  border: 1px solid #f4f4f5;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
+}
+
+.s-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  background: #f4f4f5;
+}
+
+.stat-glass-card.primary .s-icon { background: #eff6ff; }
+.stat-glass-card.success .s-icon { background: #f0fdf4; }
+.stat-glass-card.info .s-icon { background: #fdf4ff; }
+.stat-glass-card.warning .s-icon { background: #fffbeb; }
+
+.s-value { font-size: 1.75rem; font-weight: 800; color: #18181b; line-height: 1.2; }
+.s-label { font-size: 0.85rem; color: #71717a; font-weight: 600; }
+
+/* Dashboard Grid */
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+}
+
+.full-width { grid-column: span 2; }
+
+@media (max-width: 800px) {
+  .dashboard-grid { grid-template-columns: 1fr; }
+  .full-width { grid-column: span 1; }
+}
+
+.premium-card {
+  background: white;
+  border-radius: 24px;
+  padding: 30px;
+  border: 1px solid #f4f4f5;
+  box-shadow: 0 10px 15px -3px rgba(0,0,0,0.04);
+}
+
+.p-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.p-card-head h3 { font-size: 1.1rem; font-weight: 700; color: #18181b; }
+
+/* Session Profile */
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 16px;
+  background: #fafafa;
+  border-radius: 20px;
+  position: relative;
+}
+
+.user-avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary), #a855f7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 1.5rem;
+  font-weight: 800;
+  box-shadow: 0 8px 16px -4px rgba(168, 85, 247, 0.4);
+}
+
+.user-info { flex: 1; }
+.u-name { font-weight: 700; font-size: 1.1rem; }
+.u-handle { color: var(--primary); font-weight: 600; font-size: 0.9rem; }
+.u-id { color: #a1a1aa; font-size: 0.75rem; margin-top: 4px; }
+
+.u-verified-badge {
+  position: absolute;
+  top: -10px;
+  right: 16px;
+  background: #22c55e;
+  color: white;
+  padding: 4px 10px;
+  border-radius: 50px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  box-shadow: 0 4px 10px rgba(34, 197, 94, 0.3);
+}
+
+/* Action Tiles */
+.action-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.action-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px;
+  border-radius: 20px;
+  text-decoration: none;
+  transition: all 0.2s;
+}
+
+.action-tile:hover { transform: translateY(-4px); }
+
+.action-tile.purple { background: #fdf4ff; color: #701a75; }
+.action-tile.blue { background: #eff6ff; color: #1e40af; }
+.action-tile.green { background: #f0fdf4; color: #166534; }
+
+.t-icon { font-size: 1.5rem; }
+.t-label { font-size: 0.85rem; font-weight: 700; }
+
+/* Minimal Table */
+.table-wrapper { overflow-x: auto; }
+.modern-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.modern-table th { text-align: left; padding: 12px 16px; color: #71717a; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.modern-table td { padding: 16px; border-top: 1px solid #f4f4f5; font-size: 0.9rem; }
+
+.td-name { font-weight: 700; color: #18181b; }
+.td-time { color: #a1a1aa; font-size: 0.8rem; }
+
+.status-pill {
+  padding: 4px 10px;
+  border-radius: 50px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-pill.completed { background: #e8f5e9; color: #2e7d32; }
+.status-pill.running, .status-pill.extracting { background: #e3f2fd; color: #1976d2; }
+.status-pill.failed { background: #ffebee; color: #c62828; }
+
+.row-progress-container { display: flex; align-items: center; gap: 10px; width: 140px; }
+.row-progress-bar { flex: 1; height: 6px; background: #f4f4f5; border-radius: 3px; overflow: hidden; }
+.row-fill { height: 100%; transition: width 0.3s; background: #3b82f6; }
+.row-fill.completed { background: #22c55e; }
+.row-percent { font-size: 0.75rem; font-weight: 700; color: #71717a; width: 35px; }
+
+.text-link { color: var(--primary); font-weight: 600; text-decoration: none; font-size: 0.85rem; }
+
+.btn-icon-only {
+  background: none; border: none; cursor: pointer; font-size: 1.2rem;
+  transition: transform 0.3s;
+}
+.btn-icon-only:hover { transform: rotate(180deg); }
+
+.animate-slide { animation: slideUp 0.4s ease-out; }
+@keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+</style>
