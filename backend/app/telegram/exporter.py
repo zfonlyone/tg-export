@@ -359,6 +359,11 @@ class ExportManager:
                     return
 
 
+                # 智能延迟方案：减少 FloodWait
+                # 大文件(>10MB)延迟1秒，小文件延迟0.3秒
+                delay = 1.0 if item.file_size > 10 * 1024 * 1024 else 0.3
+                await asyncio.sleep(delay)
+
                 item.status = DownloadStatus.DOWNLOADING
                 full_path = export_path / item.file_path
                 
