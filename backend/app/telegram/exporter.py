@@ -35,6 +35,7 @@ class ExportManager:
         self._task_semaphores: Dict[str, asyncio.Semaphore] = {} # 任务ID -> 信号量
         self._progress_callbacks: Dict[str, List[Callable]] = {}
         self._paused_tasks: set = set()  # 暂停的任务ID
+        self._resuming_tasks: set = set() # 正在恢复的任务ID (用于防止取消时重置状态)
         self._tasks_file = settings.DATA_DIR / self.TASKS_FILE
         # 确保数据目录存在
         settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -199,17 +200,30 @@ class ExportManager:
                 item.status = DownloadStatus.WAITING
         
         if paused_count > 0:
-            logger.info(f"  - 恢复了 {paused_count} 个暂停的下载项")
-        
+            logger.info(f"同时恢复了 {paused_count} 个已暂停的下载项")
+            
         await self._notify_progress(task_id, task)
         
-        # 如果任务有下载队列但没有活动的运行任务，重新启动
-        # 这种情况发生在容器重启后恢复暂停的任务时
-        if task_id not in self._running_tasks and len(task.download_queue) > 0:
-            waiting_count = sum(1 for i in task.download_queue if i.status == DownloadStatus.WAITING)
-            logger.info(f"  - 重新启动下载队列 ({waiting_count} 个待下载文件)")
-            async_task = asyncio.create_task(self._restart_download_queue(task))
-            self._running_tasks[task_id] = async_task
+        # 标记为正在恢复，防止旧任务取消时将状态误设为 PAUSED
+        self._resuming_tasks.add(task_id)
+        
+        # 安全地取消可能的旧任务
+        if task_id in self._running_tasks:
+            try:
+                old_task = self._running_tasks[task_id]
+                if not old_task.done():
+                    logger.info(f"取消旧的运行任务: {task.name}")
+                    old_task.cancel()
+                    # 给一点时间让 cancelled handler 执行
+                    await asyncio.sleep(0.1)
+            except Exception as e:
+                logger.error(f"取消旧任务出错: {e}")
+                
+        # 移除恢复标记
+        self._resuming_tasks.discard(task_id)
+        
+        # 启动新的下载队列处理任务
+        self._running_tasks[task_id] = asyncio.create_task(self._restart_download_queue(task))
         
         return True
     
@@ -349,6 +363,11 @@ class ExportManager:
                     task.completed_at = datetime.now()
             
         except asyncio.CancelledError:
+            # 如果正在恢复中（被新任务取代），则忽略取消事件，不修改状态
+            if task.id in self._resuming_tasks:
+                logger.info(f"任务 {task.name} 正在恢复中，忽略旧任务取消事件")
+                return
+
             # 如果状态已经是 CANCELLED，说明是用户手动取消
             # 否则是系统关闭导致的取消，应该设为 PAUSED
             if task.status != TaskStatus.CANCELLED:
@@ -380,6 +399,10 @@ class ExportManager:
                 task.status = TaskStatus.COMPLETED
                 task.completed_at = datetime.now()
         except asyncio.CancelledError:
+            if task.id in self._resuming_tasks:
+                logger.info(f"任务 {task.name} 正在恢复中，忽略旧队列取消事件")
+                return
+
             if task.status != TaskStatus.CANCELLED:
                 logger.info(f"下载队列被系统中断，状态设为暂停")
                 task.status = TaskStatus.PAUSED
@@ -531,7 +554,8 @@ class ExportManager:
         task.download_queue.sort(key=lambda x: x.message_id)
         
         # 限制并发下载数
-        self._task_semaphores[task.id] = asyncio.Semaphore(options.max_concurrent_downloads)
+        semaphore = asyncio.Semaphore(options.max_concurrent_downloads)
+        self._task_semaphores[task.id] = semaphore
         
         # 初始化任务追踪集合
         if task.id not in self._active_download_tasks:
@@ -564,6 +588,9 @@ class ExportManager:
         speed_task = asyncio.create_task(speed_updater())
         
         try:
+            # 给予一点时间让 worker 启动并注册到 active_tasks
+            await asyncio.sleep(1.0)
+            
             # 等待所有下载任务完成
             # 使用循环检查而不是 gather，因为我们可能在运行时动态添加重试任务
             while True:
@@ -571,19 +598,26 @@ class ExportManager:
                 active_tasks = self._active_download_tasks.get(task.id, set())
                 active_count = len(active_tasks)
                 
-                # 如果没有任何活跃任务，检查是否真的完成了
-                if active_count == 0:
-                    # 再次确认所有非跳过/完成的任务是否都已结束
-                    # 注意：如果有任务处于 WAITING 状态但没有 worker，说明出问题了
-                    # 但在这里我们假设所有 WAITING 任务都已启动了 worker
+                # 检查是否还有处于"进行中"状态的任务 (WAITING, DOWNLOADING, PAUSED)
+                pending_count = sum(1 for i in task.download_queue 
+                                  if i.status in [DownloadStatus.WAITING, DownloadStatus.DOWNLOADING, DownloadStatus.PAUSED])
+                
+                # 只有当活跃协程数为0 且 没有待处理的任务时，才算真正结束
+                if active_count == 0 and pending_count == 0:
                     break
+                
+                # 如果有 pending 任务但没有 active 协程，这可能是异常状态（僵尸任务）
+                # 但也许是 worker 正在启动中（比如重试操作刚触发）
+                # 我们允许短暂的这种状态，但如果持续太久可能需要处理（目前暂不处理，依赖用户再次点击重试）
                 
                 await asyncio.sleep(1)
                 
         finally:
             # 清理
             speed_task.cancel()
-            if task.id in self._task_semaphores:
+            # 只有当当前的 semaphore 是我们创建的这个对象时才删除
+            # 防止删除了重启后新任务创建的 semaphore
+            if task.id in self._task_semaphores and self._task_semaphores[task.id] is semaphore:
                 del self._task_semaphores[task.id]
     
     async def _get_chats_to_export(self, options: ExportOptions) -> List[ChatInfo]:
