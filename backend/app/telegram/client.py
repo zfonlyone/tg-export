@@ -72,7 +72,7 @@ class TelegramClient:
                 workdir=str(settings.SESSIONS_DIR),
                 device_model="TG Export Web",
                 system_version="Linux",
-                sleep_threshold=60,
+                sleep_threshold=0, # [Fast Response] 禁用内置自动等待，让异常立即抛出
                 workers=20, # [FIX] 提升内部线程数，处理更高并发
                 max_concurrent_transmissions=10  # [FIX v1.3.9] 关键参数：允许最多 10 个并发传输
             )
@@ -452,13 +452,8 @@ class TelegramClient:
                 progress=progress_callback
             )
             return result
-        except FloodWait as e:
-            print(f"[TG] 下载媒体遇到限制，需等待 {e.value} 秒")
-            await asyncio.sleep(e.value)
-            # 重试一次
-            return await self.download_media(message, file_path, progress_callback)
         except Exception as e:
-            # 抛出异常让上层处理重试
+            # [Fast Response] 不在这里捕获 FloodWait，直接抛出，让 exporter 层的自适应逻辑第一时间响应
             raise
 
 

@@ -693,31 +693,31 @@ class ExportManager:
             # [Adaptive Concurrency] 限速触发时的回调
             async def on_flood_wait_cb(delay_secs):
                 task.last_flood_wait_time = datetime.now()
-                old_val = task.current_max_concurrent_downloads
+                old_val = task.current_max_concurrent_downloads or options.max_concurrent_downloads
                 
-                # 触发限速墙后，调低并发上限
-                new_val = max(1, (task.current_max_concurrent_downloads or 1) - 1)
+                # [Fast Response] 触发限速墙后，更果断地调低并发上限 (减 2 或降至 1)
+                new_val = max(1, old_val - 2)
                 task.current_max_concurrent_downloads = new_val
                 task.consecutive_success_count = 0 
                 
                 # 同步更新底层 Pyrogram 限额
                 telegram_client.set_max_concurrent_transmissions(new_val)
                 
-                # [Optimization] 从队列最后一个正在下载的文件开始自动暂停，直到只剩一个或符合并发数逻辑
+                # [Optimization] 激进压制：暂停所有超出新并发限制的正在下载项
                 downloading_items = [i for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING]
                 if len(downloading_items) > new_val:
-                    # 寻找下载队列映射中最靠后的一个并暂停
-                    tail_item = None
+                    excess_count = len(downloading_items) - new_val
+                    paused_count = 0
+                    # 从后往前暂停
                     for i in reversed(task.download_queue):
                         if i.status == DownloadStatus.DOWNLOADING:
-                            tail_item = i
-                            break
-                    if tail_item:
-                        logger.warning(f"触碰限速墙，系统自动暂停队尾下载: {tail_item.file_name}")
-                        tail_item.status = DownloadStatus.PAUSED
-                        # item.is_manually_paused 默认 False，会被 5 分钟循环扫描并自动恢复
+                            logger.warning(f"触碰限速墙，系统紧急暂停并发项: {i.file_name}")
+                            i.status = DownloadStatus.PAUSED
+                            paused_count += 1
+                            if paused_count >= excess_count:
+                                break
                 
-                logger.warning(f"任务 {task.id[:8]}: 检测到限速屏障，动态压制并发: {old_val} -> {new_val}")
+                logger.warning(f"任务 {task.id[:8]}: 检测到限速屏障，激进压制并发: {old_val} -> {new_val}")
                 await self._notify_progress(task.id, task)
 
             try:
