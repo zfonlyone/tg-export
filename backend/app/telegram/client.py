@@ -32,6 +32,8 @@ class TelegramClient:
         self._phone: Optional[str] = None
         self._phone_code_hash: Optional[str] = None
         self._lock = asyncio.Lock() # 用于保护连接和初始化过程
+        self._message_cache = {} # { (chat_id, msg_id): (message_obj, timestamp) }
+        self._cache_lock = asyncio.Lock()
     
     @property
     def is_authorized(self) -> bool:
@@ -70,7 +72,8 @@ class TelegramClient:
                 workdir=str(settings.SESSIONS_DIR),
                 device_model="TG Export Web",
                 system_version="Linux",
-                sleep_threshold=60
+                sleep_threshold=60,
+                workers=20 # [FIX] 提升内部线程数，处理更高并发
             )
             print(f"[TG] 客户端已初始化: api_id={api_id}")
     
@@ -363,14 +366,34 @@ class TelegramClient:
             print(f"[TG] 获取聊天历史出错: {e}")
     
     async def get_message_by_id(self, chat_id: int, message_id: int) -> Optional[Message]:
-        """获取单条消息（用于刷新 file_reference）"""
+        """获取单条消息（用于刷新 file_reference，增加缓存避免 API 损耗）"""
         await self._ensure_connected()
         if not self._is_authorized:
             return None
+            
+        cache_key = (chat_id, message_id)
+        import time
+        
+        # 1. 检查缓存 (1小时内有效，因为 file_reference 至少维持一段时间)
+        async with self._cache_lock:
+            if cache_key in self._message_cache:
+                msg, ts = self._message_cache[cache_key]
+                if time.time() - ts < 3600:
+                    return msg
+        
         try:
+            # 2. 尝试解析 Peer 问题 (Peer id invalid 等)
             # 尝试直接获取
             messages = await self._client.get_messages(chat_id, message_id)
-            return messages if isinstance(messages, Message) else None
+            msg = messages if isinstance(messages, Message) else None
+            
+            # 3. 写入缓存
+            if msg:
+                async with self._cache_lock:
+                    self._message_cache[cache_key] = (msg, time.time())
+                return msg
+            
+            return None
         except Exception as e:
             error_str = str(e)
             # 如果遇到 Peer id invalid，尝试先获取一次 Chat 以强制解析并缓存 Peer

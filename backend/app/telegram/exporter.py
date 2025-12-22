@@ -548,6 +548,7 @@ class ExportManager:
                 return
 
             # 获取原始消息对象用于下载
+            logger.info(f"任务 {task.id[:8]}: Worker 正在获取消息对象 (ID: {item.message_id})...")
             msg = await telegram_client.get_message_by_id(item.chat_id, item.message_id)
             if not msg:
                 item.status = DownloadStatus.FAILED
@@ -559,15 +560,10 @@ class ExportManager:
             item.status = DownloadStatus.DOWNLOADING
             await self._notify_progress(task.id, task)
 
-            # 智能延迟方案：减少 FloodWait
-            # 大文件(>10MB)延迟1秒，小文件延迟0.3秒
-            delay = 1.0 if item.file_size > 10 * 1024 * 1024 else 0.3
-            await asyncio.sleep(delay)
+            # [FIX] 简化延迟方案：移除过长的 1s/0.3s 等待，改为极小的 0.1s 以维持异步切换
+            await asyncio.sleep(0.1)
 
             full_path = export_path / item.file_path
-            
-            # 日志：记录下载路径
-            logger.info(f"开始下载文件: {item.file_name}")
             
             # 使用 temp 目录存放下载中的文件
             temp_dir = Path("/tmp/tg-export-downloads")
@@ -618,7 +614,7 @@ class ExportManager:
                             # 即使通知失败也不要中断任务
                             pass
             # 日志：记录下载路径
-            logger.info(f"任务 {task.id[:8]}: 开始下载文件 '{item.file_name}' -> {item.file_path}")
+            logger.info(f"任务 {task.id[:8]}: 开始执行 download_media -> '{item.file_name}' (Size: {item.file_size})")
             
             try:
                 success, downloaded_path, failure_info = await retry_manager.download_with_retry(
