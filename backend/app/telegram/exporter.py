@@ -387,7 +387,7 @@ class ExportManager:
         return True
 
     def get_download_queue(self, task_id: str, limit: int = 20, reversed_order: bool = False) -> Dict[str, Any]:
-        """获取任务的分段下载队列 (支持倒序切换)"""
+        """获取任务的分段下载队列 (优化：有进度的 WAITING 归入 Active)"""
         task = self.tasks.get(task_id)
         if not task:
             return {
@@ -395,21 +395,26 @@ class ExportManager:
                 "counts": {"active": 0, "waiting": 0, "failed": 0, "completed": 0}
             }
         
-        # 统一列表逻辑：正在下载中包含 DOWNLOADING 和 PAUSED
-        all_active = [i for i in task.download_queue if i.status in [DownloadStatus.DOWNLOADING, DownloadStatus.PAUSED]]
-        all_waiting = [i for i in task.download_queue if i.status in [DownloadStatus.WAITING]]
+        # 统一列表逻辑：
+        # 活动中 (Active)：正在下载、已暂停、以及[有进度的等待中项]
+        # 有进度的等待中项通常是刚点击“恢复”但还没轮到 worker 的文件，放在这里能防止 UI 跳转
+        all_active = [i for i in task.download_queue if i.status in [DownloadStatus.DOWNLOADING, DownloadStatus.PAUSED] or (i.status == DownloadStatus.WAITING and i.progress > 0)]
+        
+        # 等待中 (Waiting)：状态为等待且进度为 0 的项
+        all_waiting = [i for i in task.download_queue if i.status == DownloadStatus.WAITING and i.progress <= 0]
+        
         all_failed = [i for i in task.download_queue if i.status == DownloadStatus.FAILED]
         all_completed = [i for i in task.download_queue if i.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]]
         
         # 排序支持 (默认按 ID 升序)
         if reversed_order:
             all_active.sort(key=lambda x: x.message_id, reverse=True)
-            all_waiting.sort(key=lambda x: x.message_id, reverse=True)
+            all_waiting.sort(key=lambda x: (x.media_type, x.message_id), reverse=True) # 等待列表额外按类型权衡
             all_failed.sort(key=lambda x: x.message_id, reverse=True)
             all_completed.sort(key=lambda x: x.message_id, reverse=True)
         else:
             all_active.sort(key=lambda x: x.message_id)
-            all_waiting.sort(key=lambda x: x.message_id)
+            all_waiting.sort(key=lambda x: (x.media_type, x.message_id))
             all_failed.sort(key=lambda x: x.message_id)
             all_completed.sort(key=lambda x: x.message_id)
 
@@ -637,9 +642,14 @@ class ExportManager:
             async def on_flood_wait_cb(delay_secs):
                 old_val = task.current_max_concurrent_downloads
                 # 一旦触发限速，立即将并发减半，最低为 1
-                task.current_max_concurrent_downloads = max(1, (task.current_max_concurrent_downloads or 1) // 2)
-                task.consecutive_success_count = 0 # 重置成功计数，重新开始观察稳定性
-                logger.warning(f"任务 {task.id[:8]}: 检测到 {delay_secs}s 限速，动态降速: {old_val} -> {task.current_max_concurrent_downloads}")
+                new_val = max(1, (task.current_max_concurrent_downloads or 1) // 2)
+                task.current_max_concurrent_downloads = new_val
+                task.consecutive_success_count = 0 # 重置成功计数
+                
+                # [Adaptive] 同步更新底层 Pyrogram 限额
+                telegram_client.set_max_concurrent_transmissions(new_val)
+                
+                logger.warning(f"任务 {task.id[:8]}: 检测到 {delay_secs}s 限速，动态降速: {old_val} -> {new_val}")
                 await self._notify_progress(task.id, task)
 
             try:
@@ -822,6 +832,8 @@ class ExportManager:
                             if (task.current_max_concurrent_downloads or 1) < options.max_concurrent_downloads:
                                 old_val = task.current_max_concurrent_downloads
                                 task.current_max_concurrent_downloads += 1
+                                # [Adaptive] 同步恢复底层限额
+                                telegram_client.set_max_concurrent_transmissions(task.current_max_concurrent_downloads)
                                 logger.info(f"任务 {task.id[:8]}: 运行稳定，自动恢复并发: {old_val} -> {task.current_max_concurrent_downloads}")
                             task.consecutive_success_count = 0
                     

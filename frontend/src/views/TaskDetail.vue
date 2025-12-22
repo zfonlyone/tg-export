@@ -75,11 +75,11 @@
           <button class="tab-btn" :class="{ active: currentTab === 'completed' }" @click="currentTab = 'completed'">已完成</button>
         </div>
         <div class="header-right-tools">
-          <button @click="toggleSort" class="tab-btn sort-btn" :title="reversedOrder ? '当前为倒序' : '当前为正序'">
+          <button @click="toggleSort" class="btn-premium ghost sm sort-btn" :title="reversedOrder ? '当前为倒序' : '当前为正序'">
             {{ reversedOrder ? '🔃 倒序' : '🔃 正序' }}
           </button>
           <div class="v-divider"></div>
-          <button @click="toggleViewAll" class="toggle-all-btn">{{ viewAll ? '显示精简' : '查看全部' }}</button>
+          <button @click="toggleViewAll" class="btn-premium ghost sm">{{ viewAll ? '显示精简' : '查看全部' }}</button>
         </div>
       </div>
 
@@ -103,19 +103,19 @@
             </div>
           </div>
           <div class="item-actions">
-            <!-- 活动/暂停项目：新增重试按钮 -->
-            <button v-if="['downloading', 'paused', 'waiting'].includes(item.status)" @click="retryItem(item.id)" class="action-btn" title="重新下载此文件">🔄</button>
+            <!-- 活动/暂停项目：重试 -->
+            <button v-if="['downloading', 'paused', 'waiting'].includes(item.status)" @click="retryItem(item.id)" class="action-btn-circle" title="重新下载此文件">🔄</button>
             
             <!-- 正在下载或等待中：暂停 -->
-            <button v-if="['downloading', 'waiting'].includes(item.status)" @click="pauseItem(item.id)" class="action-btn" title="暂停">⏸</button>
+            <button v-if="['downloading', 'waiting'].includes(item.status)" @click="pauseItem(item.id)" class="action-btn-circle warning" title="暂停">⏸</button>
             <!-- 已暂停：恢复 -->
-            <button v-if="item.status === 'paused'" @click="resumeItem(item.id)" class="action-btn" title="恢复">▶</button>
+            <button v-if="item.status === 'paused'" @click="resumeItem(item.id)" class="action-btn-circle success" title="恢复">▶</button>
             
-            <!-- 失败或已完成：原有的重试按钮 -->
-            <button v-if="['failed', 'completed', 'skipped'].includes(item.status)" @click="retryItem(item.id)" class="action-btn" title="重试/重新下载">🔄</button>
+            <!-- 失败或已完成：重试 -->
+            <button v-if="['failed', 'completed', 'skipped'].includes(item.status)" @click="retryItem(item.id)" class="action-btn-circle" title="重试/重新下载">🔄</button>
             
             <!-- 通用：取消/跳过 -->
-            <button @click="cancelItem(item.id)" class="action-btn danger" title="取消/跳过">✖</button>
+            <button @click="cancelItem(item.id)" class="action-btn-circle danger" title="取消/跳过">✖</button>
           </div>
         </div>
         <div v-if="filteredList.length === 0" class="empty-mini">
@@ -408,7 +408,33 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .progress-tiny { height: 6px; background: #f4f4f5; border-radius: 3px; overflow: hidden; }
 .progress-tiny .fill { height: 100%; background: #3b82f6; transition: width 0.3s; }
 
-.item-actions { display: flex; align-items: center; gap: 6px; }
+.item-actions { display: flex; align-items: center; gap: 8px; }
+
+.action-btn-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid #e4e4e7;
+  background: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #71717a;
+}
+
+.action-btn-circle:hover {
+  background: #f4f4f5;
+  border-color: #3b82f6;
+  color: #3b82f6;
+  transform: scale(1.1);
+}
+
+.action-btn-circle.warning:hover { border-color: #f59e0b; color: #f59e0b; background: #fffbeb; }
+.action-btn-circle.success:hover { border-color: #22c55e; color: #22c55e; background: #f0fdf4; }
+.action-btn-circle.danger:hover { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
 
 @media (max-width: 640px) {
   .actions-panel { flex-direction: column; align-items: stretch; gap: 20px; }
