@@ -880,10 +880,12 @@ class ExportManager:
                 if task.status == TaskStatus.CANCELLED:
                     break
                 
-                # 4. 从队列取出一个待下载项
-                try:
-                    item = queue.get_nowait()
-                except asyncio.QueueEmpty:
+                # 4. 从队列取出一个待下载项 (阻塞式等待，直到有活干或收到退出信号)
+                item = await queue.get()
+                
+                # 如果收到 None 信号，说明队列已关闭，Worker 应该辞职了
+                if item is None:
+                    queue.task_done()
                     break
                 
                 # 5. 执行下载
@@ -911,6 +913,11 @@ class ExportManager:
                         jitter = random.uniform(3.0, 10.0)
                         logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 下载完成，进入 {jitter:.1f}s 随机冷却...")
                         await asyncio.sleep(jitter)
+                except asyncio.CancelledError:
+                    # [Persistence FIX] 如果任务被系统暂停或限速被迫中止，重回循环，不要退出
+                    if item and item.status == DownloadStatus.DOWNLOADING:
+                        item.status = DownloadStatus.PAUSED
+                    logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 的下载项被取消/暂停: {item.file_name if item else 'Unknown'}")
                 except Exception as e:
                     # 如果在这里捕获到直接异常，重置成功计数
                     task.consecutive_success_count = 0
@@ -960,10 +967,11 @@ class ExportManager:
                 pending_count = queue.qsize()
                 
                 if active_downloads == 0 and pending_count == 0:
-                    # 如果队列空了，且没有正在下载的，则检查 workers 是否都退出了
-                    all_done = all(t.done() for t in worker_tasks)
-                    if all_done:
-                        break
+                    # 队列空了，且没有正在下载的，说明这波活干完了
+                    # 发送 None 信号给所有 worker 让它们有序下班
+                    for _ in range(options.max_concurrent_downloads):
+                        queue.put_nowait(None)
+                    break
                 
                 # 如果任务取消，退出循环
                 if task.status == TaskStatus.CANCELLED:
