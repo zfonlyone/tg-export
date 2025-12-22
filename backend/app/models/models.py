@@ -70,6 +70,7 @@ class DownloadItem(BaseModel):
     file_path: Optional[str] = None
     progress: float = 0.0
     speed: float = 0.0                    # 下载速度 (字节/秒)
+    is_manually_paused: bool = False     # 是否由用户手动暂停 (如果是，自动恢复逻辑将跳过它)
 
 
 class ExportOptions(BaseModel):
@@ -201,6 +202,7 @@ class ExportTask(BaseModel):
     download_queue: List[DownloadItem] = Field(default_factory=list) # 下载队列
     current_max_concurrent_downloads: Optional[int] = None # 当前动态并发数 (用于自适应限速)
     consecutive_success_count: int = 0    # 连续成功下载数 (用于并发恢复)
+    last_flood_wait_time: Optional[datetime] = None # 最近一次触发限速墙的时间
     
     # 错误信息
     error: Optional[str] = None

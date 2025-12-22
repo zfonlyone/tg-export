@@ -68,15 +68,19 @@
     <!-- 统一任务列表 -->
     <div class="unified-task-list">
       <div class="list-toolbar">
-        <div class="filter-tabs">
-          <button class="tab-btn" :class="{ active: currentTab === 'active' }" @click="currentTab = 'active'">活动中</button>
-          <button class="tab-btn" :class="{ active: currentTab === 'waiting' }" @click="currentTab = 'waiting'">等待中</button>
-          <button class="tab-btn" :class="{ active: currentTab === 'failed' }" @click="currentTab = 'failed'">已失败</button>
-          <button class="tab-btn" :class="{ active: currentTab === 'completed' }" @click="currentTab = 'completed'">已完成</button>
+        <div class="filter-tabs-wrapper">
+          <div class="filter-tabs">
+            <button class="tab-btn" :class="{ active: currentTab === 'active' }" @click="currentTab = 'active'">
+              活动中 <span class="tab-sub" v-if="currentTab === 'active' && stats.current_concurrency">(并发: {{stats.current_concurrency}}, 线程: {{stats.active_threads}})</span>
+            </button>
+            <button class="tab-btn" :class="{ active: currentTab === 'waiting' }" @click="currentTab = 'waiting'">等待中</button>
+            <button class="tab-btn" :class="{ active: currentTab === 'failed' }" @click="currentTab = 'failed'">已失败</button>
+            <button class="tab-btn" :class="{ active: currentTab === 'completed' }" @click="currentTab = 'completed'">已完成</button>
+          </div>
         </div>
         <div class="header-right-tools">
           <button @click="toggleSort" class="btn-premium ghost sm sort-btn" :title="reversedOrder ? '当前为倒序' : '当前为正序'">
-            {{ reversedOrder ? '🔃 倒序' : '🔃 正序' }}
+            {{ reversedOrder ? '⇅ 倒序' : '⇅ 正序' }}
           </button>
           <div class="v-divider"></div>
           <button @click="toggleViewAll" class="btn-premium ghost sm">{{ viewAll ? '显示精简' : '查看全部' }}</button>
@@ -137,7 +141,14 @@ const taskId = route.params.id
 
 const task = ref({})
 const queue = ref({ downloading: [], waiting: [], failed: [], completed: [] })
-const queueCounts = ref({ active: 0, waiting: 0, failed: 0, completed: 0 })
+const stats = ref({
+  active: 0,
+  waiting: 0,
+  failed: 0,
+  completed: 0,
+  current_concurrency: 0,
+  active_threads: 0
+})
 const currentTab = ref('active')
 const viewAll = ref(false)
 const reversedOrder = ref(false)
@@ -177,7 +188,11 @@ async function fetchData() {
     queue.value.waiting = newData.waiting
     queue.value.failed = newData.failed || []
     queue.value.completed = newData.completed
-    queueCounts.value = newData.counts
+    stats.value = {
+      ...newData.counts,
+      current_concurrency: newData.current_concurrency,
+      active_threads: newData.active_threads
+    }
   } catch (err) {
     console.error('获取详情失败:', err)
     if (err.response?.status === 404) {
@@ -344,28 +359,46 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 
 .v-divider { width: 1px; height: 20px; background: #e4e4e7; margin: 0 12px; }
 
-.filter-tabs {
-  display: flex;
+.filter-tabs-wrapper {
   background: #f4f4f5;
   padding: 4px;
   border-radius: 12px;
+  display: inline-flex;
+}
+
+.filter-tabs {
+  display: flex;
+  gap: 2px;
 }
 
 .tab-btn {
   padding: 8px 16px;
-  border-radius: 8px;
+  border-radius: 9px;
   border: none;
-  background: none;
-  font-size: 0.85rem;
-  font-weight: 700;
+  background: transparent;
+  font-size: 0.9rem;
+  font-weight: 500;
   color: #71717a;
   cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
+
+.tab-btn:hover:not(.active) { color: #18181b; }
 
 .tab-btn.active {
   background: white;
   color: #18181b;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+}
+
+.tab-sub {
+  font-size: 0.7rem;
+  opacity: 0.6;
+  font-weight: 400;
+  margin-top: -2px;
 }
 
 .queue-list { padding: 10px; overflow-y: auto; }

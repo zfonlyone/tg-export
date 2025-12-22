@@ -47,6 +47,8 @@ class ExportManager:
         self._save_lock = asyncio.Lock()
         # 启动后台保存循环
         asyncio.create_task(self._auto_save_loop())
+        # [NEW] 每5分钟自动恢复机制
+        asyncio.create_task(self._auto_resume_loop())
     
     def _set_777_recursive(self, path: Path):
         """递归设置 777 权限"""
@@ -337,24 +339,32 @@ class ExportManager:
         return task_id in self._paused_tasks
     
     async def pause_download_item(self, task_id: str, item_id: str) -> bool:
-        """暂停单个下载项"""
+        """暂停单个下载项 (标记为手动)"""
         task = self.tasks.get(task_id)
         if not task: return False
         for item in task.download_queue:
             if item.id == item_id:
-                if item.status == DownloadStatus.DOWNLOADING or item.status == DownloadStatus.WAITING:
+                if item.status in [DownloadStatus.DOWNLOADING, DownloadStatus.WAITING]:
                     item.status = DownloadStatus.PAUSED
+                    item.is_manually_paused = True # 标记为手动暂停
+                    logger.info(f"手动暂停文件: {item.file_name}")
+                    await self._notify_progress(task_id, task)
                     return True
         return False
 
     async def resume_download_item(self, task_id: str, item_id: str) -> bool:
-        """恢复单个下载项"""
+        """恢复单个下载项 (清除手动标记)"""
         task = self.tasks.get(task_id)
         if not task: return False
         for item in task.download_queue:
             if item.id == item_id:
                 if item.status == DownloadStatus.PAUSED:
                     item.status = DownloadStatus.WAITING
+                    item.is_manually_paused = False # 清除手动暂停标记
+                    logger.info(f"手动恢复文件: {item.file_name}")
+                    if task.id in self._task_queues:
+                        self._task_queues[task.id].put_nowait(item)
+                    await self._notify_progress(task_id, task)
                     return True
         return False
     
@@ -431,7 +441,9 @@ class ExportManager:
                 "waiting": len(all_waiting),
                 "failed": len(all_failed),
                 "completed": len(all_completed)
-            }
+            },
+            "current_concurrency": task.current_max_concurrent_downloads or options.max_concurrent_downloads,
+            "active_threads": len([i for i in all_active if i.status == DownloadStatus.DOWNLOADING])
         }
     async def _run_export(self, task: ExportTask):
         """执行导出任务"""
@@ -640,16 +652,32 @@ class ExportManager:
             
             # [Adaptive Concurrency] 限速触发时的回调
             async def on_flood_wait_cb(delay_secs):
+                task.last_flood_wait_time = datetime.now()
                 old_val = task.current_max_concurrent_downloads
-                # 一旦触发限速，立即将并发减半，最低为 1
-                new_val = max(1, (task.current_max_concurrent_downloads or 1) // 2)
-                task.current_max_concurrent_downloads = new_val
-                task.consecutive_success_count = 0 # 重置成功计数
                 
-                # [Adaptive] 同步更新底层 Pyrogram 限额
+                # 触发限速墙后，调低并发上限
+                new_val = max(1, (task.current_max_concurrent_downloads or 1) - 1)
+                task.current_max_concurrent_downloads = new_val
+                task.consecutive_success_count = 0 
+                
+                # 同步更新底层 Pyrogram 限额
                 telegram_client.set_max_concurrent_transmissions(new_val)
                 
-                logger.warning(f"任务 {task.id[:8]}: 检测到 {delay_secs}s 限速，动态降速: {old_val} -> {new_val}")
+                # [Optimization] 从队列最后一个正在下载的文件开始自动暂停，直到只剩一个或符合并发数逻辑
+                downloading_items = [i for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING]
+                if len(downloading_items) > new_val:
+                    # 寻找下载队列映射中最靠后的一个并暂停
+                    tail_item = None
+                    for i in reversed(task.download_queue):
+                        if i.status == DownloadStatus.DOWNLOADING:
+                            tail_item = i
+                            break
+                    if tail_item:
+                        logger.warning(f"触碰限速墙，系统自动暂停队尾下载: {tail_item.file_name}")
+                        tail_item.status = DownloadStatus.PAUSED
+                        # item.is_manually_paused 默认 False，会被 5 分钟循环扫描并自动恢复
+                
+                logger.warning(f"任务 {task.id[:8]}: 检测到限速屏障，动态压制并发: {old_val} -> {new_val}")
                 await self._notify_progress(task.id, task)
 
             try:
