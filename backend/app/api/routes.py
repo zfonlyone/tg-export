@@ -202,6 +202,19 @@ async def resume_export(
     raise HTTPException(status_code=400, detail="恢复失败")
 
 
+@router.post("/export/{task_id}/file/{item_id}/retry")
+async def retry_file(
+    task_id: str,
+    item_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """重试单个文件 (重置状态并尝试重新下载)"""
+    success = await export_manager.retry_file(task_id, item_id)
+    if success:
+        return {"status": "ok", "message": "文件已重置，将尝试重新下载"}
+    raise HTTPException(status_code=400, detail="操作失败：文件不存在或无法重试")
+
+
 @router.get("/export/{task_id}/failed")
 async def get_failed_downloads(
     task_id: str,

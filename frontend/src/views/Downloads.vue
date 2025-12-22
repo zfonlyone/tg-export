@@ -77,7 +77,7 @@
                   {{ getFileStatusText(file.status) }}
                 </span>
                 <button 
-                  v-if="file.status === 'failed'" 
+                  v-if="['failed', 'cancelled', 'paused'].includes(file.status)" 
                   @click="retryFile(task.id, file.id)"
                   class="btn-retry"
                   title="重试"
@@ -96,7 +96,7 @@
           >⏸ 暂停</button>
           
           <button 
-            v-if="task.status === 'paused'" 
+            v-if="['paused', 'cancelled', 'failed'].includes(task.status)" 
             @click="resumeTask(task.id)" 
             class="btn-action btn-resume"
           >▶ 继续</button>
