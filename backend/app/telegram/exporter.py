@@ -109,6 +109,32 @@ class ExportManager:
             except Exception as e:
                 logger.error(f"后台保存出错: {e}")
 
+    async def _auto_resume_loop(self):
+        """后台循环：每5分钟尝试恢复一个被系统自动暂停的文件"""
+        while True:
+            try:
+                await asyncio.sleep(300) # 5分钟
+                for task_id, task in list(self.tasks.items()):
+                    if task.status != TaskStatus.RUNNING:
+                        continue
+                    
+                    # 找到一个非手动暂停且处于 PAUSED 状态的项目进行恢复
+                    target_item = None
+                    for item in task.download_queue:
+                        if item.status == DownloadStatus.PAUSED and not getattr(item, 'is_manually_paused', False):
+                            target_item = item
+                            break
+                    
+                    if target_item:
+                        logger.info(f"任务 {task.id[:8]}: [Auto-Resume] 尝试恢复系统自动暂停项: {target_item.file_name}")
+                        target_item.status = DownloadStatus.WAITING
+                        # 如果有队列，加入队列
+                        if task.id in self._task_queues:
+                            self._task_queues[task.id].put_nowait(target_item)
+                            await self._notify_progress(task_id, task)
+            except Exception as e:
+                logger.error(f"Auto-resume 循环出错: {e}")
+
     def _save_tasks(self):
         """同步保存（用于某些必须立即保存的场景）"""
         try:
@@ -611,7 +637,11 @@ class ExportManager:
             
             # 速度计算需要的变量
             import time
-            last_update = {'size': 0, 'time': time.time()}
+            last_update = {
+                'size': item.downloaded_size, 
+                'time': time.time(),
+                'last_progress_time': time.time()  # 用于卡死检测
+            }
             loop = asyncio.get_running_loop()
             
             def progress_cb(current, total):
@@ -625,6 +655,16 @@ class ExportManager:
                 
                 # 计算速度 (至少间隔 1.5 秒更新一次)
                 if elapsed >= 1.5:
+                    now_val = current
+                    if now_val > last_update['size']:
+                        last_update['last_progress_time'] = now  # 更新最后进展时间
+                    
+                    # [Stuck Detection] 5分钟无进展自动重试 (仅针对正在下载的项目)
+                    # 暂停的任务和等待任务不计算在此内，因为 progress_cb 只在活跃下载时被调用
+                    if item.status == DownloadStatus.DOWNLOADING and (now - last_update['last_progress_time'] > 300):
+                        logger.warning(f"检测到下载卡死: {item.file_name} (5分钟无进度增长)")
+                        raise asyncio.TimeoutError("Download stuck for 5 minutes")
+
                     # 检查是否在此期间被取消了
                     if item.status == DownloadStatus.SKIPPED:
                         # 抛出取消异常以中止 download_media
