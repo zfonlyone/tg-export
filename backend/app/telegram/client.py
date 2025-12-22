@@ -286,7 +286,19 @@ class TelegramClient:
             
             # 如果是链接，提取最后一部分
             if "t.me/" in str(chat_id_input):
-                chat_id_input = chat_id_input.split("/")[-1]
+                # 区分公开(t.me/username)和私密(t.me/c/12345/678)
+                parts = str(chat_id_input).strip().split("/")
+                if len(parts) >= 2 and parts[-2] == "c":
+                    # 私密链接，倒数第二部分是 c，倒数第一部分可能是 message_id，倒数第三部分可能是 chat_id
+                    # 比如 https://t.me/c/12345678/999 -> chat_id 为 12345678
+                    chat_id_part = parts[-2] # 默认为 c
+                    for i, p in enumerate(parts):
+                        if p == "c" and i + 1 < len(parts):
+                            chat_id_input = parts[i+1] # 获取 c 后面那一项
+                            break
+                else:
+                    chat_id_input = parts[-1]
+                
                 if chat_id_input.isdigit():
                     pass # 继续数字处理
                 else:
@@ -296,11 +308,18 @@ class TelegramClient:
             str_id = str(chat_id_input).strip()
             
             # 这里的逻辑是：如果用户输的是 1234567890 (10位+)，很大可能是超级群组 ID
-            # 如果它不是以 - 开头，且长度 >= 10，我们帮他加 -100
-            if str_id.isdigit() and len(str_id) >= 10:
-                return int(f"-100{str_id}")
+            # 如果它不是以 - 开头，且长度 >= 9，我们帮他加 -100 (私密频道 ID 转换)
+            if str_id.isdigit():
+                val = int(str_id)
+                if val > 0 and len(str_id) >= 9:
+                    return int(f"-100{str_id}")
+                return val
             
-            # 如果是正数短 ID，通常是用户 ID，保持不变
+            # 处理带 - 但不带 -100 的情况
+            if str_id.startswith("-") and not str_id.startswith("-100") and len(str_id) > 10:
+                 # 已经是负数但没加 -100 的 10 位以上 ID 通常也要补全
+                 return int(f"-100{str_id[1:]}")
+
             return int(str_id)
         except (ValueError, TypeError):
             # 如果无法转为数字，可能是用户名，由 Pyrogram 自行解析
@@ -349,12 +368,23 @@ class TelegramClient:
             if "Peer id invalid" in error_str or "Could not find the input entity" in error_str:
                 logger.warning(f"获取消息遇到 Peer 问题，尝试强制解析 Chat ID: {chat_id}")
                 try:
+                    logger.info(f"直接解析失败，尝试获取 Chat ID: {chat_id}")
                     await self._client.get_chat(chat_id)
                     # 再次尝试获取消息
                     messages = await self._client.get_messages(chat_id, message_id)
                     return messages if isinstance(messages, Message) else None
                 except Exception as ex:
-                    logger.error(f"强制解析后仍无法获取消息: {ex}")
+                    logger.warning(f"强制 get_chat 失败 ({ex})，尝试终极方案：遍历对话列表...")
+                    # 终极方案：获取最近的对话列表，这会强制下载所有 Peer 实体
+                    try:
+                        async for dialog in self._client.get_dialogs(limit=50):
+                            if dialog.chat.id == chat_id:
+                                logger.info(f"通过对话列表成功定位 Peer: {chat_id}")
+                        # 定位后再次尝试
+                        messages = await self._client.get_messages(chat_id, message_id)
+                        return messages if isinstance(messages, Message) else None
+                    except Exception as final_ex:
+                        logger.error(f"终极方案解析仍无法获取消息: {final_ex}")
             else:
                 logger.error(f"获取消息失败: {e}")
             return None
