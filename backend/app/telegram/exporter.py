@@ -456,14 +456,18 @@ class ExportManager:
             if not msg:
                 item.status = DownloadStatus.FAILED
                 item.error = "无法获取消息对象"
+                await self._notify_progress(task.id, task)
                 return
+
+            # 标记为下载中 (用户能更客观看到并发)
+            item.status = DownloadStatus.DOWNLOADING
+            await self._notify_progress(task.id, task)
 
             # 智能延迟方案：减少 FloodWait
             # 大文件(>10MB)延迟1秒，小文件延迟0.3秒
             delay = 1.0 if item.file_size > 10 * 1024 * 1024 else 0.3
             await asyncio.sleep(delay)
 
-            item.status = DownloadStatus.DOWNLOADING
             full_path = export_path / item.file_path
             
             # 日志：记录下载路径
@@ -520,11 +524,9 @@ class ExportManager:
                 item.speed = 0  # 下载完成，速度归零
                 task.downloaded_media += 1
                 
-                # 计算任务总速度 (只在完成时计算一次)
-                task.download_speed = sum(
-                    i.speed for i in task.download_queue 
-                    if i.status == DownloadStatus.DOWNLOADING
-                )
+                # 计算任务总速度
+                active_speeds = [i.speed for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING]
+                task.download_speed = sum(active_speeds) if active_speeds else 0
                 
                 # 每完成一个下载，通知一次进度
                 await self._notify_progress(task.id, task)
@@ -576,6 +578,11 @@ class ExportManager:
         if task.id not in self._active_download_tasks:
             self._active_download_tasks[task.id] = set()
 
+        # 全局启动速率控制
+        import time
+        self._last_global_start_time = 0
+        global_start_lock = asyncio.Lock()
+
         async def worker_logic(worker_id: int):
             """工协程逻辑"""
             logger.info(f"任务 {task.id[:8]}: 下载工协程 #{worker_id} 启动")
@@ -599,13 +606,23 @@ class ExportManager:
                     # 检查是否队列真正结束
                     break
                 
-                # 4. 执行下载
+                # 4. 执行下载 (包含速率限制)
                 try:
+                    # 全局速率限制：每 5 秒只能开始一个新下载 (用户需求)
+                    async with global_start_lock:
+                        now = time.time()
+                        wait_time = max(0, self._last_global_start_time + 5 - now)
+                        if wait_time > 0:
+                            logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 触发全局限速，等待 {wait_time:.1f}s...")
+                            await asyncio.sleep(wait_time)
+                        self._last_global_start_time = time.time()
+
+                    # 调用核心下载逻辑
                     await self._download_item_worker(task, item, export_path)
                     
-                    # 下载完成后等30s再申请下载下一个任务 (用户需求: 降低请求速率)
+                    # 下载完成后等30s再申请下载下一个任务 (用户需求: 每个 Worker 冷却 30s)
                     if task.status != TaskStatus.CANCELLED and not self.is_paused(task.id):
-                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 下载完成，等待 30 秒后继续...")
+                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 下载完成，进入 30 秒冷却...")
                         await asyncio.sleep(30)
                 except Exception as e:
                     logger.error(f"Worker #{worker_id} 下载出错: {e}")
@@ -617,10 +634,7 @@ class ExportManager:
         # 启动工作协程池
         worker_tasks = []
         for i in range(options.max_concurrent_downloads):
-            # 每隔 5 秒启动一个 worker (用户需求: 控制请求速率)
-            if i > 0:
-                await asyncio.sleep(5)
-            
+            # 立即创建任务，由 worker_logic 内部通过 global_start_lock 自动排队实现 5s 间隔
             t = asyncio.create_task(worker_logic(i))
             worker_tasks.append(t)
             self._active_download_tasks[task.id].add(t)

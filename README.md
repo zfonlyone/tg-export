@@ -1,4 +1,4 @@
-# TG Export - Telegram 全功能导出工具 v1.2.8
+# TG Export - Telegram 全功能导出工具 v1.3.0
 
 📥 一键导出 Telegram 私密频道、群组、私聊的全部内容，支持 HTML + JSON 格式输出。
 
@@ -31,6 +31,7 @@
 - 🔁 **智能重试** - 连接中断/文件引用过期自动重试 (指数退避策略)
 - ⏸️ **暂停/恢复** - 随时暂停和恢复下载任务
 - 📊 **失败记录** - 自动记录失败的下载，支持手动重试
+- 🐢 **速率限制** - 智能控制 API 请求频率，全局 5s 启动间隔 + 30s 冷却，防止账号受限
 
 ---
 
@@ -55,7 +56,7 @@ bash <(curl -sL https://raw.githubusercontent.com/zfonlyone/tg-export/main/tg-ex
 安装后可使用 `tge` 命令管理：
 
 ```bash
-tge           # 打开管理菜单
+tge           # 打开管理菜单 (支持启动、停止、更新、安装、卸载等)
 tge start     # 启动服务
 tge stop      # 停止服务
 tge restart   # 重启服务

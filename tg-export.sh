@@ -1,9 +1,8 @@
 #!/bin/bash
 
-# ==========================================================
-# TG Export 一键部署脚本 v1.2.8
+# TG Export 一键部署脚本 v1.3.0
 # 功能: 安装/卸载 TG Export + Nginx + SSL证书管理 + UFW端口
-# 新增: 下载重试机制 + 暂停/恢复 + 失败记录 + AList 风格 UI
+# 新增: 下载重试机制 + 暂停/恢复 + 失败记录 + AList 风格 UI + 速率限制
 # ==========================================================
 
 # 颜色定义
@@ -16,7 +15,7 @@ PLAIN='\033[0m'
 
 # ===== 统一配置 =====
 APP_NAME="TG Export"
-APP_VERSION="1.2.8"
+APP_VERSION="1.3.0"
 APP_DIR="/opt/tg-export"
 CONFIG_FILE=".tge_config"
 DOCKER_IMAGE="zfonlyone/tg-export:latest"
@@ -54,7 +53,7 @@ docker_compose() {
 # ===== 显示菜单 =====
 show_menu() {
     echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
-    echo -e "${CYAN}${BOLD}      TG Export - Telegram 全功能导出工具v1.2.8${PLAIN}"
+    echo -e "${CYAN}${BOLD}      TG Export - Telegram 全功能导出工具v1.3.0${PLAIN}"
     echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
     echo -e " ${GREEN}1.${PLAIN} 安装 TG Export"
     echo -e " ${GREEN}2.${PLAIN} 卸载 TG Export"
@@ -746,6 +745,10 @@ install_app() {
     
     save_config
     
+    # 将脚本自身复制到安装目录，以便 tge 工具调用
+    cp "$(readlink -f "$0")" "$APP_DIR/tg-export.sh" 2>/dev/null || cp "$0" "$APP_DIR/tg-export.sh"
+    chmod +x "$APP_DIR/tg-export.sh"
+    
     # 生成 .env
     cat > .env <<EOF
 API_ID=$API_ID
@@ -991,7 +994,7 @@ function docker_compose() {
 
 function show_menu() {
     clear
-    echo -e "${GREEN}=== TG Export 管理工具 (tge)v1.2.8 ===${NC}"
+    echo -e "${GREEN}=== TG Export 管理工具 (tge)v1.3.0 ===${NC}"
     echo "1. 启动服务"
     echo "2. 停止服务"
     echo "3. 重启服务"
@@ -1000,9 +1003,11 @@ function show_menu() {
     echo "6. 更新镜像"
     echo "7. 证书管理"
     echo "8. 密码管理"
+    echo "9. 安装/更新"
+    echo "10. 卸载工具"
     echo "0. 退出"
     echo
-    read -p "请选择 [0-8]: " choice
+    read -p "请选择 [0-10]: " choice
     handle_choice "$choice"
 }
 
@@ -1025,6 +1030,8 @@ function handle_choice() {
         6) cd "$APP_DIR" && docker_compose pull && docker_compose up -d; read -p "按回车继续..."; show_menu ;;
         7) manage_certs; show_menu ;;
         8) manage_password; show_menu ;;
+        9) bash "$APP_DIR/tg-export.sh" install; read -p "按回车继续..."; show_menu ;;
+        10) bash "$APP_DIR/tg-export.sh" uninstall; exit 0 ;;
         0) exit 0 ;;
         *) show_menu ;;
     esac
