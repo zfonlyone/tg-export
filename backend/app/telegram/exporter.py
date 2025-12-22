@@ -31,6 +31,7 @@ class ExportManager:
     def __init__(self):
         self.tasks: Dict[str, ExportTask] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
+        self._active_download_tasks: Dict[str, Set[asyncio.Task]] = {} # 任务ID -> 下载协程集合
         self._progress_callbacks: Dict[str, List[Callable]] = {}
         self._paused_tasks: set = set()  # 暂停的任务ID
         self._tasks_file = settings.DATA_DIR / self.TASKS_FILE
@@ -162,7 +163,16 @@ class ExportManager:
         self._paused_tasks.add(task_id)
         task.status = TaskStatus.PAUSED
         
-        # 将所有正在下载的项目也设为暂停，这样下载循环会在当前文件完成后暂停
+        # 1. 取消所有正在进行的下载协程，这会立即中断 FloodWait 等待
+        if task_id in self._active_download_tasks:
+            active_tasks = list(self._active_download_tasks[task_id])
+            if active_tasks:
+                logger.info(f"正在中断 {len(active_tasks)} 个下载任务以实现立即暂停")
+                for t in active_tasks:
+                    if not t.done():
+                        t.cancel()
+        
+        # 2. 将所有正在下载的项目标记为暂停
         for item in task.download_queue:
             if item.status == DownloadStatus.DOWNLOADING:
                 item.status = DownloadStatus.PAUSED
@@ -239,11 +249,17 @@ class ExportManager:
             # 使用任务名称作为导出路径（清理特殊字符）
             import re
             safe_name = re.sub(r'[<>:"/\\|?*]', '_', task.name)
-            safe_name = safe_name[:100]  # 限制长度
-            # 添加时间戳确保唯一性
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            export_dir_name = f"{safe_name}_{timestamp}"
+            safe_name = safe_name.strip()[:100]  # 限制长度并去除首尾空格
+            
+            # 使用任务名称直接作为文件夹名 (用户要求不需要时间戳)
+            # 如果同名目录已存在，为了避免覆盖，可以添加数字后缀
+            export_dir_name = safe_name
             export_path = settings.EXPORT_DIR / export_dir_name
+            
+            # 如果目录已存在且不是当前任务的目录（防止重启任务时重复创建），需要处理冲突
+            # 但考虑到用户想要覆盖或续传，我们直接使用该目录
+            # 只有当它被其他任务占用时才会有问题，但目前简化处理
+            
             export_path.mkdir(parents=True, exist_ok=True)
             # 更新 options 中的路径以便前端显示
             options.export_path = str(export_path)
@@ -292,7 +308,12 @@ class ExportManager:
                     task.completed_at = datetime.now()
             
         except asyncio.CancelledError:
-            task.status = TaskStatus.CANCELLED
+            # 如果状态已经是 CANCELLED，说明是用户手动取消
+            # 否则是系统关闭导致的取消，应该设为 PAUSED
+            if task.status != TaskStatus.CANCELLED:
+                logger.info(f"任务 {task.name} 被系统中断，状态设为暂停")
+                task.status = TaskStatus.PAUSED
+                self._paused_tasks.add(task.id)
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.error = str(e)
@@ -318,7 +339,10 @@ class ExportManager:
                 task.status = TaskStatus.COMPLETED
                 task.completed_at = datetime.now()
         except asyncio.CancelledError:
-            task.status = TaskStatus.CANCELLED
+            if task.status != TaskStatus.CANCELLED:
+                logger.info(f"下载队列被系统中断，状态设为暂停")
+                task.status = TaskStatus.PAUSED
+                self._paused_tasks.add(task.id)
         except Exception as e:
             task.status = TaskStatus.FAILED
             task.error = str(e)
@@ -339,7 +363,17 @@ class ExportManager:
         # 限制并发下载数
         semaphore = asyncio.Semaphore(options.max_concurrent_downloads)
         
+        # 初始化任务追踪集合
+        if task.id not in self._active_download_tasks:
+            self._active_download_tasks[task.id] = set()
+
         async def download_worker(item: DownloadItem):
+            # 获取当前协程任务并追踪
+            current_task = asyncio.current_task()
+            if current_task:
+                self._active_download_tasks[task.id].add(current_task)
+            
+            try:
             async with semaphore:
                 if task.status == TaskStatus.CANCELLED or item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
                     return
@@ -447,6 +481,17 @@ class ExportManager:
                         last_retry=datetime.fromisoformat(failure_info["last_retry"])
                     )
                     task.failed_downloads.append(failed_download)
+
+            except asyncio.CancelledError:
+                # 任务被取消（暂停或停止）
+                logger.info(f"下载任务被取消/暂停: {item.file_name}")
+                if item.status == DownloadStatus.DOWNLOADING:
+                    item.status = DownloadStatus.PAUSED
+                    item.speed = 0
+                raise
+            finally:
+                if current_task and task.id in self._active_download_tasks:
+                    self._active_download_tasks[task.id].discard(current_task)
 
         # 速度更新任务 - 独立运行，避免阻塞下载
         async def speed_updater():
