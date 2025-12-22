@@ -602,6 +602,11 @@ class ExportManager:
                 # 4. 执行下载
                 try:
                     await self._download_item_worker(task, item, export_path)
+                    
+                    # 下载完成后等30s再申请下载下一个任务 (用户需求: 降低请求速率)
+                    if task.status != TaskStatus.CANCELLED and not self.is_paused(task.id):
+                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 下载完成，等待 30 秒后继续...")
+                        await asyncio.sleep(30)
                 except Exception as e:
                     logger.error(f"Worker #{worker_id} 下载出错: {e}")
                 finally:
@@ -612,6 +617,10 @@ class ExportManager:
         # 启动工作协程池
         worker_tasks = []
         for i in range(options.max_concurrent_downloads):
+            # 每隔 5 秒启动一个 worker (用户需求: 控制请求速率)
+            if i > 0:
+                await asyncio.sleep(5)
+            
             t = asyncio.create_task(worker_logic(i))
             worker_tasks.append(t)
             self._active_download_tasks[task.id].add(t)
@@ -757,6 +766,9 @@ class ExportManager:
         async for msg in telegram_client.get_chat_history(chat.id):
             if task.status == TaskStatus.CANCELLED:
                 break
+            
+            # 限制请求速率 (用户需求: 控制请求所有文本消息的api速率防止被限制)
+            await asyncio.sleep(0.1)
             
             # 等待暂停状态结束
             while task.status == TaskStatus.PAUSED:
