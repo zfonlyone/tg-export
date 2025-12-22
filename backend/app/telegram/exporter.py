@@ -326,6 +326,8 @@ class ExportManager:
             # 只有当它被其他任务占用时才会有问题，但目前简化处理
             
             export_path.mkdir(parents=True, exist_ok=True)
+            # 记录实际导出的目录名供前端链接使用
+            task.export_name = export_path.name
             # 更新 options 中的路径以便前端显示
             options.export_path = str(export_path)
             

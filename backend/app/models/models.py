@@ -184,6 +184,7 @@ class ExportTask(BaseModel):
     created_at: datetime = Field(default_factory=datetime.now)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    export_name: Optional[str] = None      # 导出的实际目录名
     
     # 进度信息
     total_chats: int = 0
