@@ -71,6 +71,9 @@ class DownloadRetryManager:
             return ErrorType.FLOOD_WAIT
         
         # 连接问题
+        if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+            return ErrorType.CONNECTION_LOST
+            
         connection_keywords = [
             "connection", "disconnect", "timeout", "reset",
             "network", "eof", "broken pipe", "connection lost"

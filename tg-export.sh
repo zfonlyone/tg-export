@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# TG Export 一键部署脚本 v1.3.0
+# TG Export 一键部署脚本 v1.3.1
 # 功能: 安装/卸载 TG Export + Nginx + SSL证书管理 + UFW端口
 # 新增: 下载重试机制 + 暂停/恢复 + 失败记录 + AList 风格 UI + 速率限制
 # ==========================================================
@@ -15,7 +15,7 @@ PLAIN='\033[0m'
 
 # ===== 统一配置 =====
 APP_NAME="TG Export"
-APP_VERSION="1.3.0"
+APP_VERSION="1.3.1"
 APP_DIR="/opt/tg-export"
 CONFIG_FILE=".tge_config"
 DOCKER_IMAGE="zfonlyone/tg-export:latest"
@@ -53,7 +53,7 @@ docker_compose() {
 # ===== 显示菜单 =====
 show_menu() {
     echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
-    echo -e "${CYAN}${BOLD}      TG Export - Telegram 全功能导出工具v1.3.0${PLAIN}"
+    echo -e "${CYAN}${BOLD}      TG Export - Telegram 全功能导出工具v1.3.1${PLAIN}"
     echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
     echo -e " ${GREEN}1.${PLAIN} 安装 TG Export"
     echo -e " ${GREEN}2.${PLAIN} 卸载 TG Export"
@@ -994,7 +994,7 @@ function docker_compose() {
 
 function show_menu() {
     clear
-    echo -e "${GREEN}=== TG Export 管理工具 (tge)v1.3.0 ===${NC}"
+    echo -e "${GREEN}=== TG Export 管理工具 (tge)v1.3.1 ===${NC}"
     echo "1. 启动服务"
     echo "2. 停止服务"
     echo "3. 重启服务"

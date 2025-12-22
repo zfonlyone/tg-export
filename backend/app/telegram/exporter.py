@@ -502,16 +502,41 @@ class ExportManager:
                     item.speed = bytes_diff / elapsed if elapsed > 0 else 0
                     last_update['size'] = current
                     last_update['time'] = now
+            # 日志：记录下载路径
+            logger.info(f"任务 {task.id[:8]}: 开始下载文件 '{item.file_name}' -> {item.file_path}")
             
-            success, downloaded, failure_info = await retry_manager.download_with_retry(
-                download_func=telegram_client.download_media,
-                message=msg,
-                file_path=temp_file_path,
-                refresh_message_func=telegram_client.get_message_by_id,
-                progress_callback=progress_cb
-            )
-            
-            if success and downloaded:
+            try:
+                success, downloaded_path, failure_info = await retry_manager.download_with_retry(
+                    download_func=telegram_client.download_media,
+                    message=msg,
+                    file_path=temp_file_path,
+                    refresh_message_func=telegram_client.get_message_by_id,
+                    progress_callback=progress_cb
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"任务 {task.id[:8]}: 下载文件 {item.file_name} (ID: {item.id}) 严重超时 (TimeoutError)")
+                success, downloaded_path = False, None
+                failure_info = {
+                    "error_type": "timeout",
+                    "error_message": "Request timed out during download"
+                }
+
+            if success and downloaded_path:
+                # [NEW] 增加 0 字节校验，防止“空包”误报成功
+                import os
+                actual_size = os.path.getsize(downloaded_path) if os.path.exists(downloaded_path) else 0
+                if actual_size == 0 and item.file_size > 0:
+                    logger.error(f"任务 {task.id[:8]}: 检测到空包! 文件 {item.file_name} 长度为 0，视为下载失败。")
+                    if os.path.exists(downloaded_path):
+                        os.remove(downloaded_path)
+                    success = False
+                    item.status = DownloadStatus.FAILED
+                    item.error = "下载结果为空文件 (0 bytes)"
+                    await self._notify_progress(task.id, task)
+                    # If it's a 0-byte file and considered failed, we should return here
+                    return
+
+                item.status = DownloadStatus.COMPLETED
                 if temp_file_path.exists():
                     # 确保目标目录存在
                     full_path.parent.mkdir(parents=True, exist_ok=True)

@@ -69,7 +69,8 @@ class TelegramClient:
                 api_hash=api_hash,
                 workdir=str(settings.SESSIONS_DIR),
                 device_model="TG Export Web",
-                system_version="Linux"
+                system_version="Linux",
+                sleep_threshold=60
             )
             print(f"[TG] 客户端已初始化: api_id={api_id}")
     
