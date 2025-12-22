@@ -203,6 +203,13 @@ async def export(
     chats_dir = export_path / "chats"
     chats_dir.mkdir(parents=True, exist_ok=True)
     
+    # 设置目录权限
+    try:
+        import os
+        for d in [lists_dir, chats_dir]:
+            os.chmod(d, 0o777)
+    except: pass
+    
     # 生成聊天列表页面
     chat_links = []
     for chat in chats:
@@ -247,6 +254,9 @@ async def export(
     
     with open(lists_dir / "chats.html", "w", encoding="utf-8") as f:
         f.write(chats_list_html)
+    try:
+        os.chmod(lists_dir / "chats.html", 0o777)
+    except: pass
     
     # 为每个聊天生成消息页面
     # 按聊天ID分组消息
@@ -312,6 +322,10 @@ async def export(
         
         with open(chat_folder / "messages.html", "w", encoding="utf-8") as f:
             f.write(messages_page_html)
+        try:
+            os.chmod(chat_folder, 0o777)
+            os.chmod(chat_folder / "messages.html", 0o777)
+        except: pass
     
     # 生成入口页面
     export_results_html = f'''<!DOCTYPE html>
@@ -348,6 +362,9 @@ async def export(
     
     with open(export_path / "export_results.html", "w", encoding="utf-8") as f:
         f.write(export_results_html)
+    try:
+        os.chmod(export_path / "export_results.html", 0o777)
+    except: pass
     
     return str(export_path / "export_results.html")
 

@@ -44,7 +44,7 @@ async def export(
     export_data = {
         "export_info": {
             "app": "TG Export",
-            "version": "1.2.8",
+            "version": "1.3.3",
             "exported_at": datetime.now().isoformat(),
             "task_name": task.name,
             "options": task.options.model_dump()
@@ -88,5 +88,11 @@ async def export(
     output_file = export_path / "export.json"
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(export_data, f, ensure_ascii=False, indent=2, cls=DateTimeEncoder)
+    
+    # 强制设置 777 权限
+    try:
+        import os
+        os.chmod(output_file, 0o777)
+    except: pass
     
     return str(output_file)

@@ -48,6 +48,19 @@ class ExportManager:
         # 启动后台保存循环
         asyncio.create_task(self._auto_save_loop())
     
+    def _set_777_recursive(self, path: Path):
+        """递归设置 777 权限"""
+        try:
+            import os
+            # 设置当前路径权限
+            os.chmod(path, 0o777)
+            # 如果是目录，递归处理
+            if path.is_dir():
+                for item in path.iterdir():
+                    self._set_777_recursive(item)
+        except Exception as e:
+            logger.warning(f"无法设置权限 777 为 {path}: {e}")
+    
     def _load_tasks(self):
         """从文件加载任务"""
         try:
@@ -405,11 +418,10 @@ class ExportManager:
             # 使用任务名称作为导出路径（清理特殊字符）
             export_path = self._get_export_path(task)
             
-            # 如果目录已存在且不是当前任务的目录（防止重启任务时重复创建），需要处理冲突
-            # 但考虑到用户想要覆盖或续传，我们直接使用该目录
-            # 只有当它被其他任务占用时才会有问题，但目前简化处理
-            
+            # 自动创建导出目录并强制设置 777 权限 (支持覆盖/更新)
             export_path.mkdir(parents=True, exist_ok=True)
+            self._set_777_recursive(export_path)
+            
             # 记录实际导出的目录名供前端链接使用
             task.export_name = export_path.name
             # 更新 options 中的路径以便前端显示
@@ -627,12 +639,21 @@ class ExportManager:
 
                 item.status = DownloadStatus.COMPLETED
                 if temp_file_path.exists():
-                    # 确保目标目录存在
+                    # 确保目标目录存在并具有 777 权限
                     full_path.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        import os
+                        os.chmod(full_path.parent, 0o777)
+                    except: pass
+                    
                     # 从 temp 移动到最终位置
                     import shutil
                     shutil.move(str(temp_file_path), str(full_path))
-                    logger.info(f"✅ 文件已保存: {full_path}")
+                    # 强制设置文件权限 777
+                    try:
+                        os.chmod(full_path, 0o777)
+                    except: pass
+                    logger.info(f"✅ 文件已保存并授权 777: {full_path}")
                 item.status = DownloadStatus.COMPLETED
                 item.progress = 100.0
                 item.speed = 0  # 下载完成，速度归零
@@ -722,10 +743,10 @@ class ExportManager:
                 
                 # 4. 执行下载 (包含速率限制)
                 try:
-                    # 全局速率限制：每 5 秒只能开始一个新下载 (用户需求)
+                    # 全局速率限制：每 2 秒只能开始一个新下载 (用户需求：平滑启动)
                     async with global_start_lock:
                         now = time.time()
-                        wait_time = max(0, self._last_global_start_time + 5 - now)
+                        wait_time = max(0, self._last_global_start_time + 2 - now)
                         if wait_time > 0:
                             logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 触发全局限速，等待 {wait_time:.1f}s...")
                             await asyncio.sleep(wait_time)
@@ -734,10 +755,10 @@ class ExportManager:
                     # 调用核心下载逻辑
                     await self._download_item_worker(task, item, export_path)
                     
-                    # 下载完成后等30s再申请下载下一个任务 (用户需求: 每个 Worker 冷却 30s)
+                    # 下载完成后等 5s 再申请下载下一个任务 (用户需求：冷却 5s)
                     if task.status != TaskStatus.CANCELLED and not self.is_paused(task.id):
-                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 下载完成，进入 30 秒冷却...")
-                        await asyncio.sleep(30)
+                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 下载完成，进入 5 秒冷却...")
+                        await asyncio.sleep(5)
                 except Exception as e:
                     logger.error(f"Worker #{worker_id} 下载出错: {e}")
                 finally:
