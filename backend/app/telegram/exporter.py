@@ -45,22 +45,29 @@ class ExportManager:
             if self._tasks_file.exists():
                 with open(self._tasks_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
+                logger.info(f"正在加载 {len(data)} 个任务...")
                 for task_data in data:
                     try:
                         task = ExportTask.model_validate(task_data)
+                        original_status = task.status
                         
                         # 容器重启后，运行中的任务需要暂停（因为没有活动的协程）
                         if task.status in [TaskStatus.RUNNING, TaskStatus.EXTRACTING]:
                             task.status = TaskStatus.PAUSED
                             self._paused_tasks.add(task.id)
-                            logger.info(f"任务 {task.name} 已从运行中恢复为暂停状态")
+                            logger.info(f"任务 '{task.name}' (ID: {task.id[:8]}...) 从 {original_status.value} 恢复为暂停状态")
                         elif task.status == TaskStatus.PAUSED:
                             self._paused_tasks.add(task.id)
+                            logger.info(f"任务 '{task.name}' (ID: {task.id[:8]}...) 保持暂停状态")
+                        else:
+                            logger.info(f"任务 '{task.name}' (ID: {task.id[:8]}...) 状态: {task.status.value}")
                             
                         self.tasks[task.id] = task
                     except Exception as e:
                         logger.error(f"加载任务失败: {e}")
-                logger.info(f"已加载 {len(self.tasks)} 个任务")
+                logger.info(f"✅ 已加载 {len(self.tasks)} 个任务，其中 {len(self._paused_tasks)} 个暂停")
+            else:
+                logger.info("未找到任务文件，从空白开始")
         except Exception as e:
             logger.error(f"加载任务文件失败: {e}")
     
@@ -167,17 +174,32 @@ class ExportManager:
         """恢复导出任务"""
         task = self.tasks.get(task_id)
         if not task or task.status != TaskStatus.PAUSED:
+            logger.warning(f"无法恢复任务 {task_id[:8]}...: 任务不存在或状态不是暂停")
             return False
         
+        logger.info(f"正在恢复任务: '{task.name}' (ID: {task_id[:8]}...)")
         self._paused_tasks.discard(task_id)
         task.status = TaskStatus.RUNNING
         
         # 将所有暂停的下载项恢复为等待状态
+        paused_count = sum(1 for item in task.download_queue if item.status == DownloadStatus.PAUSED)
         for item in task.download_queue:
             if item.status == DownloadStatus.PAUSED:
                 item.status = DownloadStatus.WAITING
         
+        if paused_count > 0:
+            logger.info(f"  - 恢复了 {paused_count} 个暂停的下载项")
+        
         await self._notify_progress(task_id, task)
+        
+        # 如果任务有下载队列但没有活动的运行任务，重新启动
+        # 这种情况发生在容器重启后恢复暂停的任务时
+        if task_id not in self._running_tasks and len(task.download_queue) > 0:
+            waiting_count = sum(1 for i in task.download_queue if i.status == DownloadStatus.WAITING)
+            logger.info(f"  - 重新启动下载队列 ({waiting_count} 个待下载文件)")
+            async_task = asyncio.create_task(self._restart_download_queue(task))
+            self._running_tasks[task_id] = async_task
+        
         return True
     
     def is_paused(self, task_id: str) -> bool:
@@ -214,8 +236,14 @@ class ExportManager:
         """执行导出任务"""
         try:
             options = task.options
-            # 使用 EXPORT_DIR + task.id 作为导出路径
-            export_path = settings.EXPORT_DIR / task.id
+            # 使用任务名称作为导出路径（清理特殊字符）
+            import re
+            safe_name = re.sub(r'[<>:"/\\|?*]', '_', task.name)
+            safe_name = safe_name[:100]  # 限制长度
+            # 添加时间戳确保唯一性
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            export_dir_name = f"{safe_name}_{timestamp}"
+            export_path = settings.EXPORT_DIR / export_dir_name
             export_path.mkdir(parents=True, exist_ok=True)
             # 更新 options 中的路径以便前端显示
             options.export_path = str(export_path)
@@ -271,6 +299,35 @@ class ExportManager:
             logger.exception("导出任务执行出错")
         finally:
             await self._notify_progress(task.id, task)
+
+    async def _restart_download_queue(self, task: ExportTask):
+        """重新启动下载队列（用于恢复暂停的任务）"""
+        try:
+            options = task.options
+            # 使用任务中已保存的导出路径
+            export_path = Path(options.export_path) if options.export_path else settings.EXPORT_DIR / task.id
+            
+            logger.info(f"恢复下载队列: {task.name} ({len(task.download_queue)} 个文件)")
+            
+            if task.total_media > task.downloaded_media:
+                task.status = TaskStatus.RUNNING
+                await self._notify_progress(task.id, task)
+                await self._process_download_queue(task, export_path)
+            
+            if task.status != TaskStatus.CANCELLED:
+                task.status = TaskStatus.COMPLETED
+                task.completed_at = datetime.now()
+        except asyncio.CancelledError:
+            task.status = TaskStatus.CANCELLED
+        except Exception as e:
+            task.status = TaskStatus.FAILED
+            task.error = str(e)
+            logger.exception("恢复下载队列出错")
+        finally:
+            await self._notify_progress(task.id, task)
+            # 清理运行任务记录
+            if task.id in self._running_tasks:
+                del self._running_tasks[task.id]
 
     async def _process_download_queue(self, task: ExportTask, export_path: Path):
         """处理下载队列"""

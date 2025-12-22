@@ -9,13 +9,41 @@ from pathlib import Path
 
 from .config import settings
 from .api import router, init_admin_user, websocket_endpoint
+import logging
+import sys
+from logging.handlers import RotatingFileHandler
 
+
+# 配置日志
+log_dir = settings.DATA_DIR / "logs"
+log_dir.mkdir(parents=True, exist_ok=True)
+log_file = log_dir / "tg-export.log"
+
+# 配置根logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        # 控制台输出
+        logging.StreamHandler(sys.stdout),
+        # 文件输出（自动轮转，最大10MB，保留5个备份）
+        RotatingFileHandler(
+            log_file,
+            maxBytes=10*1024*1024,  # 10MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+    ]
+)
+
+logger = logging.getLogger(__name__)
+logger.info(f"日志已配置，存储路径: {log_file}")
 
 # 创建 FastAPI 应用
 app = FastAPI(
     title="TG Export",
     description="Telegram 全功能导出工具",
-    version="1.0.0",
+    version="1.2.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
