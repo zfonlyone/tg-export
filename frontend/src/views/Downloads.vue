@@ -6,9 +6,9 @@
         <p class="subtitle">实时监控与管理您的 Telegram 导出队列</p>
       </div>
       <div class="header-actions">
-        <button @click="pauseAll" class="btn-premium ghost sm" :disabled="runningCount === 0">⏸ 暂停所有</button>
-        <button @click="resumeAll" class="btn-premium ghost sm" :disabled="pausedCount === 0">▶ 恢复所有</button>
-        <button @click="removeCompleted" class="btn-premium danger sm" :disabled="completedCount === 0">🗑 清理已完成</button>
+        <button @click="pauseAll" class="btn-premium warning sm" :disabled="runningCount === 0">⏸ 暂停所有任务</button>
+        <button @click="resumeAll" class="btn-premium success sm" :disabled="pausedCount === 0">▶ 恢复所有任务</button>
+        <button @click="removeCompleted" class="btn-premium danger sm" :disabled="completedCount === 0">🗑 清理完成记录</button>
       </div>
     </div>
 
@@ -21,7 +21,7 @@
       <div class="empty-icon">📁</div>
       <h3>暂无导出任务</h3>
       <p>快去创建一个新的导出任务吧！</p>
-      <router-link to="/export" class="btn-f-action retry" style="display: inline-flex; margin-top: 20px; text-decoration: none;">📥 开启导出</router-link>
+      <router-link to="/export" class="btn-premium purple" style="display: inline-flex; margin-top: 20px; text-decoration: none;">📥 开启导出</router-link>
     </div>
 
     <div v-else class="task-grid">
@@ -60,13 +60,12 @@
           </div>
 
           <div class="footer-actions">
-            <button @click.stop="goToDetail(task.id)" class="btn-f-action monitor">📊 进入监控</button>
-            <button v-if="['running', 'extracting'].includes(task.status)" @click.stop="pauseTask(task.id)" class="btn-f-action pause">⏸ 暂停</button>
-            <button v-if="task.status === 'paused'" @click.stop="resumeTask(task.id)" class="btn-f-action resume">▶ 恢复</button>
+            <button @click.stop="goToDetail(task.id)" class="btn-premium info sm">📊 实时监控</button>
+            <button v-if="['running', 'extracting'].includes(task.status)" @click.stop="pauseTask(task.id)" class="btn-premium warning sm">⏸ 暂停</button>
+            <button v-if="task.status === 'paused'" @click.stop="resumeTask(task.id)" class="btn-premium success sm">▶ 恢复</button>
             
             <div class="footer-right">
-              <a v-if="task.status === 'completed'" @click.stop :href="'/exports/' + (task.export_name || task.id)" target="_blank" class="btn-f-action open">📂 打开文件</a>
-              <button v-if="['completed', 'failed', 'cancelled'].includes(task.status)" @click.stop="deleteTask(task.id)" class="btn-f-action delete">🗑 删除</button>
+              <button v-if="['completed', 'failed', 'cancelled'].includes(task.status)" @click.stop="deleteTask(task.id)" class="btn-premium danger sm">🗑 删除任务</button>
             </div>
           </div>
         </div>
@@ -77,6 +76,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import axios from 'axios'
 
 const loading = ref(true)
@@ -116,17 +116,6 @@ const pausedCount = computed(() => tasks.value.filter(t => t.status === 'paused'
 const completedCount = computed(() => tasks.value.filter(t => t.status === 'completed').length)
 
 function isRunning(task) { return ['running', 'extracting'].includes(task.status) }
-
-function getETR(task) {
-  if (!task.download_speed || task.download_speed <= 0) return '计算中...'
-  const remainingBytes = task.total_size - task.downloaded_size
-  if (remainingBytes <= 0) return '即将完成'
-  
-  const seconds = remainingBytes / task.download_speed
-  if (seconds > 3600) return `${(seconds / 3600).toFixed(1)} 小时`
-  if (seconds > 60) return `${(seconds / 60).toFixed(0)} 分钟`
-  return `${seconds.toFixed(0)} 秒`
-}
 
 function getStatusText(task) {
   const texts = {
@@ -273,76 +262,11 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .bar-fill.paused { background: #f59e0b; }
 .bar-fill.failed { background: #ef4444; }
 
-/* Files Dropdown */
-.files-dropdown { margin-bottom: 20px; border: 1px solid #f4f4f5; border-radius: 12px; overflow: hidden; }
-.expand-btn {
-  width: 100%;
-  padding: 12px 16px;
-  background: #fafafa;
-  border: none;
-  display: flex;
-  justify-content: space-between;
-  cursor: pointer;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #52525b;
-}
-
-.chevron { transition: transform 0.3s; font-style: normal; display: inline-block; }
-.chevron.rotated { transform: rotate(180deg); }
-
-.file-list { max-height: 300px; overflow-y: auto; padding: 0 8px; }
-
-.mini-file-item {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 8px;
-  border-bottom: 1px solid #f4f4f5;
-}
-
-.mini-file-item:last-child { border: none; }
-.file-icon-box { background: #f4f4f5; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; }
-
-.file-details { flex: 1; min-width: 0; }
-.file-row-1 { display: flex; justify-content: space-between; margin-bottom: 4px; }
-.f-name { font-size: 0.75rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #3f3f46; }
-.f-size { font-size: 0.7rem; color: #a1a1aa; font-weight: 600; }
-
-.mini-bar { height: 4px; background: #f4f4f5; border-radius: 2px; overflow: hidden; }
-.mini-fill { height: 100%; background: #3b82f6; }
-.mini-fill.completed { background: #22c55e; }
-.mini-fill.failed { background: #ef4444; }
-
-.file-actions { display: flex; align-items: center; gap: 8px; }
-.mini-status { font-size: 0.65rem; font-weight: 800; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; }
-.mini-status.completed { background: #dcfce7; color: #166534; }
-.mini-status.downloading { background: #dbeafe; color: #1e40af; }
-.mini-speed { font-size: 0.65rem; color: #3b82f6; font-weight: 700; min-width: 50px; text-align: right; }
-
 .btn-mini-retry { background: none; border: none; cursor: pointer; opacity: 0.6; transition: 0.2s; font-size: 1rem; }
 .btn-mini-retry:hover { opacity: 1; transform: scale(1.1); }
 
 /* Footer Actions */
 .footer-actions { display: flex; gap: 10px; align-items: center; }
-.btn-f-action {
-  padding: 8px 16px;
-  border-radius: 10px;
-  border: none;
-  font-size: 0.85rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.btn-f-action.pause { background: #fff7ed; color: #9a3412; }
-.btn-f-action.resume { background: #f0fdf4; color: #166534; }
-.btn-f-action.retry { background: #eff6ff; color: #1e40af; }
-.btn-f-action.open { background: #fdf4ff; color: #701a75; text-decoration: none; }
-.btn-f-action.delete { background: #fef2f2; color: #991b1b; }
 
 .footer-right { margin-left: auto; display: flex; gap: 10px; }
 

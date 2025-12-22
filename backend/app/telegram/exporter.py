@@ -372,20 +372,31 @@ class ExportManager:
         await self._notify_progress(task_id, task)
         return True
 
-    def get_download_queue(self, task_id: str, limit: int = 20) -> Dict[str, List[DownloadItem]]:
-        """获取任务的分段下载队列 (极致性能优化：三段式)"""
+    def get_download_queue(self, task_id: str, limit: int = 20) -> Dict[str, Any]:
+        """获取任务的分段下载队列 (支持总数统计与按需全量)"""
         task = self.tasks.get(task_id)
         if not task:
-            return {"downloading": [], "waiting": [], "completed": []}
+            return {
+                "downloading": [], "waiting": [], "completed": [],
+                "counts": {"downloading": 0, "waiting": 0, "completed": 0}
+            }
         
-        downloading = [i for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING][:limit]
-        waiting = [i for i in task.download_queue if i.status in [DownloadStatus.WAITING, DownloadStatus.PAUSED, DownloadStatus.FAILED]][:limit]
-        completed = [i for i in task.download_queue if i.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]][:limit]
+        all_downloading = [i for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING]
+        all_waiting = [i for i in task.download_queue if i.status in [DownloadStatus.WAITING, DownloadStatus.PAUSED, DownloadStatus.FAILED]]
+        all_completed = [i for i in task.download_queue if i.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]]
+        
+        # 如果 limit <= 0，则返回全量数据
+        res_limit = limit if limit > 0 else 999999
         
         return {
-            "downloading": downloading,
-            "waiting": waiting,
-            "completed": completed
+            "downloading": all_downloading[:res_limit],
+            "waiting": all_waiting[:res_limit],
+            "completed": all_completed[:res_limit],
+            "counts": {
+                "downloading": len(all_downloading),
+                "waiting": len(all_waiting),
+                "completed": len(all_completed)
+            }
         }
     async def _run_export(self, task: ExportTask):
         """执行导出任务"""
@@ -443,7 +454,7 @@ class ExportManager:
                     await self._notify_progress(task.id, task)
                     await self._process_download_queue(task, export_path)
                 
-                if task.status != TaskStatus.CANCELLED:
+                if task.status not in [TaskStatus.CANCELLED, TaskStatus.PAUSED]:
                     task.status = TaskStatus.COMPLETED
                     task.completed_at = datetime.now()
             
@@ -480,7 +491,7 @@ class ExportManager:
                 await self._notify_progress(task.id, task)
                 await self._process_download_queue(task, export_path)
             
-            if task.status != TaskStatus.CANCELLED:
+            if task.status not in [TaskStatus.CANCELLED, TaskStatus.PAUSED]:
                 task.status = TaskStatus.COMPLETED
                 task.completed_at = datetime.now()
         except asyncio.CancelledError:

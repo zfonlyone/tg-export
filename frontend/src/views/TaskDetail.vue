@@ -39,7 +39,7 @@
       <div class="monitor-column">
         <div class="column-header">
           <span class="c-title">⚡ 正在下载</span>
-          <span class="c-badge info">{{ queue.downloading?.length || 0 }}</span>
+          <span class="c-badge info">{{ queueCounts.downloading }}</span>
         </div>
         <div class="queue-list">
           <div v-for="item in queue.downloading" :key="item.id" class="queue-item downloading">
@@ -67,7 +67,10 @@
       <div class="monitor-column">
         <div class="column-header">
           <span class="c-title">⏳ 等待队列</span>
-          <span class="c-badge warning">{{ queue.waiting?.length || 0 }}</span>
+          <div class="header-right-tools">
+            <span class="c-badge warning">{{ queueCounts.waiting }}</span>
+            <button @click="toggleViewAll('waiting')" class="toggle-all-btn">{{ viewAll.waiting ? '显示精简' : '查看全部' }}</button>
+          </div>
         </div>
         <div class="queue-list">
           <div v-for="item in queue.waiting" :key="item.id" class="queue-item">
@@ -92,7 +95,10 @@
       <div class="monitor-column">
         <div class="column-header">
           <span class="c-title">✅ 最近完成</span>
-          <span class="c-badge success">{{ queue.completed?.length || 0 }}</span>
+          <div class="header-right-tools">
+            <span class="c-badge success">{{ queueCounts.completed }}</span>
+            <button @click="toggleViewAll('completed')" class="toggle-all-btn">{{ viewAll.completed ? '显示精简' : '查看全部' }}</button>
+          </div>
         </div>
         <div class="queue-list">
           <div v-for="item in queue.completed" :key="item.id" class="queue-item completed">
@@ -115,7 +121,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 
@@ -125,6 +131,8 @@ const taskId = route.params.id
 
 const task = ref({})
 const queue = ref({ downloading: [], waiting: [], completed: [] })
+const queueCounts = ref({ downloading: 0, waiting: 0, completed: 0 })
+const viewAll = reactive({ waiting: false, completed: false })
 let refreshTimer = null
 
 function getAuthHeader() {
@@ -133,18 +141,45 @@ function getAuthHeader() {
 
 async function fetchData() {
   try {
+    // 如果有任意板块需要查看全部，则传递 limit: 0 (后端对应全量)
+    const currentLimit = (viewAll.waiting || viewAll.completed) ? 0 : 20
+    
     const [taskRes, queueRes] = await Promise.all([
       axios.get(`/api/export/${taskId}`, { headers: getAuthHeader() }),
-      axios.get(`/api/export/${taskId}/downloads?limit=20`, { headers: getAuthHeader() })
+      axios.get(`/api/export/${taskId}/downloads`, { 
+        params: { limit: currentLimit }, 
+        headers: getAuthHeader() 
+      })
     ])
+    
     task.value = taskRes.data
-    queue.value = queueRes.data
+    const newData = queueRes.data
+    
+    // 性能优化：只有在 Downloading 或者 Counts 改变时才全量更新
+    // 下载中的永远更新 (进度/速度变化频繁)
+    queue.value.downloading = newData.downloading
+    queueCounts.value = newData.counts
+    
+    // Waiting 和 Completed 列表：如果 count 没变，且 IDs 也没变（这里简化为 count 检查 + viewAll 切换）
+    // 只有在 count 变化（说明有文件完成或新加入）或 viewAll 状态切换时才替换列表
+    if (viewAll.waiting || queue.value.waiting.length !== newData.waiting.length) {
+      queue.value.waiting = newData.waiting
+    }
+    if (viewAll.completed || queue.value.completed.length !== newData.completed.length) {
+      queue.value.completed = newData.completed
+    }
+    
   } catch (err) {
     console.error('获取详情失败:', err)
     if (err.response?.status === 404) {
       router.push('/tasks')
     }
   }
+}
+
+function toggleViewAll(type) {
+  viewAll[type] = !viewAll[type]
+  fetchData() // 立即触发一次全量拉取
 }
 
 // 任务操作
@@ -259,6 +294,25 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
   justify-content: space-between;
   align-items: center;
 }
+.header-right-tools {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.toggle-all-btn {
+  background: none;
+  border: none;
+  color: #3b82f6;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+.toggle-all-btn:hover {
+  background: #eff6ff;
+}
 .c-title { font-weight: 800; color: #18181b; font-size: 1rem; }
 .c-badge {
   font-size: 0.7rem; font-weight: 800; padding: 4px 10px; border-radius: 50px;
@@ -304,14 +358,5 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .action-btn:hover { background: #f4f4f5; transform: translateY(-2px); }
 .action-btn.danger { color: #ef4444; }
 
-/* Premium Buttons */
-.btn-premium {
-  padding: 10px 20px; border-radius: 12px; font-weight: 700; border: none; cursor: pointer; transition: 0.2s;
-}
-.btn-premium.sm { padding: 8px 16px; font-size: 0.85rem; }
-.btn-premium.success { background: #22c55e; color: white; }
-.btn-premium.warning { background: #f59e0b; color: white; }
-.btn-premium.danger { background: #ef4444; color: white; }
-.btn-premium.ghost-danger { background: transparent; border: 2px solid #fee2e2; color: #ef4444; }
-.btn-premium:hover { filter: brightness(1.1); transform: translateY(-2px); }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>

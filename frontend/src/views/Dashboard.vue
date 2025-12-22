@@ -34,13 +34,6 @@
           <div class="s-label">进行中</div>
         </div>
       </div>
-      <div class="stat-glass-card warning">
-        <div class="s-icon">💾</div>
-        <div class="s-data">
-          <div class="s-value">{{ formatSize(stats.totalSize) }}</div>
-          <div class="s-label">已保存数据</div>
-        </div>
-      </div>
     </div>
     
     <div class="dashboard-grid">
@@ -87,10 +80,6 @@
             <span class="t-icon">📋</span>
             <span class="t-label">下载管理</span>
           </router-link>
-          <a href="/exports" target="_blank" class="action-tile green">
-            <span class="t-icon">📂</span>
-            <span class="t-label">浏览文件</span>
-          </a>
         </div>
       </div>
 
@@ -246,7 +235,7 @@ onMounted(refreshStatus)
 /* Stats Container */
 .stats-container {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 20px;
   margin-bottom: 30px;
 }
@@ -362,7 +351,7 @@ onMounted(refreshStatus)
 /* Action Tiles */
 .action-tiles {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 12px;
 }
 
