@@ -235,10 +235,11 @@ async def get_failed_downloads(
 async def get_download_queue(
     task_id: str,
     limit: int = 20,
+    reversed_order: bool = False,
     current_user: User = Depends(get_current_user)
 ):
-    """获取分段下载队列 (三段式：下载中、等待中、已完成)"""
-    queue_data = export_manager.get_download_queue(task_id, limit=limit)
+    """获取分段下载队列 (支持倒序切换)"""
+    queue_data = export_manager.get_download_queue(task_id, limit=limit, reversed_order=reversed_order)
     return queue_data
 
 
@@ -264,19 +265,6 @@ async def retry_all_failed(
         return {"status": "ok", "message": f"已重置 {count} 个失败文件"}
     
     raise HTTPException(status_code=400, detail="没有失败的文件")
-
-
-@router.post("/export/{task_id}/download/{item_id}/pause")
-async def pause_download_item(
-    task_id: str,
-    item_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    """暂停单个下载项"""
-    success = await export_manager.pause_download_item(task_id, item_id)
-    if success:
-        return {"status": "ok", "message": "已暂停"}
-    raise HTTPException(status_code=400, detail="暂停失败")
 
 
 @router.post("/export/{task_id}/download/{item_id}/pause")

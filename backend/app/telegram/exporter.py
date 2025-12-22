@@ -386,27 +386,38 @@ class ExportManager:
         await self._notify_progress(task_id, task)
         return True
 
-    def get_download_queue(self, task_id: str, limit: int = 20) -> Dict[str, Any]:
-        """获取任务的分段下载队列 (支持总数统计与按需全量)"""
+    def get_download_queue(self, task_id: str, limit: int = 20, reversed_order: bool = False) -> Dict[str, Any]:
+        """获取任务的分段下载队列 (支持倒序切换)"""
         task = self.tasks.get(task_id)
         if not task:
             return {
-                "downloading": [], "waiting": [], "completed": [],
-                "counts": {"downloading": 0, "waiting": 0, "completed": 0}
+                "downloading": [], "waiting": [], "failed": [], "completed": [],
+                "counts": {"active": 0, "waiting": 0, "failed": 0, "completed": 0}
             }
         
         # 统一列表逻辑：正在下载中包含 DOWNLOADING 和 PAUSED
-        # 这样前端只需展示两个大类：活动中 (Active) 和 已完成 (Completed)
         all_active = [i for i in task.download_queue if i.status in [DownloadStatus.DOWNLOADING, DownloadStatus.PAUSED]]
         all_waiting = [i for i in task.download_queue if i.status in [DownloadStatus.WAITING]]
         all_failed = [i for i in task.download_queue if i.status == DownloadStatus.FAILED]
         all_completed = [i for i in task.download_queue if i.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]]
         
+        # 排序支持 (默认按 ID 升序)
+        if reversed_order:
+            all_active.sort(key=lambda x: x.message_id, reverse=True)
+            all_waiting.sort(key=lambda x: x.message_id, reverse=True)
+            all_failed.sort(key=lambda x: x.message_id, reverse=True)
+            all_completed.sort(key=lambda x: x.message_id, reverse=True)
+        else:
+            all_active.sort(key=lambda x: x.message_id)
+            all_waiting.sort(key=lambda x: x.message_id)
+            all_failed.sort(key=lambda x: x.message_id)
+            all_completed.sort(key=lambda x: x.message_id)
+
         # 如果 limit <= 0，则返回全量数据
         res_limit = limit if limit > 0 else 999999
         
         return {
-            "downloading": all_active[:res_limit], # 兼容旧接口命名，实为 Active
+            "downloading": all_active[:res_limit], 
             "waiting": all_waiting[:res_limit],
             "failed": all_failed[:res_limit],
             "completed": all_completed[:res_limit],
@@ -622,13 +633,23 @@ class ExportManager:
             # 日志：记录下载路径
             logger.info(f"任务 {task.id[:8]}: 开始执行 download_media -> '{item.file_name}' (Size: {item.file_size})")
             
+            # [Adaptive Concurrency] 限速触发时的回调
+            async def on_flood_wait_cb(delay_secs):
+                old_val = task.current_max_concurrent_downloads
+                # 一旦触发限速，立即将并发减半，最低为 1
+                task.current_max_concurrent_downloads = max(1, (task.current_max_concurrent_downloads or 1) // 2)
+                task.consecutive_success_count = 0 # 重置成功计数，重新开始观察稳定性
+                logger.warning(f"任务 {task.id[:8]}: 检测到 {delay_secs}s 限速，动态降速: {old_val} -> {task.current_max_concurrent_downloads}")
+                await self._notify_progress(task.id, task)
+
             try:
                 success, downloaded_path, failure_info = await retry_manager.download_with_retry(
                     download_func=telegram_client.download_media,
                     message=msg,
                     file_path=temp_file_path,
                     refresh_message_func=telegram_client.get_message_by_id,
-                    progress_callback=progress_cb
+                    progress_callback=progress_cb,
+                    on_flood_wait_callback=on_flood_wait_cb
                 )
             except asyncio.TimeoutError:
                 logger.error(f"任务 {task.id[:8]}: 下载文件 {item.file_name} (ID: {item.id}) 严重超时 (TimeoutError)")
@@ -740,22 +761,21 @@ class ExportManager:
         if task.id not in self._active_download_tasks:
             self._active_download_tasks[task.id] = set()
 
-        # 全局启动速率控制
-        import time
-        self._last_global_start_time = 0
-        global_start_lock = asyncio.Lock()
+        # [Adaptive Concurrency] 初始化动态并发状态
+        if task.current_max_concurrent_downloads is None:
+            task.current_max_concurrent_downloads = options.max_concurrent_downloads
+            
+        import random
 
         async def worker_logic(worker_id: int):
             """工协程逻辑"""
             logger.info(f"任务 {task.id[:8]}: 下载工协程 #{worker_id} 启动")
             
-            # [FIX] 全局平滑启动控制：仅在 Worker 首次启动时排队等待，避免在循环内导致序列化
             try:
                 async with global_start_lock:
                     now = time.time()
                     wait_time = max(0, self._last_global_start_time + 3 - now)
                     if wait_time > 0:
-                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 启动排队，等待 {wait_time:.1f}s...")
                         await asyncio.sleep(wait_time)
                     self._last_global_start_time = time.time()
             except Exception as e:
@@ -766,31 +786,58 @@ class ExportManager:
                 if task.status == TaskStatus.CANCELLED:
                     break
                 
-                # 2. 如果任务暂停，阻塞在这里
+                # 2. [Adaptive Concurrency] 检查当前并发槽位是否允许此 Worker 运行
+                # 如果当前 Worker ID 超过了动态调整后的并发上限，则进入深度睡眠等待恢复
+                while worker_id >= (task.current_max_concurrent_downloads or 1) and task.status != TaskStatus.CANCELLED:
+                    await asyncio.sleep(5)
+                
+                # 3. 如果任务暂停，阻塞在这里
                 while self.is_paused(task.id) and task.status != TaskStatus.CANCELLED:
                     await asyncio.sleep(1)
                 
                 if task.status == TaskStatus.CANCELLED:
                     break
                 
-                # 3. 从队列取出一个待下载项
+                # 4. 从队列取出一个待下载项
                 try:
-                    # 使用非阻塞获取，如果队列空了则退出
                     item = queue.get_nowait()
                 except asyncio.QueueEmpty:
-                    # 检查是否队列真正结束
                     break
                 
-                # 4. 执行下载
+                # 5. 执行下载
                 try:
-                    # 调用核心下载逻辑
+                    # 记录下载前状态，用于捕获限速
                     await self._download_item_worker(task, item, export_path)
                     
-                    # 下载完成后等 5s 再申请下载下一个任务 (用户需求：冷却 5s)
+                    # [Adaptive Concurrency] 成功下载后尝试恢复并发
+                    # 如果没有异常（即 success 为 True 且没触发 FloodWait），则增加连续成功计数
+                    if item.status == DownloadStatus.COMPLETED:
+                        task.consecutive_success_count += 1
+                        
+                        # 每连续成功 15 个文件，尝试恢复 1 个并发槽位
+                        if task.consecutive_success_count >= 15:
+                            if (task.current_max_concurrent_downloads or 1) < options.max_concurrent_downloads:
+                                old_val = task.current_max_concurrent_downloads
+                                task.current_max_concurrent_downloads += 1
+                                logger.info(f"任务 {task.id[:8]}: 运行稳定，自动恢复并发: {old_val} -> {task.current_max_concurrent_downloads}")
+                            task.consecutive_success_count = 0
+                    
+                    # 6. [Random Jitter] 下载完成后随机冷却 (3~10s)
                     if task.status != TaskStatus.CANCELLED and not self.is_paused(task.id):
-                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 下载完成，进入 5 秒冷却...")
-                        await asyncio.sleep(5)
+                        jitter = random.uniform(3.0, 10.0)
+                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 下载完成，进入 {jitter:.1f}s 随机冷却...")
+                        await asyncio.sleep(jitter)
                 except Exception as e:
+                    # 如果在这里捕获到直接异常，重置成功计数
+                    task.consecutive_success_count = 0
+                    
+                    # 如果在这里捕获到 FloodWait（虽重试管理器会先处理），确保并发降低
+                    err_str = str(e).lower()
+                    if "flood" in err_str or "wait" in err_str:
+                        old_val = task.current_max_concurrent_downloads
+                        task.current_max_concurrent_downloads = max(1, (task.current_max_concurrent_downloads or 1) - 1)
+                        logger.warning(f"检测到限速，动态降低并发: {old_val} -> {task.current_max_concurrent_downloads}")
+                    
                     logger.error(f"Worker #{worker_id} 下载出错: {e}")
                 finally:
                     queue.task_done()

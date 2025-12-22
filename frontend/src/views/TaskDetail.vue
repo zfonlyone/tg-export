@@ -75,6 +75,10 @@
           <button class="tab-btn" :class="{ active: currentTab === 'completed' }" @click="currentTab = 'completed'">已完成</button>
         </div>
         <div class="header-right-tools">
+          <button @click="toggleSort" class="tab-btn sort-btn" :title="reversedOrder ? '当前为倒序' : '当前为正序'">
+            {{ reversedOrder ? '🔃 倒序' : '🔃 正序' }}
+          </button>
+          <div class="v-divider"></div>
           <button @click="toggleViewAll" class="toggle-all-btn">{{ viewAll ? '显示精简' : '查看全部' }}</button>
         </div>
       </div>
@@ -99,12 +103,17 @@
             </div>
           </div>
           <div class="item-actions">
+            <!-- 活动/暂停项目：新增重试按钮 -->
+            <button v-if="['downloading', 'paused', 'waiting'].includes(item.status)" @click="retryItem(item.id)" class="action-btn" title="重新下载此文件">🔄</button>
+            
             <!-- 正在下载或等待中：暂停 -->
             <button v-if="['downloading', 'waiting'].includes(item.status)" @click="pauseItem(item.id)" class="action-btn" title="暂停">⏸</button>
             <!-- 已暂停：恢复 -->
             <button v-if="item.status === 'paused'" @click="resumeItem(item.id)" class="action-btn" title="恢复">▶</button>
-            <!-- 失败或已完成：重试 -->
+            
+            <!-- 失败或已完成：原有的重试按钮 -->
             <button v-if="['failed', 'completed', 'skipped'].includes(item.status)" @click="retryItem(item.id)" class="action-btn" title="重试/重新下载">🔄</button>
+            
             <!-- 通用：取消/跳过 -->
             <button @click="cancelItem(item.id)" class="action-btn danger" title="取消/跳过">✖</button>
           </div>
@@ -131,6 +140,7 @@ const queue = ref({ downloading: [], waiting: [], failed: [], completed: [] })
 const queueCounts = ref({ active: 0, waiting: 0, failed: 0, completed: 0 })
 const currentTab = ref('active')
 const viewAll = ref(false)
+const reversedOrder = ref(false)
 let refreshTimer = null
 
 function getAuthHeader() {
@@ -152,7 +162,10 @@ async function fetchData() {
     const [taskRes, queueRes] = await Promise.all([
       axios.get(`/api/export/${taskId}`, { headers: getAuthHeader() }),
       axios.get(`/api/export/${taskId}/downloads`, { 
-        params: { limit: currentLimit }, 
+        params: { 
+          limit: currentLimit,
+          reversed_order: reversedOrder.value
+        }, 
         headers: getAuthHeader() 
       })
     ])
@@ -175,6 +188,11 @@ async function fetchData() {
 
 function toggleViewAll() {
   viewAll.value = !viewAll.value
+  fetchData()
+}
+
+function toggleSort() {
+  reversedOrder.value = !reversedOrder.value
   fetchData()
 }
 
@@ -311,7 +329,20 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
 }
+
+.sort-btn {
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #e4e4e7;
+  margin-right: 8px;
+}
+.sort-btn:hover { border-color: #3b82f6; color: #3b82f6; }
+
+.v-divider { width: 1px; height: 20px; background: #e4e4e7; margin: 0 12px; }
 
 .filter-tabs {
   display: flex;

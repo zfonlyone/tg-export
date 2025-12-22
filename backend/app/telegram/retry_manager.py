@@ -109,6 +109,7 @@ class DownloadRetryManager:
         file_path: Path,
         refresh_message_func: Optional[Callable] = None,
         progress_callback: Optional[Callable] = None,
+        on_flood_wait_callback: Optional[Callable[[int], Any]] = None,
     ) -> tuple[bool, Optional[str], Optional[dict]]:
         """
         带重试的下载函数
@@ -172,6 +173,17 @@ class DownloadRetryManager:
                 # 还有重试机会
                 if attempt < self.max_retries - 1:
                     delay = self.get_retry_delay(attempt, e)
+                    
+                    # [Adaptive Concurrency] 触发回调通知外部实时调整
+                    if error_type == ErrorType.FLOOD_WAIT and on_flood_wait_callback:
+                        try:
+                            if asyncio.iscoroutinefunction(on_flood_wait_callback):
+                                await on_flood_wait_callback(int(delay))
+                            else:
+                                on_flood_wait_callback(int(delay))
+                        except Exception as cb_err:
+                            logger.error(f"限速回调执行失败: {cb_err}")
+
                     logger.info(f"等待 {delay:.1f} 秒后重试...")
                     await asyncio.sleep(delay)
         
