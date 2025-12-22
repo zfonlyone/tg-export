@@ -73,7 +73,8 @@ class TelegramClient:
                 device_model="TG Export Web",
                 system_version="Linux",
                 sleep_threshold=60,
-                workers=20 # [FIX] 提升内部线程数，处理更高并发
+                workers=20, # [FIX] 提升内部线程数，处理更高并发
+                max_concurrent_transmissions=10  # [FIX v1.3.9] 关键参数：允许最多 10 个并发传输
             )
             print(f"[TG] 客户端已初始化: api_id={api_id}")
     
@@ -93,6 +94,18 @@ class TelegramClient:
                     except Exception as e:
                         print(f"[TG] 连接异常: {e}")
                         raise
+
+    def set_max_concurrent_transmissions(self, value: int):
+        """动态设置最大并发传输数 (v1.4.0)
+        
+        允许用户通过 Web UI 配置的 max_concurrent_downloads 生效。
+        Pyrogram 的 Client 对象在运行时支持修改此属性。
+        """
+        if self._client:
+            self._client.max_concurrent_transmissions = value
+            print(f"[TG] 已设置最大并发传输数: {value}")
+        else:
+            print(f"[TG] 警告: 客户端未初始化，无法设置并发数")
     
     async def send_code(self, phone: str) -> str:
         """发送验证码"""

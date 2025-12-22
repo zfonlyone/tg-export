@@ -712,6 +712,10 @@ class ExportManager:
         """处理下载队列 (Worker Pool 模式)"""
         options = task.options
         
+        # [v1.4.0] 动态设置 Pyrogram 并发传输数，使 UI 配置生效
+        telegram_client.set_max_concurrent_transmissions(options.max_concurrent_downloads)
+        logger.info(f"任务 {task.id[:8]}: 并发下载数设置为 {options.max_concurrent_downloads}")
+        
         # 按 message_id 升序排序
         task.download_queue.sort(key=lambda x: x.message_id)
         

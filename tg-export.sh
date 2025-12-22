@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# TG Export 一键部署脚本 v1.3.8
+# TG Export 一键部署脚本 v1.4.0
 # 功能: 安装/卸载 TG Export + Nginx + SSL证书管理 + UFW端口
 # 新增: 下载重试机制 + 暂停/恢复 + 失败记录 + AList 风格 UI + 速率限制
 # 更新: 目录覆盖 + 并发优化 (3s/5s) + 事件循环修复 (RuntimeError) + 空包检测优化
