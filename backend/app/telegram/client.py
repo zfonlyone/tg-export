@@ -459,34 +459,24 @@ class TelegramClient:
 
 def apply_pyrogram_patch():
     """
-    强制拦截 Pyrogram 内部限速睡眠。
-    即使设置了 sleep_threshold=0，Pyrogram 在处理某些 DC 的媒体下载时仍可能内部睡眠。
-    此补丁通过在 invoke 期间强制将 threshold 设为 -1，确保所有 FloodWait 都能即时抛出异常。
+    深度补丁：强行拦截 Pyrogram 内部限速睡眠逻辑。
+    即使 sleep_threshold=0，某些情况下 Pyrogram Session 仍可能触发内部 sleep。
+    此补丁直接重写 Session.handle_flood，确保一旦触发 FloodWait 立即向上层抛出异常，
+    从而激活 ExportManager 的自适应降压逻辑。
     """
     import pyrogram.session.session as pyrogram_session
     from pyrogram.errors import FloodWait
     
-    _original_invoke = pyrogram_session.Session.invoke
+    # 记录原始方法以便参考 (可选)
+    # _original_handle_flood = pyrogram_session.Session.handle_flood
 
-    async def patched_invoke(self, query, *args, **kwargs):
-        # 记录原始阈值
-        old_threshold = 0
-        has_client = hasattr(self, "client") and self.client
-        
-        if has_client:
-            old_threshold = self.client.sleep_threshold
-            # 强制设为负数，确保 amount > threshold 恒成立
-            self.client.sleep_threshold = -1
-            
-        try:
-            return await _original_invoke(self, query, *args, **kwargs)
-        finally:
-            # 还原阈值
-            if has_client:
-                self.client.sleep_threshold = old_threshold
+    async def patched_handle_flood(self, flood_wait):
+        # 拒绝进入任何内部睡眠，直接把锅甩级上层业务逻辑处理
+        logger.warning(f"硬拦截补丁拦截到限速信号 ({flood_wait.value}s)，强制抛出异常以激活降速引擎。")
+        raise flood_wait
 
-    pyrogram_session.Session.invoke = patched_invoke
-    logger.info("已应用 Pyrogram Session.invoke 限速硬拦截补丁")
+    pyrogram_session.Session.handle_flood = patched_handle_flood
+    logger.info("已应用 Pyrogram Session.handle_flood 深度限速拦截补丁")
 
 # 全局实例
 telegram_client = TelegramClient()

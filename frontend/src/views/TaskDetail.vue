@@ -252,10 +252,10 @@ async function retryItem(itemId) { await axios.post(`/api/export/${taskId}/retry
 
 function formatSize(bytes) {
   if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let i = 0
-  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++ }
-  return bytes.toFixed(1) + ' ' + units[i]
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i]
 }
 
 function formatSpeed(bps) {

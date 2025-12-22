@@ -272,13 +272,17 @@ class ExportManager:
         
         logger.info(f"正在恢复/重跑任务: '{task.name}' (ID: {task_id[:8]}...)")
         
-        # 将所有暂停或失败的下载项恢复为等待状态 (已完成的不再重下)
+        # 将所有暂停或失败的下载项恢复为等待状态
         reset_count = 0
         for item in task.download_queue:
             if item.status in [DownloadStatus.PAUSED, DownloadStatus.FAILED]:
+                # 如果是手动暂停的任务，保持其进度显示，只改状态为等待
+                # 如果是执行失败的任务，则重置进度以重新开始
+                if item.status == DownloadStatus.FAILED:
+                    item.progress = 0
+                    item.downloaded_size = 0
+                
                 item.status = DownloadStatus.WAITING
-                item.progress = 0
-                item.downloaded_size = 0
                 item.speed = 0
                 reset_count += 1
         
@@ -671,79 +675,95 @@ class ExportManager:
                     # 暂停的任务和等待任务不计算在此内，因为 progress_cb 只在活跃下载时被调用
                     if item.status == DownloadStatus.DOWNLOADING and (now - last_update['last_progress_time'] > 300):
                         logger.warning(f"检测到下载卡死: {item.file_name} (5分钟无进度增长)")
-                        raise asyncio.TimeoutError("Download stuck for 5 minutes")
-
-                    # 检查是否在此期间被取消了
-                    if item.status == DownloadStatus.SKIPPED:
-                        # 抛出取消异常以中止 download_media
-                        raise asyncio.CancelledError("Item was skipped by user")
-                    
-                    if item.status == DownloadStatus.PAUSED:
-                         raise asyncio.CancelledError("Item was paused by user")
-
-                    bytes_diff = current - last_update['size']
-                    item.speed = bytes_diff / elapsed if elapsed > 0 else 0
-                    last_update['size'] = current
-                    last_update['time'] = now
-                    
-                    # [NEW] 并行下载时，安全地通知单个文件的进度变化 (使用 call_soon_threadsafe 修复 loop 错误)
-                    if bytes_diff > 0:
-                        try:
-                            loop.call_soon_threadsafe(
-                                lambda: asyncio.create_task(self._notify_progress(task.id, task))
-                            )
-                        except Exception as e:
-                            # 即使通知失败也不要中断任务
-                            pass
-            # 日志：记录下载路径
-            logger.info(f"任务 {task.id[:8]}: 开始执行 download_media -> '{item.file_name}' (Size: {item.file_size})")
+            import os
             
-            # [Adaptive Concurrency] 限速触发时的回调
-            async def on_flood_wait_cb(delay_secs):
-                task.last_flood_wait_time = datetime.now()
-                old_val = task.current_max_concurrent_downloads or options.max_concurrent_downloads
-                
-                # [Fast Response] 触发限速墙后，更果断地调低并发上限 (减 2 或降至 1)
-                new_val = max(1, old_val - 2)
-                task.current_max_concurrent_downloads = new_val
-                task.consecutive_success_count = 0 
-                
-                # 同步更新底层 Pyrogram 限额
-                telegram_client.set_max_concurrent_transmissions(new_val)
-                
-                # [Optimization] 激进压制：暂停所有超出新并发限制的正在下载项
-                downloading_items = [i for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING]
-                if len(downloading_items) > new_val:
-                    excess_count = len(downloading_items) - new_val
-                    paused_count = 0
-                    # 从后往前暂停
-                    for i in reversed(task.download_queue):
-                        if i.status == DownloadStatus.DOWNLOADING:
-                            logger.warning(f"触碰限速墙，系统紧急暂停并发项: {i.file_name}")
-                            i.status = DownloadStatus.PAUSED
-                            paused_count += 1
-                            if paused_count >= excess_count:
-                                break
-                
-                logger.warning(f"任务 {task.id[:8]}: 检测到限速屏障，激进压制并发: {old_val} -> {new_val}")
-                await self._notify_progress(task.id, task)
+            # [Optimization] 断点续传：初始化时先检测磁盘上已有的临时文件大小
+            disk_size = os.path.getsize(temp_file_path) if temp_file_path.exists() else 0
+            if disk_size > 0:
+                item.downloaded_size = disk_size
+                item.progress = (disk_size / item.file_size) * 100 if item.file_size > 0 else 0
+                logger.info(f"任务 {task.id[:8]}: 检测到断点续传文件 '{item.file_name}', 已下载: {disk_size} 字节")
 
-            try:
-                success, downloaded_path, failure_info = await retry_manager.download_with_retry(
-                    download_func=telegram_client.download_media,
-                    message=msg,
-                    file_path=temp_file_path,
-                    refresh_message_func=telegram_client.get_message_by_id,
-                    progress_callback=progress_cb,
-                    on_flood_wait_callback=on_flood_wait_cb
-                )
-            except asyncio.TimeoutError:
-                logger.error(f"任务 {task.id[:8]}: 下载文件 {item.file_name} (ID: {item.id}) 严重超时 (TimeoutError)")
-                success, downloaded_path = False, None
-                failure_info = {
-                    "error_type": "timeout",
-                    "error_message": "Request timed out during download"
+            # [Optimization] 如果磁盘文件已经完整，直接跳过下载
+            if item.file_size > 0 and disk_size == item.file_size:
+                logger.info(f"任务 {task.id[:8]}: 文件 '{item.file_name}' 在临时目录已完整，跳过下载阶段。")
+                success, downloaded_path, failure_info = True, temp_file_path, None
+            else:
+                last_update = {
+                    'size': item.downloaded_size, 
+                    'time': time.time(),
+                    'last_progress_time': time.time()  # 用于卡死检测
                 }
+                loop = asyncio.get_running_loop()
+                
+                def progress_cb(current, total):
+                    now = time.time()
+                    # 更新进度
+                    item.progress = (current / total) * 100 if total > 0 else 0
+                    item.downloaded_size = current
+                    
+                    # 卡死检测逻辑
+                    if current > last_update['size']:
+                        last_update['size'] = current
+                        last_update['last_progress_time'] = now
+                    elif now - last_update['last_progress_time'] > 300: # 5分钟无进度
+                        logger.error(f"任务 {task.id[:8]}: 文件 {item.file_name} 下载卡死 (5分钟无进度)")
+                        raise asyncio.TimeoutError("Download stuck for more than 5 minutes")
+
+                    # 用户手动暂停检测 (关键：通过异常强行中止 Pyrogram 内部循环)
+                    if item.status == DownloadStatus.PAUSED or item.is_manually_paused:
+                        raise asyncio.CancelledError("Item was paused by user")
+
+                # 日志：记录下载路径
+                logger.info(f"任务 {task.id[:8]}: 开始执行 download_media -> '{item.file_name}' (Size: {item.file_size})")
+                
+                # [Adaptive Concurrency] 限速触发时的回调
+                async def on_flood_wait_cb(delay_secs):
+                    task.last_flood_wait_time = datetime.now()
+                    old_concurrency = task.current_max_concurrent_downloads or 1
+                    new_concurrency = max(1, old_concurrency - 1)
+                    
+                    if old_concurrency > 1:
+                        task.current_max_concurrent_downloads = new_concurrency
+                        # 同步降低客户端并发限额
+                        telegram_client.set_max_concurrent_transmissions(new_concurrency)
+                        
+                        # 强行暂停队尾项
+                        downloading_items = [i for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING]
+                        if len(downloading_items) > new_concurrency:
+                            excess_count = len(downloading_items) - new_concurrency
+                            paused_count = 0
+                            for i in reversed(task.download_queue):
+                                if i.status == DownloadStatus.DOWNLOADING and i.id != item.id:
+                                    logger.warning(f"触发自适应降压：暂停额外项 {i.file_name}")
+                                    i.status = DownloadStatus.PAUSED
+                                    paused_count += 1
+                                    if paused_count >= excess_count: break
+                        await self._notify_progress(task.id, task)
+
+                try:
+                    success, downloaded_path, failure_info = await retry_manager.download_with_retry(
+                        download_func=telegram_client.download_media,
+                        message=msg,
+                        file_path=temp_file_path,
+                        refresh_message_func=telegram_client.get_message_by_id,
+                        progress_callback=progress_cb,
+                        on_flood_wait_callback=on_flood_wait_cb
+                    )
+                except asyncio.TimeoutError:
+                    logger.error(f"任务 {task.id[:8]}: 下载文件 {item.file_name} (ID: {item.id}) 严重超时 (TimeoutError)")
+                    success, downloaded_path = False, None
+                    failure_info = {
+                        "error_type": "timeout",
+                        "error_message": "Request timed out during download"
+                    }
+
+            # [CRITICAL FIX] 检查是否是因为暂停/取消而结束
+            # 如果 item.status 被标记为 PAUSED，说明是被 progress_cb 里的异常中止的
+            # 这种情况下 success 可能为 True (Pyrogram 返回了部分文件路径)，但我们绝不应执行完整性校验
+            if item.status == DownloadStatus.PAUSED or item.is_manually_paused:
+                logger.info(f"任务 {task.id[:8]}: 下载被用户或系统暂停，跳过校验阶段: {item.file_name}")
+                raise asyncio.CancelledError("Download skipped/paused")
 
             # 5. 下载结果校验与收尾
             if success and downloaded_path:
@@ -779,6 +799,10 @@ class ExportManager:
                         full_path.parent.mkdir(parents=True, exist_ok=True)
                         try: os.chmod(full_path.parent, 0o777)
                         except: pass
+                        # [Optimization] 重试下载后，如果目标目录已存在同名文件，执行覆盖移动
+                        if full_path.exists():
+                            try: os.remove(full_path)
+                            except: pass
                         shutil.move(str(downloaded_path), str(full_path))
                     
                     # 权限设置
@@ -789,6 +813,10 @@ class ExportManager:
                     full_path.parent.mkdir(parents=True, exist_ok=True)
                     try: os.chmod(full_path.parent, 0o777)
                     except: pass
+                    # [Optimization] 同上
+                    if full_path.exists():
+                        try: os.remove(full_path)
+                        except: pass
                     shutil.move(str(temp_file_path), str(full_path))
                     try: os.chmod(full_path, 0o777)
                     except: pass
@@ -883,6 +911,14 @@ class ExportManager:
 
             while True:
                 # 1. 检查任务是否已取消
+                if task.status == TaskStatus.CANCELLED:
+                    break
+                
+                # [NEW Compliance] 如果整体任务处于暂停状态，Worker 应在此挂起待命，禁止从队列中“申请”新下载项
+                # 直到用户手动点击“恢复”
+                while self.is_paused(task.id) and task.status != TaskStatus.CANCELLED:
+                    await asyncio.sleep(1)
+                
                 if task.status == TaskStatus.CANCELLED:
                     break
                 
