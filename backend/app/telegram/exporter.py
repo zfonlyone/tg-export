@@ -36,6 +36,7 @@ class ExportManager:
         self._progress_callbacks: Dict[str, List[Callable]] = {}
         self._paused_tasks: set = set()  # 暂停的任务ID
         self._resuming_tasks: set = set() # 正在恢复的任务ID (用于防止取消时重置状态)
+        self._task_queues: Dict[str, asyncio.Queue] = {} # 任务ID -> 异步队列
         self._tasks_file = settings.DATA_DIR / self.TASKS_FILE
         # 确保数据目录存在
         settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -62,8 +63,12 @@ class ExportManager:
                         elif task.status == TaskStatus.PAUSED:
                             self._paused_tasks.add(task.id)
                             logger.info(f"任务 '{task.name}' (ID: {task.id[:8]}...) 保持暂停状态")
-                        else:
-                            logger.info(f"任务 '{task.name}' (ID: {task.id[:8]}...) 状态: {task.status.value}")
+                        
+                        # 精确状态还原：将所有正在下载的项目重置为等待状态
+                        for item in task.download_queue:
+                            if item.status == DownloadStatus.DOWNLOADING:
+                                item.status = DownloadStatus.WAITING
+                                item.speed = 0
                             
                         self.tasks[task.id] = task
                     except Exception as e:
@@ -183,24 +188,23 @@ class ExportManager:
         return True
     
     async def resume_export(self, task_id: str) -> bool:
-        """恢复导出任务"""
+        """恢复导出任务 (支持重跑已完成/失败任务)"""
         task = self.tasks.get(task_id)
-        if not task or task.status not in [TaskStatus.PAUSED, TaskStatus.CANCELLED, TaskStatus.FAILED]:
+        if not task or task.status not in [TaskStatus.PAUSED, TaskStatus.CANCELLED, TaskStatus.FAILED, TaskStatus.COMPLETED]:
             logger.warning(f"无法恢复任务 {task_id[:8]}...: 任务不存在或状态不支持恢复 ({task.status if task else 'None'})")
             return False
         
-        logger.info(f"正在恢复任务: '{task.name}' (ID: {task_id[:8]}...)")
-        self._paused_tasks.discard(task_id)
-        task.status = TaskStatus.RUNNING
+        logger.info(f"正在恢复/重跑任务: '{task.name}' (ID: {task_id[:8]}...)")
         
-        # 将所有暂停的下载项恢复为等待状态
-        paused_count = sum(1 for item in task.download_queue if item.status == DownloadStatus.PAUSED)
+        # 将所有暂停或失败的下载项恢复为等待状态
+        reset_count = 0
         for item in task.download_queue:
-            if item.status == DownloadStatus.PAUSED:
+            if item.status in [DownloadStatus.PAUSED, DownloadStatus.FAILED]:
                 item.status = DownloadStatus.WAITING
+                reset_count += 1
         
-        if paused_count > 0:
-            logger.info(f"同时恢复了 {paused_count} 个已暂停的下载项")
+        if reset_count > 0:
+            logger.info(f"同时恢复了 {reset_count} 个待处理的下载项")
             
         await self._notify_progress(task_id, task)
         
@@ -222,9 +226,12 @@ class ExportManager:
         # 移除恢复标记
         self._resuming_tasks.discard(task_id)
         
-        # 启动新的下载队列处理任务
+        # 状态切换为运行中
+        self._paused_tasks.discard(task_id)
+        task.status = TaskStatus.RUNNING
+
+        # 启动处理逻辑
         self._running_tasks[task_id] = asyncio.create_task(self._restart_download_queue(task))
-        
         return True
     
     def _get_export_path(self, task: ExportTask) -> Path:
@@ -237,7 +244,7 @@ class ExportManager:
         return export_path
 
     async def retry_file(self, task_id: str, item_id: str) -> bool:
-        """重试单个文件"""
+        """重试单个文件 (支持重跑已完成项)"""
         task = self.tasks.get(task_id)
         if not task:
             return False
@@ -251,23 +258,19 @@ class ExportManager:
         if not target_item:
             return False
             
-        # 只能重试非完成状态的文件
-        if target_item.status == DownloadStatus.COMPLETED:
-            return False
-            
-        logger.info(f"重试文件: {target_item.file_name} (Task: {task.name})")
+        logger.info(f"重试或重跑文件: {target_item.file_name} (Task: {task.name})")
         
         # 重置状态
         target_item.status = DownloadStatus.WAITING
         target_item.error = None
         target_item.progress = 0
+        target_item.downloaded_size = 0
         target_item.speed = 0
         
-        # 如果任务正在运行 (有信号量存在)，立即触发下载
-        if task.id in self._task_semaphores:
-            export_path = self._get_export_path(task)
-            asyncio.create_task(self._download_item_worker(task, target_item, export_path))
-            logger.info("任务正在运行，已动态添加下载协程")
+        # 如果任务正在运行 (有队列存在)，将其加入队列
+        if task.id in self._task_queues:
+            self._task_queues[task.id].put_nowait(target_item)
+            logger.info("任务正在运行，已将文件重新加入下载队列")
         else:
             logger.info("任务未运行，文件状态已重置，将在下次任务启动时下载")
             
@@ -418,122 +421,119 @@ class ExportManager:
                 del self._running_tasks[task.id]
 
     async def _download_item_worker(self, task: ExportTask, item: DownloadItem, export_path: Path):
-        """单个文件的下载工作协程"""
+        """单个文件的下载核心逻辑 (由 Worker 调用)"""
         options = task.options
-        semaphore = self._task_semaphores.get(task.id)
-        if not semaphore:
-            return
 
-        # 获取当前协程任务并追踪
+        # 获取当前协程任务并追踪 (用于强制取消)
         current_task = asyncio.current_task()
         if current_task:
+            if task.id not in self._active_download_tasks:
+                self._active_download_tasks[task.id] = set()
             self._active_download_tasks[task.id].add(current_task)
         
         try:
-            async with semaphore:
-                if task.status == TaskStatus.CANCELLED or item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
-                    return
+            if task.status == TaskStatus.CANCELLED or item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
+                return
 
-                # 等待暂停状态结束 (整体任务暂停 或 个人文件暂停)
-                while (self.is_paused(task.id) or item.status == DownloadStatus.PAUSED) and task.status != TaskStatus.CANCELLED:
-                    await asyncio.sleep(1)
+            # 等待暂停状态结束 (整体任务暂停 或 个人文件暂停)
+            while (self.is_paused(task.id) or item.status == DownloadStatus.PAUSED) and task.status != TaskStatus.CANCELLED:
+                await asyncio.sleep(1)
+            
+            if task.status == TaskStatus.CANCELLED:
+                return
+
+            # 获取原始消息对象用于下载
+            msg = await telegram_client.get_message_by_id(item.chat_id, item.message_id)
+            if not msg:
+                item.status = DownloadStatus.FAILED
+                item.error = "无法获取消息对象"
+                return
+
+            # 智能延迟方案：减少 FloodWait
+            # 大文件(>10MB)延迟1秒，小文件延迟0.3秒
+            delay = 1.0 if item.file_size > 10 * 1024 * 1024 else 0.3
+            await asyncio.sleep(delay)
+
+            item.status = DownloadStatus.DOWNLOADING
+            full_path = export_path / item.file_path
+            
+            # 日志：记录下载路径
+            logger.info(f"开始下载文件: {item.file_name}")
+            
+            # 使用 temp 目录存放下载中的文件
+            temp_dir = Path("/tmp/tg-export-downloads")
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            temp_file_path = temp_dir / f"{item.id}_{full_path.name}"
+            
+            retry_manager = DownloadRetryManager(
+                max_retries=options.max_download_retries,
+                initial_delay=options.retry_delay
+            )
+            
+            # 速度计算需要的变量
+            import time
+            last_update = {'size': 0, 'time': time.time()}
+            
+            def progress_cb(current, total):
+                now = time.time()
+                elapsed = now - last_update['time']
                 
-                if task.status == TaskStatus.CANCELLED:
-                    return
-
-                # 获取原始消息对象用于下载
-                msg = await telegram_client.get_message_by_id(item.chat_id, item.message_id)
-                if not msg:
-                    item.status = DownloadStatus.FAILED
-                    item.error = "无法获取消息对象"
-                    return
-
-
-                # 智能延迟方案：减少 FloodWait
-                # 大文件(>10MB)延迟1秒，小文件延迟0.3秒
-                delay = 1.0 if item.file_size > 10 * 1024 * 1024 else 0.3
-                await asyncio.sleep(delay)
-
-                item.status = DownloadStatus.DOWNLOADING
-                full_path = export_path / item.file_path
+                item.downloaded_size = current
+                item.file_size = total
+                if total > 0:
+                    item.progress = (current / total) * 100
                 
-                # 日志：记录下载路径
-                logger.info(f"开始下载文件: {item.file_name}")
+                # 计算速度 (至少间隔 0.5 秒更新一次)
+                if elapsed >= 0.5:
+                    bytes_diff = current - last_update['size']
+                    item.speed = bytes_diff / elapsed if elapsed > 0 else 0
+                    last_update['size'] = current
+                    last_update['time'] = now
+            
+            success, downloaded, failure_info = await retry_manager.download_with_retry(
+                download_func=telegram_client.download_media,
+                message=msg,
+                file_path=temp_file_path,
+                refresh_message_func=telegram_client.get_message_by_id,
+                progress_callback=progress_cb
+            )
+            
+            if success and downloaded:
+                if temp_file_path.exists():
+                    # 确保目标目录存在
+                    full_path.parent.mkdir(parents=True, exist_ok=True)
+                    # 从 temp 移动到最终位置
+                    import shutil
+                    shutil.move(str(temp_file_path), str(full_path))
+                    logger.info(f"✅ 文件已保存: {full_path}")
+                item.status = DownloadStatus.COMPLETED
+                item.progress = 100.0
+                item.speed = 0  # 下载完成，速度归零
+                task.downloaded_media += 1
                 
-                # 使用 temp 目录存放下载中的文件
-                temp_dir = Path("/tmp/tg-export-downloads")
-                temp_dir.mkdir(parents=True, exist_ok=True)
-                temp_file_path = temp_dir / f"{item.id}_{full_path.name}"
-                
-                retry_manager = DownloadRetryManager(
-                    max_retries=options.max_download_retries,
-                    initial_delay=options.retry_delay
+                # 计算任务总速度 (只在完成时计算一次)
+                task.download_speed = sum(
+                    i.speed for i in task.download_queue 
+                    if i.status == DownloadStatus.DOWNLOADING
                 )
                 
-                # 速度计算需要的变量
-                import time
-                last_update = {'size': 0, 'time': time.time()}
-                
-                def progress_cb(current, total):
-                    now = time.time()
-                    elapsed = now - last_update['time']
-                    
-                    item.downloaded_size = current
-                    item.file_size = total
-                    if total > 0:
-                        item.progress = (current / total) * 100
-                    
-                    # 计算速度 (至少间隔 0.5 秒更新一次)
-                    if elapsed >= 0.5:
-                        bytes_diff = current - last_update['size']
-                        item.speed = bytes_diff / elapsed if elapsed > 0 else 0
-                        last_update['size'] = current
-                        last_update['time'] = now
-                
-                success, downloaded, failure_info = await retry_manager.download_with_retry(
-                    download_func=telegram_client.download_media,
-                    message=msg,
-                    file_path=temp_file_path,
-                    refresh_message_func=telegram_client.get_message_by_id,
-                    progress_callback=progress_cb
+                # 每完成一个下载，通知一次进度
+                await self._notify_progress(task.id, task)
+            elif failure_info:
+                item.status = DownloadStatus.FAILED
+                item.error = failure_info.get("error_message")
+                # 记录到任务的失败列表
+                from ..models import FailedDownload
+                failed_download = FailedDownload(
+                    message_id=item.message_id,
+                    chat_id=item.chat_id,
+                    file_name=item.file_name,
+                    error_type=failure_info["error_type"],
+                    error_message=failure_info["error_message"],
+                    retry_count=failure_info["retry_count"],
+                    last_retry=datetime.fromisoformat(failure_info["last_retry"])
                 )
-                
-                if success and downloaded:
-                    if temp_file_path.exists():
-                        # 确保目标目录存在
-                        full_path.parent.mkdir(parents=True, exist_ok=True)
-                        # 从 temp 移动到最终位置
-                        import shutil
-                        shutil.move(str(temp_file_path), str(full_path))
-                        logger.info(f"✅ 文件已保存: {full_path}")
-                    item.status = DownloadStatus.COMPLETED
-                    item.progress = 100.0
-                    item.speed = 0  # 下载完成，速度归零
-                    task.downloaded_media += 1
-                    
-                    # 计算任务总速度 (只在完成时计算一次)
-                    task.download_speed = sum(
-                        i.speed for i in task.download_queue 
-                        if i.status == DownloadStatus.DOWNLOADING
-                    )
-                    
-                    # 每完成一个下载，通知一次进度
-                    await self._notify_progress(task.id, task)
-                elif failure_info:
-                    item.status = DownloadStatus.FAILED
-                    item.error = failure_info.get("error_message")
-                    # 记录到任务的失败列表
-                    from ..models import FailedDownload
-                    failed_download = FailedDownload(
-                        message_id=item.message_id,
-                        chat_id=item.chat_id,
-                        file_name=item.file_name,
-                        error_type=failure_info["error_type"],
-                        error_message=failure_info["error_message"],
-                        retry_count=failure_info["retry_count"],
-                        last_retry=datetime.fromisoformat(failure_info["last_retry"])
-                    )
-                    task.failed_downloads.append(failed_download)
+                task.failed_downloads.append(failed_download)
 
         except asyncio.CancelledError:
             # 任务被取消（暂停或停止）
@@ -547,78 +547,114 @@ class ExportManager:
                 self._active_download_tasks[task.id].discard(current_task)
 
     async def _process_download_queue(self, task: ExportTask, export_path: Path):
-        """处理下载队列"""
+        """处理下载队列 (Worker Pool 模式)"""
         options = task.options
         
-        # 按 message_id 升序排序，先下载较早的消息
+        # 按 message_id 升序排序
         task.download_queue.sort(key=lambda x: x.message_id)
         
-        # 限制并发下载数
-        semaphore = asyncio.Semaphore(options.max_concurrent_downloads)
-        self._task_semaphores[task.id] = semaphore
+        # 初始化任务队列
+        queue = asyncio.Queue()
+        self._task_queues[task.id] = queue
+        
+        # 将待下载项加入队列
+        for item in task.download_queue:
+            if item.status in [DownloadStatus.WAITING, DownloadStatus.PAUSED, DownloadStatus.FAILED]:
+                item.status = DownloadStatus.WAITING
+                queue.put_nowait(item)
         
         # 初始化任务追踪集合
         if task.id not in self._active_download_tasks:
             self._active_download_tasks[task.id] = set()
 
-        # 启动初始下载任务
-        for item in task.download_queue:
-            if item.status != DownloadStatus.COMPLETED and item.status != DownloadStatus.SKIPPED:
-                asyncio.create_task(self._download_item_worker(task, item, export_path))
+        async def worker_logic(worker_id: int):
+            """工协程逻辑"""
+            logger.info(f"任务 {task.id[:8]}: 下载工协程 #{worker_id} 启动")
+            while True:
+                # 1. 检查任务是否已取消
+                if task.status == TaskStatus.CANCELLED:
+                    break
+                
+                # 2. 如果任务暂停，阻塞在这里
+                while self.is_paused(task.id) and task.status != TaskStatus.CANCELLED:
+                    await asyncio.sleep(1)
+                
+                if task.status == TaskStatus.CANCELLED:
+                    break
+                
+                # 3. 从队列取出一个待下载项
+                try:
+                    # 使用非阻塞获取，如果队列空了则退出
+                    item = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    # 检查是否队列真正结束
+                    break
+                
+                # 4. 执行下载
+                try:
+                    await self._download_item_worker(task, item, export_path)
+                except Exception as e:
+                    logger.error(f"Worker #{worker_id} 下载出错: {e}")
+                finally:
+                    queue.task_done()
+            
+            logger.info(f"任务 {task.id[:8]}: 下载工协程 #{worker_id} 正常退出")
 
-        # 速度更新任务 - 独立运行，避免阻塞下载 wait 循环
+        # 启动工作协程池
+        worker_tasks = []
+        for i in range(options.max_concurrent_downloads):
+            t = asyncio.create_task(worker_logic(i))
+            worker_tasks.append(t)
+            self._active_download_tasks[task.id].add(t)
+
+        # 速度更新任务
         async def speed_updater():
             while True:
-                await asyncio.sleep(3)  # 每3秒更新一次
+                await asyncio.sleep(3)
                 if task.status not in [TaskStatus.RUNNING, TaskStatus.EXTRACTING]:
                     break
                     
-                # 计算总速度
                 total_speed = sum(
                     i.speed for i in task.download_queue 
                     if i.status == DownloadStatus.DOWNLOADING
                 )
                 task.download_speed = total_speed
-                
-                # 如果没有正在下载的任务且速度为0，可能是因为所有任务都在等待或已完成
-                # 但这里只负责更新显示速度
-                
                 await self._notify_progress(task.id, task)
         
         speed_task = asyncio.create_task(speed_updater())
         
         try:
-            # 给予一点时间让 worker 启动并注册到 active_tasks
-            await asyncio.sleep(1.0)
-            
-            # 等待所有下载任务完成
-            # 使用循环检查而不是 gather，因为我们可能在运行时动态添加重试任务
+            # 等待所有队列项处理完毕
             while True:
-                # 获取当前活跃任务的副本
-                active_tasks = self._active_download_tasks.get(task.id, set())
-                active_count = len(active_tasks)
+                # 检查是否还有处于活动状态的下载项
+                active_downloads = sum(1 for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING)
+                pending_count = queue.qsize()
                 
-                # 检查是否还有处于"进行中"状态的任务 (WAITING, DOWNLOADING, PAUSED)
-                pending_count = sum(1 for i in task.download_queue 
-                                  if i.status in [DownloadStatus.WAITING, DownloadStatus.DOWNLOADING, DownloadStatus.PAUSED])
+                if active_downloads == 0 and pending_count == 0:
+                    # 如果队列空了，且没有正在下载的，则检查 workers 是否都退出了
+                    all_done = all(t.done() for t in worker_tasks)
+                    if all_done:
+                        break
                 
-                # 只有当活跃协程数为0 且 没有待处理的任务时，才算真正结束
-                if active_count == 0 and pending_count == 0:
+                # 如果任务取消，退出循环
+                if task.status == TaskStatus.CANCELLED:
                     break
-                
-                # 如果有 pending 任务但没有 active 协程，这可能是异常状态（僵尸任务）
-                # 但也许是 worker 正在启动中（比如重试操作刚触发）
-                # 我们允许短暂的这种状态，但如果持续太久可能需要处理（目前暂不处理，依赖用户再次点击重试）
-                
+                    
                 await asyncio.sleep(1)
                 
         finally:
             # 清理
             speed_task.cancel()
-            # 只有当当前的 semaphore 是我们创建的这个对象时才删除
-            # 防止删除了重启后新任务创建的 semaphore
-            if task.id in self._task_semaphores and self._task_semaphores[task.id] is semaphore:
-                del self._task_semaphores[task.id]
+            # 取消所有 worker
+            for t in worker_tasks:
+                if not t.done():
+                    t.cancel()
+            # 移除队列引用
+            if task.id in self._task_queues:
+                del self._task_queues[task.id]
+            # 清理任务记录
+            if task.id in self._active_download_tasks:
+                self._active_download_tasks[task.id].clear()
     
     async def _get_chats_to_export(self, options: ExportOptions) -> List[ChatInfo]:
         """获取要导出的聊天列表"""

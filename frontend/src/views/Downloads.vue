@@ -1,124 +1,130 @@
 <template>
-  <div class="tasks-page">
-    <!-- 页面头部 -->
+  <div class="fade-in">
     <div class="page-header">
-      <h1>📋 任务管理</h1>
-      <router-link to="/export" class="btn-primary">+ 新建导出</router-link>
+      <div class="header-text">
+        <h1>📋 Task Management</h1>
+        <p class="subtitle">Monitor and control your export activities</p>
+      </div>
+      <router-link to="/export" class="btn-premium">+ New Export</router-link>
     </div>
 
-    <!-- 加载中 -->
+    <!-- Loading State -->
     <div v-if="loading" class="loading-state">
       <div class="spinner"></div>
-      <p>加载中...</p>
+      <p>Fetching your tasks...</p>
     </div>
 
-    <!-- 空状态 -->
+    <!-- Empty State -->
     <div v-else-if="tasks.length === 0" class="empty-state">
-      <div class="empty-icon">📭</div>
-      <p>暂无任务</p>
-      <router-link to="/export" class="btn-primary">创建第一个导出任务</router-link>
+      <div class="empty-icon">📂</div>
+      <h3>Nothing here yet</h3>
+      <p>Create your first export task to get started</p>
+      <router-link to="/export" class="btn-premium">Create Export</router-link>
     </div>
 
-    <!-- 任务列表 -->
-    <div v-else class="task-list">
-      <div v-for="task in tasks" :key="task.id" class="task-card">
-        <!-- 任务头部 -->
-        <div class="task-header">
-          <div class="task-info">
-            <h3 class="task-name">{{ task.name }}</h3>
-            <span class="task-time">{{ formatDate(task.created_at) }}</span>
-          </div>
-          <span :class="['task-status', getStatusClass(task)]">
-            {{ getStatusText(task) }}
-          </span>
-        </div>
-
-        <!-- 总进度条 -->
-        <div class="task-progress">
-          <div class="progress-bar">
-            <div class="progress-fill" :style="{ width: getProgress(task) + '%' }"></div>
-          </div>
-          <div class="progress-stats">
-            <span>{{ task.downloaded_media || 0 }}/{{ task.total_media || 0 }} 文件</span>
-            <span>{{ formatSize(task.downloaded_size) }}</span>
-            <span v-if="isRunning(task) && task.download_speed > 0" class="speed">
-              ⚡ {{ formatSpeed(task.download_speed) }}
-            </span>
-            <span v-if="getFailedCount(task) > 0" class="failed-count">
-              ⚠️ {{ getFailedCount(task) }} 失败
-            </span>
-          </div>
-        </div>
-
-        <!-- 文件列表 (可展开) -->
-        <div v-if="task.download_queue && task.download_queue.length > 0" class="file-section">
-          <div class="file-header" @click="toggleFiles(task.id)">
-            <span>📥 下载列表 ({{ task.download_queue.length }})</span>
-            <span class="toggle">{{ expandedTasks[task.id] ? '▼' : '▶' }}</span>
-          </div>
-          
-          <div v-if="expandedTasks[task.id]" class="file-list">
-            <div v-for="file in task.download_queue" :key="file.id" class="file-item">
-              <div class="file-info">
-                <div class="file-name-row">
-                  <span class="file-name">{{ file.file_name || '未知文件' }}</span>
-                  <span class="file-size">{{ formatSize(file.downloaded_size) }} / {{ formatSize(file.file_size) }}</span>
-                </div>
-                <div class="file-progress-bar">
-                  <div class="file-progress-fill" :style="{ width: (file.progress || 0) + '%' }"></div>
-                </div>
+    <!-- Task Cards -->
+    <div v-else class="task-grid">
+      <div v-for="task in tasks" :key="task.id" :class="['managed-card', task.status]">
+        <div class="card-status-strip" :class="task.status"></div>
+        
+        <div class="card-main">
+          <div class="card-head">
+            <div class="task-info">
+              <h3 class="task-title">{{ task.name }}</h3>
+              <div class="task-meta">
+                <span class="meta-item"><i class="m-icon">📅</i> {{ formatDate(task.created_at) }}</span>
+                <span class="meta-item"><i class="m-icon">📎</i> {{ task.total_media }} items</span>
               </div>
-              <div class="file-status">
-                <span v-if="file.status === 'downloading' && file.speed > 0" class="file-speed">
-                  {{ formatSpeed(file.speed) }}
-                </span>
-                <span class="file-percent">{{ (file.progress || 0).toFixed(0) }}%</span>
-                <span :class="['file-state', 'state-' + file.status]">
-                  {{ getFileStatusText(file.status) }}
-                </span>
-                <button 
-                  v-if="['failed', 'cancelled', 'paused'].includes(file.status)" 
-                  @click="retryFile(task.id, file.id)"
-                  class="btn-retry"
-                  title="重试"
-                >🔄</button>
+            </div>
+            <div :class="['status-badge', task.status]">
+              <span class="pulse-dot" v-if="isRunning(task)"></span>
+              {{ getStatusText(task) }}
+            </div>
+          </div>
+
+          <div class="progress-section">
+            <div class="progress-header">
+              <div class="p-left">
+                <span class="percentage">{{ getProgress(task).toFixed(1) }}%</span>
+                <span class="count">{{ task.downloaded_media || 0 }} / {{ task.total_media || 0 }}</span>
+              </div>
+              <div class="p-right" v-if="isRunning(task) && task.download_speed > 0">
+                <span class="speed-label">⚡ {{ formatSpeed(task.download_speed) }}</span>
+                <span class="etr">ETR: {{ calculateETR(task) }}</span>
+              </div>
+            </div>
+            <div class="main-progress-bar">
+              <div class="bar-fill" :style="{ width: getProgress(task) + '%' }" :class="task.status"></div>
+            </div>
+          </div>
+
+          <!-- File List Expansion -->
+          <div class="files-dropdown">
+            <button class="expand-btn" @click="toggleFiles(task.id)">
+              <span class="label">Download Queue ({{ task.download_queue?.length || 0 }})</span>
+              <i class="chevron" :class="{ rotated: expandedTasks[task.id] }">▼</i>
+            </button>
+            
+            <div v-if="expandedTasks[task.id]" class="file-table-container animate-slide">
+              <div class="file-list">
+                <div v-for="file in task.download_queue" :key="file.id" class="mini-file-item">
+                  <div class="file-icon-box">📄</div>
+                  <div class="file-details">
+                    <div class="file-row-1">
+                      <span class="f-name">{{ file.file_name || 'Processing...' }}</span>
+                      <span class="f-size">{{ formatSize(file.file_size) }}</span>
+                    </div>
+                    <div class="mini-bar">
+                      <div class="mini-fill" :style="{ width: (file.progress || 0) + '%' }" :class="file.status"></div>
+                    </div>
+                  </div>
+                  <div class="file-actions">
+                    <span :class="['mini-status', file.status]">{{ getFileStatusText(file.status) }}</span>
+                    <button 
+                      v-if="['failed', 'cancelled', 'paused', 'completed'].includes(file.status)" 
+                      @click="retryFile(task.id, file.id)"
+                      class="btn-mini-retry"
+                      title="Rerun / Retry"
+                    >🔄</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- 操作按钮 -->
-        <div class="task-actions">
-          <button 
-            v-if="isRunning(task)" 
-            @click="pauseTask(task.id)" 
-            class="btn-action btn-pause"
-          >⏸ 暂停</button>
-          
-          <button 
-            v-if="['paused', 'cancelled', 'failed'].includes(task.status)" 
-            @click="resumeTask(task.id)" 
-            class="btn-action btn-resume"
-          >▶ 继续</button>
-          
-          <button 
-            v-if="getFailedCount(task) > 0" 
-            @click="retryAllFailed(task.id)" 
-            class="btn-action btn-retry-all"
-          >🔄 重试失败 ({{ getFailedCount(task) }})</button>
-          
-          <a 
-            v-if="task.status === 'completed'" 
-            :href="'/exports/' + task.id" 
-            target="_blank" 
-            class="btn-action btn-folder"
-          >📂 打开</a>
-          
-          <button 
-            v-if="!isRunning(task)" 
-            @click="deleteTask(task.id)" 
-            class="btn-action btn-delete"
-          >🗑 删除</button>
+          <div class="card-footer">
+            <div class="footer-actions">
+              <template v-if="isRunning(task)">
+                <button @click="pauseTask(task.id)" class="btn-f-action pause">⏸ Pause</button>
+              </template>
+              <template v-else>
+                <button @click="resumeTask(task.id)" class="btn-f-action resume">
+                  {{ task.status === 'completed' ? '🚀 Rerun' : '▶ Resume' }}
+                </button>
+              </template>
+              
+              <button 
+                v-if="getFailedCount(task) > 0" 
+                @click="retryAllFailed(task.id)" 
+                class="btn-f-action retry"
+              >🔄 Retry Failed ({{ getFailedCount(task) }})</button>
+
+              <div class="footer-right">
+                <a 
+                  v-if="task.status === 'completed'" 
+                  :href="'/exports/' + task.id" 
+                  target="_blank" 
+                  class="btn-f-action open"
+                >📂 Browse</a>
+                
+                <button 
+                  v-if="!isRunning(task)" 
+                  @click="deleteTask(task.id)" 
+                  class="btn-f-action delete"
+                >🗑 Delete</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -134,88 +140,79 @@ const tasks = ref([])
 const expandedTasks = ref({})
 let refreshTimer = null
 
-// 获取认证头
 function getAuthHeader() {
   return { Authorization: `Bearer ${localStorage.getItem('token')}` }
 }
 
-// 加载任务列表
 async function fetchTasks() {
   try {
     const res = await axios.get('/api/export/tasks', { headers: getAuthHeader() })
     tasks.value = res.data.reverse()
   } catch (err) {
-    console.error('获取任务失败:', err)
+    console.error('Fetch tasks failed:', err)
   } finally {
     loading.value = false
   }
 }
 
-// 暂停任务
 async function pauseTask(taskId) {
   try {
     await axios.post(`/api/export/${taskId}/pause`, {}, { headers: getAuthHeader() })
     await fetchTasks()
   } catch (err) {
-    alert('暂停失败: ' + (err.response?.data?.detail || err.message))
+    alert('Pause failed: ' + (err.response?.data?.detail || err.message))
   }
 }
 
-// 恢复任务
 async function resumeTask(taskId) {
   try {
+    const task = tasks.value.find(t => t.id === taskId)
+    const action = task.status === 'completed' ? 'Rerunning' : 'Resuming'
     await axios.post(`/api/export/${taskId}/resume`, {}, { headers: getAuthHeader() })
     await fetchTasks()
   } catch (err) {
-    alert('恢复失败: ' + (err.response?.data?.detail || err.message))
+    alert('Action failed: ' + (err.response?.data?.detail || err.message))
   }
 }
 
-// 删除任务
 async function deleteTask(taskId) {
-  if (!confirm('确定要删除此任务吗？')) return
+  if (!confirm('Are you sure you want to delete this task?')) return
   try {
     await axios.delete(`/api/export/${taskId}`, { headers: getAuthHeader() })
     tasks.value = tasks.value.filter(t => t.id !== taskId)
   } catch (err) {
-    alert('删除失败: ' + (err.response?.data?.detail || err.message))
+    alert('Delete failed: ' + (err.response?.data?.detail || err.message))
   }
 }
 
-// 重试单个文件
 async function retryFile(taskId, fileId) {
   try {
     await axios.post(`/api/export/${taskId}/retry/${fileId}`, {}, { headers: getAuthHeader() })
     await fetchTasks()
   } catch (err) {
-    alert('重试失败: ' + (err.response?.data?.detail || err.message))
+    alert('Retry failed: ' + (err.response?.data?.detail || err.message))
   }
 }
 
-// 重试所有失败文件
 async function retryAllFailed(taskId) {
   try {
     await axios.post(`/api/export/${taskId}/retry`, {}, { headers: getAuthHeader() })
     await fetchTasks()
   } catch (err) {
-    alert('重试失败: ' + (err.response?.data?.detail || err.message))
+    alert('Retry failed: ' + (err.response?.data?.detail || err.message))
   }
 }
 
-// 切换文件列表展开
 function toggleFiles(taskId) {
   expandedTasks.value[taskId] = !expandedTasks.value[taskId]
 }
 
-// 辅助函数
 function isRunning(task) {
   return ['running', 'extracting', 'pending'].includes(task.status)
 }
 
 function getProgress(task) {
-  if (!task.total_media || task.total_media === 0) {
-    return task.status === 'completed' ? 100 : 0
-  }
+  if (!task.total_media || task.total_media === 0) return task.status === 'completed' ? 100 : 0
   return ((task.downloaded_media || 0) / task.total_media) * 100
 }
 
@@ -224,372 +221,250 @@ function getFailedCount(task) {
   return task.download_queue.filter(f => f.status === 'failed').length
 }
 
-function getStatusClass(task) {
-  if (isRunning(task)) return 'status-running'
-  if (task.status === 'paused') return 'status-paused'
-  if (task.status === 'completed') return 'status-completed'
-  return 'status-other'
+function calculateETR(task) {
+  if (!task.download_speed || task.download_speed <= 0) return 'Scanning...'
+  
+  // Calculate remaining size based on the entire queue (rough estimate)
+  // Logic: avg file size * (total - downloaded)
+  const remainingCount = task.total_media - task.downloaded_media
+  if (remainingCount <= 0) return 'Finished'
+  
+  // Simple remaining size estimate if back-end doesn't provide total_size_diff
+  // but we have downloaded_size and total_media
+  const avgFileSize = task.downloaded_size / Math.max(1, task.downloaded_media)
+  const estimatedRemainingSize = avgFileSize * remainingCount
+  
+  const seconds = estimatedRemainingSize / task.download_speed
+  if (!isFinite(seconds) || seconds < 0) return '...'
+  
+  if (seconds > 3600) return `${(seconds / 3600).toFixed(1)}h remaining`
+  if (seconds > 60) return `${(seconds / 60).toFixed(0)}m remaining`
+  return `${seconds.toFixed(0)}s remaining`
 }
 
 function getStatusText(task) {
   const texts = {
-    pending: '准备中',
-    extracting: '扫描中',
-    running: '下载中',
-    paused: '已暂停',
-    completed: '已完成',
-    failed: '失败',
-    cancelled: '已取消'
+    pending: 'Waiting',
+    extracting: 'Scanning History',
+    running: 'Downloading',
+    paused: 'Paused',
+    completed: 'Finished',
+    failed: 'Failed',
+    cancelled: 'Stopped'
   }
   return texts[task.status] || task.status
 }
 
 function getFileStatusText(status) {
   const texts = {
-    waiting: '等待',
-    downloading: '下载中',
-    completed: '完成',
-    failed: '失败',
-    paused: '暂停',
-    skipped: '跳过'
+    waiting: 'Wait',
+    downloading: 'Transfer',
+    completed: 'Done',
+    failed: 'Err',
+    paused: 'Hold',
+    skipped: 'Skip'
   }
   return texts[status] || status
 }
 
 function formatDate(dateStr) {
   if (!dateStr) return ''
-  return new Date(dateStr).toLocaleString('zh-CN')
+  return new Date(dateStr).toLocaleString()
 }
 
 function formatSize(bytes) {
   if (!bytes) return '0 B'
   const units = ['B', 'KB', 'MB', 'GB']
   let i = 0
-  while (bytes >= 1024 && i < units.length - 1) {
-    bytes /= 1024
-    i++
-  }
+  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++ }
   return bytes.toFixed(1) + ' ' + units[i]
 }
 
 function formatSpeed(bytesPerSecond) {
-  if (!bytesPerSecond || bytesPerSecond < 0) return ''
+  if (!bytesPerSecond || bytesPerSecond < 0) return '0 B/s'
   const units = ['B/s', 'KB/s', 'MB/s', 'GB/s']
   let i = 0
-  while (bytesPerSecond >= 1024 && i < units.length - 1) {
-    bytesPerSecond /= 1024
-    i++
-  }
+  while (bytesPerSecond >= 1024 && i < units.length - 1) { bytesPerSecond /= 1024; i++ }
   return bytesPerSecond.toFixed(1) + ' ' + units[i]
 }
 
 onMounted(() => {
   fetchTasks()
-  // 每3秒刷新
   refreshTimer = setInterval(() => {
-    if (tasks.value.some(t => isRunning(t) || t.status === 'paused')) {
-      fetchTasks()
-    }
+    if (tasks.value.some(t => isRunning(t) || t.status === 'paused')) fetchTasks()
   }, 3000)
 })
 
-onUnmounted(() => {
-  if (refreshTimer) clearInterval(refreshTimer)
-})
+onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 </script>
 
 <style scoped>
-.tasks-page {
-  padding: 20px;
-  max-width: 900px;
-  margin: 0 auto;
-}
-
 .page-header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
+  align-items: flex-end;
+  margin-bottom: 40px;
 }
 
-.page-header h1 {
-  margin: 0;
-  font-size: 24px;
-}
-
-.btn-primary {
-  background: linear-gradient(135deg, #667eea, #764ba2);
-  color: white;
-  padding: 10px 20px;
-  border-radius: 8px;
-  text-decoration: none;
-  font-weight: 500;
-}
-
-/* 加载和空状态 */
-.loading-state, .empty-state {
-  text-align: center;
-  padding: 60px 20px;
-  color: #666;
-}
-
-.spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid #eee;
-  border-top-color: #667eea;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-  margin: 0 auto 16px;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-.empty-icon {
-  font-size: 64px;
-  margin-bottom: 16px;
-}
-
-/* 任务卡片 */
-.task-list {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.task-card {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-  overflow: hidden;
-}
-
-.task-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  padding: 16px 20px;
-  background: #fafbfc;
-  border-bottom: 1px solid #eee;
-}
-
-.task-name {
-  margin: 0 0 4px 0;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.task-time {
-  font-size: 12px;
-  color: #888;
-}
-
-.task-status {
-  padding: 4px 12px;
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.status-running { background: #e3f2fd; color: #1976d2; }
-.status-paused { background: #fff3e0; color: #ef6c00; }
-.status-completed { background: #e8f5e9; color: #2e7d32; }
-.status-other { background: #f5f5f5; color: #666; }
-
-/* 进度条 */
-.task-progress {
-  padding: 16px 20px;
-}
-
-.progress-bar {
-  height: 8px;
-  background: #e8e8e8;
-  border-radius: 4px;
-  overflow: hidden;
-  margin-bottom: 8px;
-}
-
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, #4facfe, #00f2fe);
-  border-radius: 4px;
-  transition: width 0.3s ease;
-}
-
-.progress-stats {
-  display: flex;
-  gap: 16px;
-  font-size: 13px;
-  color: #666;
-}
-
-.failed-count {
-  color: #e53935;
-}
-
-.speed {
-  color: #2e7d32;
-  font-weight: 500;
-}
-
-.file-speed {
-  color: #2e7d32;
-  font-size: 11px;
-  margin-right: 4px;
-}
-
-/* 文件列表 */
-.file-section {
-  border-top: 1px solid #eee;
-}
-
-.file-header {
-  display: flex;
-  justify-content: space-between;
-  padding: 12px 20px;
-  background: #f8f9fa;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.file-header:hover {
-  background: #f0f1f2;
-}
-
-.toggle {
-  color: #888;
-}
-
-.file-list {
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.file-item {
-  display: flex;
-  align-items: center;
-  padding: 10px 20px;
-  border-bottom: 1px solid #f0f0f0;
-  gap: 12px;
-}
-
-.file-item:last-child {
-  border-bottom: none;
-}
-
-.file-info {
-  flex: 1;
-  min-width: 0;
-}
-
-.file-name-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.header-text h1 {
+  font-size: 2rem;
+  font-weight: 800;
   margin-bottom: 4px;
 }
 
-.file-name {
-  font-size: 12px;
-  color: #333;
-  white-space: nowrap;
+.subtitle { color: #71717a; }
+
+.task-grid { display: grid; gap: 24px; }
+
+.managed-card {
+  background: white;
+  border-radius: 20px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  min-width: 0;
+  border: 1px solid #f4f4f5;
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
+  display: flex;
+  transition: transform 0.2s;
 }
 
-.file-size {
-  font-size: 11px;
-  color: #888;
-  margin-left: 8px;
-  white-space: nowrap;
-}
+.managed-card:hover { transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1); }
 
-.file-progress-bar {
-  height: 4px;
-  background: #e8e8e8;
-  border-radius: 2px;
-  overflow: hidden;
-}
+.card-status-strip { width: 6px; }
+.card-status-strip.running { background: #3b82f6; }
+.card-status-strip.completed { background: #22c55e; }
+.card-status-strip.paused { background: #f59e0b; }
+.card-status-strip.failed { background: #ef4444; }
 
-.file-progress-fill {
-  height: 100%;
-  background: #4facfe;
-  transition: width 0.3s ease;
-}
+.card-main { flex: 1; padding: 24px; }
 
-.file-status {
+.card-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+
+.task-title { font-size: 1.25rem; font-weight: 700; color: #18181b; margin-bottom: 6px; }
+.task-meta { display: flex; gap: 16px; font-size: 0.85rem; color: #71717a; }
+.m-icon { margin-right: 4px; font-style: normal; }
+
+.status-badge {
+  padding: 6px 12px;
+  border-radius: 50px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
-.file-percent {
-  font-size: 11px;
-  color: #888;
-  min-width: 35px;
+.status-badge.running { background: #dbeafe; color: #1e40af; }
+.status-badge.completed { background: #dcfce7; color: #166534; }
+.status-badge.paused { background: #fef3c7; color: #92400e; }
+.status-badge.failed { background: #fee2e2; color: #991b1b; }
+
+.pulse-dot {
+  width: 8px;
+  height: 8px;
+  background: currentColor;
+  border-radius: 50%;
+  animation: pulse 2s infinite;
 }
 
-.file-state {
-  font-size: 10px;
-  padding: 2px 8px;
-  border-radius: 10px;
+@keyframes pulse {
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(1.2); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* Progress Sections */
+.progress-section { margin-bottom: 24px; }
+.progress-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px; }
+.percentage { font-size: 1.5rem; font-weight: 800; color: #18181b; line-height: 1; }
+.count { font-size: 0.85rem; color: #71717a; margin-left: 8px; }
+.p-right { text-align: right; }
+.speed-label { display: block; font-weight: 700; color: #166534; font-size: 0.9rem; }
+.etr { font-size: 0.75rem; color: #71717a; }
+
+.main-progress-bar { height: 10px; background: #f4f4f5; border-radius: 5px; overflow: hidden; }
+.bar-fill { height: 100%; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1); background: #3b82f6; }
+.bar-fill.completed { background: #22c55e; }
+.bar-fill.paused { background: #f59e0b; }
+.bar-fill.failed { background: #ef4444; }
+
+/* Files Dropdown */
+.files-dropdown { margin-bottom: 20px; border: 1px solid #f4f4f5; border-radius: 12px; overflow: hidden; }
+.expand-btn {
+  width: 100%;
+  padding: 12px 16px;
+  background: #fafafa;
+  border: none;
+  display: flex;
+  justify-content: space-between;
+  cursor: pointer;
+  font-size: 0.85rem;
   font-weight: 600;
+  color: #52525b;
 }
 
-.state-waiting { background: #f5f5f5; color: #888; }
-.state-downloading { background: #e3f2fd; color: #1976d2; }
-.state-completed { background: #e8f5e9; color: #2e7d32; }
-.state-failed { background: #ffebee; color: #c62828; }
-.state-paused { background: #fff3e0; color: #ef6c00; }
-.state-skipped { background: #fafafa; color: #999; }
+.chevron { transition: transform 0.3s; font-style: normal; display: inline-block; }
+.chevron.rotated { transform: rotate(180deg); }
 
-.btn-retry {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 14px;
-  padding: 2px 4px;
-}
+.file-list { max-height: 240px; overflow-y: auto; padding: 0 8px; }
 
-.btn-retry:hover {
-  background: #f0f0f0;
-  border-radius: 4px;
-}
-
-/* 操作按钮 */
-.task-actions {
+.mini-file-item {
   display: flex;
-  gap: 8px;
-  padding: 12px 20px;
-  border-top: 1px solid #eee;
-  background: #fafbfc;
-}
-
-.btn-action {
-  padding: 8px 16px;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 500;
-  text-decoration: none;
-  display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 12px;
+  padding: 10px 8px;
+  border-bottom: 1px solid #f4f4f5;
 }
 
-.btn-pause { background: #fff3e0; color: #ef6c00; }
-.btn-resume { background: #e8f5e9; color: #2e7d32; }
-.btn-retry-all { background: #e3f2fd; color: #1976d2; }
-.btn-folder { background: #f3e5f5; color: #7b1fa2; }
-.btn-delete { background: #ffebee; color: #c62828; }
+.mini-file-item:last-child { border: none; }
+.file-icon-box { background: #f4f4f5; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; }
 
-.btn-action:hover {
-  filter: brightness(0.95);
+.file-details { flex: 1; min-width: 0; }
+.file-row-1 { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.f-name { font-size: 0.75rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.f-size { font-size: 0.7rem; color: #a1a1aa; }
+
+.mini-bar { height: 4px; background: #f4f4f5; border-radius: 2px; overflow: hidden; }
+.mini-fill { height: 100%; background: #3b82f6; }
+.mini-fill.completed { background: #22c55e; }
+.mini-fill.failed { background: #ef4444; }
+
+.file-actions { display: flex; align-items: center; gap: 8px; }
+.mini-status { font-size: 0.65rem; font-weight: 800; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; }
+.mini-status.completed { background: #dcfce7; color: #166534; }
+.mini-status.downloading { background: #dbeafe; color: #1e40af; }
+
+.btn-mini-retry { background: none; border: none; cursor: pointer; opacity: 0.6; transition: 0.2s; }
+.btn-mini-retry:hover { opacity: 1; transform: rotate(45deg); }
+
+/* Footer Actions */
+.footer-actions { display: flex; gap: 10px; align-items: center; }
+.btn-f-action {
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: none;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-f-action.pause { background: #fff7ed; color: #9a3412; }
+.btn-f-action.resume { background: #f0fdf4; color: #166534; }
+.btn-f-action.retry { background: #eff6ff; color: #1e40af; }
+.btn-f-action.open { background: #fdf4ff; color: #701a75; text-decoration: none; }
+.btn-f-action.delete { background: #fef2f2; color: #991b1b; }
+
+.footer-right { margin-left: auto; display: flex; gap: 10px; }
+
+.loading-state, .empty-state { text-align: center; padding: 100px 20px; color: #71717a; }
+.spinner { width: 48px; height: 48px; border: 4px solid #f4f4f5; border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 20px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.empty-icon { font-size: 4rem; margin-bottom: 20px; }
+
+.animate-slide {
+  animation: slideDown 0.3s ease-out;
 }
 </style>
