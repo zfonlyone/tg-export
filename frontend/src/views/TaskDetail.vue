@@ -95,7 +95,10 @@
               {{ item.file_name }}
             </div>
             <div class="item-meta">
-              <span class="file-size">{{ formatSize(item.file_size) }}</span>
+              <span class="file-size">
+                <span v-if="['completed', 'failed', 'paused'].includes(item.status) && item.downloaded_size > 0" class="actual-size">本地: {{ formatSize(item.downloaded_size) }} / </span>
+                云端: {{ formatSize(item.file_size) }}
+              </span>
               <span v-if="item.status === 'downloading'" class="item-speed">{{ formatSpeed(item.speed) }}</span>
               <span class="item-percent" v-if="item.status === 'downloading' || (item.progress > 0 && item.progress < 100)">{{ item.progress.toFixed(1) }}%</span>
               <span class="item-status-text" :class="item.status">{{ getStatusLabel(item.status) }}</span>

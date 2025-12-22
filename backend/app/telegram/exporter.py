@@ -749,7 +749,16 @@ class ExportManager:
             if success and downloaded_path:
                 import os
                 actual_size = os.path.getsize(downloaded_path) if os.path.exists(downloaded_path) else 0
-                if actual_size == 0 and item.file_size > 0:
+                
+                # [Integrity Check] 严格校验文件大小 (解决用户反馈的未下载完却标记完成的问题)
+                if item.file_size > 0 and actual_size != item.file_size:
+                    logger.error(f"任务 {task.id[:8]}: 文件完整性校验失败! {item.file_name} 预期: {item.file_size}, 实际: {actual_size}")
+                    success = False
+                    failure_info = {
+                        "error_type": "integrity_error",
+                        "error_message": f"文件大小不匹配 (完整性校验失败): 预期 {item.file_size}，实际 {actual_size}"
+                    }
+                elif actual_size == 0 and item.file_size > 0:
                     logger.error(f"任务 {task.id[:8]}: 检测到空包! 文件 {item.file_name} 长度为 0，视为下载失败。")
                     if os.path.exists(downloaded_path):
                         try: os.remove(downloaded_path)
@@ -759,6 +768,7 @@ class ExportManager:
             if success:
                 # 下载成功 (注意：downloaded_path 可能是 temp_file_path 或最终路径，视 retry_manager 策略而定)
                 item.status = DownloadStatus.COMPLETED
+                item.downloaded_size = actual_size # [NEW] 记录物理磁盘上的实际大小
                 item.progress = 100.0
                 item.speed = 0
                 
