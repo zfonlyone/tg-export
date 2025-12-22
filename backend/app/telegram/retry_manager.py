@@ -7,7 +7,7 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Any
 from enum import Enum
 
 from pyrogram.types import Message

@@ -766,6 +766,9 @@ class ExportManager:
             task.current_max_concurrent_downloads = options.max_concurrent_downloads
             
         import random
+        import time
+        self._last_global_start_time = 0
+        global_start_lock = asyncio.Lock()
 
         async def worker_logic(worker_id: int):
             """工协程逻辑"""
