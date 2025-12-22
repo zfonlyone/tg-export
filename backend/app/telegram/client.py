@@ -457,5 +457,39 @@ class TelegramClient:
             raise
 
 
+def apply_pyrogram_patch():
+    """
+    强制拦截 Pyrogram 内部限速睡眠。
+    即使设置了 sleep_threshold=0，Pyrogram 在处理某些 DC 的媒体下载时仍可能内部睡眠。
+    此补丁通过在 invoke 期间强制将 threshold 设为 -1，确保所有 FloodWait 都能即时抛出异常。
+    """
+    import pyrogram.session.session as pyrogram_session
+    from pyrogram.errors import FloodWait
+    
+    _original_invoke = pyrogram_session.Session.invoke
+
+    async def patched_invoke(self, query, *args, **kwargs):
+        # 记录原始阈值
+        old_threshold = 0
+        has_client = hasattr(self, "client") and self.client
+        
+        if has_client:
+            old_threshold = self.client.sleep_threshold
+            # 强制设为负数，确保 amount > threshold 恒成立
+            self.client.sleep_threshold = -1
+            
+        try:
+            return await _original_invoke(self, query, *args, **kwargs)
+        finally:
+            # 还原阈值
+            if has_client:
+                self.client.sleep_threshold = old_threshold
+
+    pyrogram_session.Session.invoke = patched_invoke
+    logger.info("已应用 Pyrogram Session.invoke 限速硬拦截补丁")
+
 # 全局实例
 telegram_client = TelegramClient()
+
+# 应用补丁
+apply_pyrogram_patch()

@@ -32,11 +32,10 @@ class ExportManager:
         self.tasks: Dict[str, ExportTask] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
         self._active_download_tasks: Dict[str, Set[asyncio.Task]] = {} # 任务ID -> 下载协程集合
-        self._task_semaphores: Dict[str, asyncio.Semaphore] = {} # 任务ID -> 信号量
-        self._progress_callbacks: Dict[str, List[Callable]] = {}
         self._paused_tasks: set = set()  # 暂停的任务ID
         self._resuming_tasks: set = set() # 正在恢复的任务ID (用于防止取消时重置状态)
         self._task_queues: Dict[str, asyncio.Queue] = {} # 任务ID -> 异步队列
+        self._item_to_worker: Dict[str, Dict[str, asyncio.Task]] = {} # 任务ID -> {项ID: 协程任务}
         self._tasks_file = settings.DATA_DIR / self.TASKS_FILE
         # 确保数据目录存在
         settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -369,13 +368,21 @@ class ExportManager:
         task = self.tasks.get(task_id)
         if not task: return False
         for item in task.download_queue:
-            if item.id == item_id:
-                if item.status in [DownloadStatus.DOWNLOADING, DownloadStatus.WAITING]:
-                    item.status = DownloadStatus.PAUSED
-                    item.is_manually_paused = True # 标记为手动暂停
-                    logger.info(f"手动暂停文件: {item.file_name}")
-                    await self._notify_progress(task_id, task)
-                    return True
+                if item.id == item_id:
+                    if item.status in [DownloadStatus.DOWNLOADING, DownloadStatus.WAITING]:
+                        item.status = DownloadStatus.PAUSED
+                        item.is_manually_paused = True # 标记为手动暂停
+                        logger.info(f"手动暂停文件: {item.file_name}")
+                        
+                        # [Strong Restoration] 强行中止正在执行该項的协程
+                        if task_id in self._item_to_worker and item_id in self._item_to_worker[task_id]:
+                            worker_task = self._item_to_worker[task_id][item_id]
+                            if not worker_task.done():
+                                logger.info(f"任务 {task_id[:8]}: 强行中止卡死的下载协程以释放槽位: {item.file_name}")
+                                worker_task.cancel()
+                        
+                        await self._notify_progress(task_id, task)
+                        return True
         return False
 
     async def resume_download_item(self, task_id: str, item_id: str) -> bool:
@@ -850,8 +857,6 @@ class ExportManager:
 
         async def worker_logic(worker_id: int):
             """工协程逻辑"""
-            logger.info(f"任务 {task.id[:8]}: 下载工协程 #{worker_id} 启动")
-            
             try:
                 async with global_start_lock:
                     now = time.time()
@@ -860,6 +865,8 @@ class ExportManager:
                     if wait_time > 0:
                         await asyncio.sleep(wait_time)
                     self._last_global_start_time = time.time()
+                
+                logger.info(f"任务 {task.id[:8]}: 下载工协程 #{worker_id} 启动 (Smooth Startup 激活)")
             except Exception as e:
                 logger.error(f"Worker #{worker_id} 启动延迟控制出错: {e}")
 
@@ -868,27 +875,48 @@ class ExportManager:
                 if task.status == TaskStatus.CANCELLED:
                     break
                 
-                # 2. [Adaptive Concurrency] 检查当前并发槽位是否允许此 Worker 运行
-                # 如果当前 Worker ID 超过了动态调整后的并发上限，则进入深度睡眠等待恢复
-                while worker_id >= (task.current_max_concurrent_downloads or 1) and task.status != TaskStatus.CANCELLED:
-                    await asyncio.sleep(5)
-                
-                # 3. 如果任务暂停，阻塞在这里
-                while self.is_paused(task.id) and task.status != TaskStatus.CANCELLED:
-                    await asyncio.sleep(1)
-                
-                if task.status == TaskStatus.CANCELLED:
-                    break
-                
-                # 4. 从队列取出一个待下载项 (阻塞式等待，直到有活干或收到退出信号)
+                # 2. 从队列取出一个待下载项 (阻塞式等待，直到有活干或收到退出信号)
                 item = await queue.get()
                 
                 # 如果收到 None 信号，说明队列已关闭，Worker 应该辞职了
                 if item is None:
                     queue.task_done()
                     break
+
+                # 3. [Adaptive Concurrency] 检查当前并发槽位是否允许继续执行 (公平竞争)
+                while True:
+                    # 统计当前正在下载的项 (通过映射表判断)
+                    active_count = len(self._item_to_worker.get(task.id, {}))
+                    if active_count < (task.current_max_concurrent_downloads or 1):
+                        break
+                    
+                    # 如果在等待期间任务被取消、全局暂停，或者项目被手动暂停，则跳过
+                    if task.status == TaskStatus.CANCELLED:
+                        queue.task_done()
+                        return
+                        
+                    if self.is_paused(task.id):
+                        # 如果全局暂停，让出 CPU 并循环检查
+                        await asyncio.sleep(1)
+                        continue
+                        
+                    if item.status == DownloadStatus.PAUSED or item.is_manually_paused:
+                        # 项目被手动暂停，不再等待槽位，直接去 queue_done
+                        break
+                        
+                    await asyncio.sleep(0.5)
                 
-                # 5. 执行下载
+                # 如果排队期间项目被用户手动暂停了，直接跳过
+                if item.status == DownloadStatus.PAUSED or item.is_manually_paused:
+                    queue.task_done()
+                    continue
+
+                # 4. 执行下载
+                # [Strong Restoration] 注册映射，标记此 item 正在由当前协程处理
+                if task.id not in self._item_to_worker:
+                    self._item_to_worker[task.id] = {}
+                self._item_to_worker[task.id][item.id] = asyncio.current_task()
+                
                 try:
                     # 记录下载前状态，用于捕获限速
                     await self._download_item_worker(task, item, export_path)
@@ -931,6 +959,9 @@ class ExportManager:
                     
                     logger.error(f"Worker #{worker_id} 下载出错: {e}")
                 finally:
+                    # [Strong Restoration] 工作结束，不管是成功、失败还是被取消，都解绑映射
+                    if item and task.id in self._item_to_worker:
+                        self._item_to_worker[task.id].pop(item.id, None)
                     queue.task_done()
             
             logger.info(f"任务 {task.id[:8]}: 下载工协程 #{worker_id} 正常退出")
@@ -992,6 +1023,8 @@ class ExportManager:
             # 清理任务记录
             if task.id in self._active_download_tasks:
                 self._active_download_tasks[task.id].clear()
+            # [Strong Restoration] 清理项映射
+            self._item_to_worker.pop(task.id, None)
     
     async def _get_chats_to_export(self, options: ExportOptions) -> List[ChatInfo]:
         """获取要导出的聊天列表"""
