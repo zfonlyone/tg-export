@@ -1,45 +1,50 @@
 <template>
   <div v-if="isLoggedIn" class="app-container">
     <!-- 侧边栏 -->
-    <aside class="sidebar">
+    <aside class="sidebar" :class="{ 'collapsed': isSidebarCollapsed }">
       <div class="sidebar-logo">
-        <h1>📥 TG Export</h1>
+        <h1 v-if="!isSidebarCollapsed">📥 TG Export</h1>
+        <h1 v-else>📥</h1>
+        <button @click="toggleSidebar" class="sidebar-toggle-btn" :title="isSidebarCollapsed ? '展开' : '收起'">
+          {{ isSidebarCollapsed ? '▶' : '◀' }}
+        </button>
       </div>
       <ul class="sidebar-nav">
         <li>
           <router-link to="/dashboard" active-class="active">
             <span class="icon">🏠</span>
-            <span>首页</span>
+            <span v-if="!isSidebarCollapsed">首页</span>
           </router-link>
         </li>
         <li>
           <router-link to="/export" active-class="active">
             <span class="icon">📥</span>
-            <span>导出数据</span>
+            <span v-if="!isSidebarCollapsed">导出数据</span>
           </router-link>
         </li>
         <li>
           <router-link to="/tasks" active-class="active">
             <span class="icon">📋</span>
-            <span>任务管理</span>
+            <span v-if="!isSidebarCollapsed">任务管理</span>
           </router-link>
         </li>
         <li>
           <router-link to="/settings" active-class="active">
             <span class="icon">⚙️</span>
-            <span>设置</span>
+            <span v-if="!isSidebarCollapsed">设置</span>
           </router-link>
         </li>
       </ul>
       <div class="sidebar-footer">
-        <button @click="logout" class="btn btn-outline" style="width: 100%; color: rgba(255,255,255,0.8); border-color: rgba(255,255,255,0.3);">
-          🚪 退出登录
+        <button @click="logout" class="btn btn-outline" style="width: 100%; color: rgba(255,255,255,0.8); border-color: rgba(255,255,255,0.3); padding: 8px 5px;">
+          <span class="icon">🚪</span>
+          <span v-if="!isSidebarCollapsed">退出登录</span>
         </button>
       </div>
     </aside>
     
     <!-- 主内容 -->
-    <main class="main-content">
+    <main class="main-content" :class="{ 'expanded': isSidebarCollapsed }">
       <!-- 顶部导航栏 -->
       <div class="top-bar" v-if="showBackButton">
         <button @click="goBack" class="btn btn-outline btn-sm">
@@ -66,6 +71,12 @@ const route = useRoute()
 
 // 使用 ref 确保响应性
 const isLoggedIn = ref(false)
+const isSidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
+
+function toggleSidebar() {
+  isSidebarCollapsed.value = !isSidebarCollapsed.value
+  localStorage.setItem('sidebarCollapsed', isSidebarCollapsed.value)
+}
 
 // 检查登录状态
 function checkLoginStatus() {

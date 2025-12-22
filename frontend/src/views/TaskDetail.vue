@@ -36,7 +36,7 @@
     <!-- 三段式任务列表 -->
     <div class="monitoring-grid">
       <!-- 下载中 -->
-      <div class="monitor-column">
+      <div class="monitor-column glass-card">
         <div class="column-header">
           <span class="c-title">⚡ 正在下载</span>
           <span class="c-badge info">{{ queueCounts.downloading }}</span>
@@ -47,6 +47,7 @@
               <div class="item-name" :title="item.file_name">{{ item.file_name }}</div>
               <div class="item-meta">
                 <span>{{ formatSize(item.file_size) }}</span>
+                <span class="item-percent">{{ (item.progress || 0).toFixed(1) }}%</span>
                 <span class="item-speed" v-if="item.speed > 0">{{ formatSpeed(item.speed) }}</span>
               </div>
               <div class="item-progress">
@@ -56,7 +57,9 @@
               </div>
             </div>
             <div class="item-actions">
-              <button @click="cancelItem(item.id)" class="action-btn" title="跳过此文件">✖</button>
+              <button @click="pauseItem(item.id)" class="action-btn" title="暂停下载">⏸</button>
+              <button @click="retryItem(item.id)" class="action-btn" title="重新开始">🔄</button>
+              <button @click="cancelItem(item.id)" class="action-btn danger" title="跳过/取消">✖</button>
             </div>
           </div>
           <div v-if="!queue.downloading || queue.downloading.length === 0" class="empty-mini">无活跃下载</div>
@@ -64,7 +67,7 @@
       </div>
 
       <!-- 等待中 -->
-      <div class="monitor-column">
+      <div class="monitor-column glass-card">
         <div class="column-header">
           <span class="c-title">⏳ 等待队列</span>
           <div class="header-right-tools">
@@ -92,7 +95,7 @@
       </div>
 
       <!-- 已完成/跳过 -->
-      <div class="monitor-column">
+      <div class="monitor-column glass-card">
         <div class="column-header">
           <span class="c-title">✅ 最近完成</span>
           <div class="header-right-tools">
@@ -111,6 +114,7 @@
             </div>
             <div class="item-actions">
               <button @click="retryItem(item.id)" class="action-btn" title="重新下载">🔄</button>
+              <button @click="cancelItem(item.id)" class="action-btn danger" title="移除记录">✖</button>
             </div>
           </div>
           <div v-if="!queue.completed || queue.completed.length === 0" class="empty-mini">暂无记录</div>
@@ -340,6 +344,7 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .item-name { font-size: 0.8rem; font-weight: 700; color: #3f3f46; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
 .item-meta { display: flex; justify-content: space-between; font-size: 0.7rem; color: #a1a1aa; font-weight: 600; }
 .item-speed { color: #3b82f6; }
+.item-percent { color: #8b5cf6; font-weight: 800; font-variant-numeric: tabular-nums; }
 .item-status-text { font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; background: #f4f4f5; text-transform: uppercase; }
 .item-status-text.completed { background: #dcfce7; color: #166534; }
 .item-status-text.skipped { background: #f4f4f5; color: #71717a; }

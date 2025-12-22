@@ -11,21 +11,21 @@
   --warning-light: #fff3cd;
   --danger: #f5222d;
   --danger-light: #ffccc7;
-  
+
   /* 侧边栏 - 深蓝色 */
   --sidebar-bg: #1e3a5f;
   --sidebar-hover: #2a4a73;
   --sidebar-active: #3d6090;
   --sidebar-text: rgba(255, 255, 255, 0.85);
   --sidebar-text-muted: rgba(255, 255, 255, 0.65);
-  
+
   /* 内容区 - 浅色 */
   --bg: #f0f2f5;
   --card-bg: #ffffff;
   --text: #1f1f1f;
   --text-secondary: #666666;
   --border: #e8e8e8;
-  
+
   /* 尺寸 */
   --sidebar-width: 220px;
   --sidebar-collapsed-width: 64px;
@@ -71,13 +71,41 @@ a:hover {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  transition: width 0.3s ease;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 100;
+  overflow: hidden;
+}
+
+.sidebar.collapsed {
+  width: 80px;
 }
 
 .sidebar-logo {
-  padding: 20px;
+  padding: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  min-height: 70px;
+}
+
+.sidebar-toggle-btn {
+  background: rgba(255, 255, 255, 0.1);
+  border: none;
+  color: #fff;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  transition: background 0.2s;
+}
+
+.sidebar-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .sidebar-logo h1 {
@@ -137,6 +165,11 @@ a:hover {
   padding: 24px;
   min-height: 100vh;
   background: var(--bg);
+  transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.main-content.expanded {
+  margin-left: 80px;
 }
 
 /* ========== 页面标题 ========== */
@@ -635,6 +668,7 @@ a:hover {
     opacity: 0;
     transform: translateY(10px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -702,7 +736,8 @@ a:hover {
   margin-top: 10px;
 }
 
-.table th, .table td {
+.table th,
+.table td {
   padding: 12px 15px;
   text-align: left;
   border-bottom: 1px solid var(--border);
@@ -766,18 +801,42 @@ a:hover {
   filter: grayscale(1);
 }
 
-.btn-premium.primary { background: #3b82f6; color: white; }
-.btn-premium.success { background: #22c55e; color: white; }
-.btn-premium.warning { background: #f59e0b; color: white; }
-.btn-premium.danger { background: #ef4444; color: white; }
-.btn-premium.info { background: #0ea5e9; color: white; }
-.btn-premium.purple { background: #a855f7; color: white; }
+.btn-premium.primary {
+  background: #3b82f6;
+  color: white;
+}
+
+.btn-premium.success {
+  background: #22c55e;
+  color: white;
+}
+
+.btn-premium.warning {
+  background: #f59e0b;
+  color: white;
+}
+
+.btn-premium.danger {
+  background: #ef4444;
+  color: white;
+}
+
+.btn-premium.info {
+  background: #0ea5e9;
+  color: white;
+}
+
+.btn-premium.purple {
+  background: #a855f7;
+  color: white;
+}
 
 .btn-premium.ghost {
   background: white;
   border: 1px solid #e4e4e7;
   color: #71717a;
 }
+
 .btn-premium.ghost:hover {
   background: #fafafa;
   border-color: #d4d4d8;
@@ -789,8 +848,33 @@ a:hover {
   border: 1px solid #ffa39e;
   color: #cf1322;
 }
+
 .btn-premium.ghost-danger:hover {
   background: #fff1f0;
   border-color: #f5222d;
   color: #a8071a;
+}
+
+/* ========== 全局美化与毛玻璃 (v1.3.4) ========== */
+.glass-card {
+  background: rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.07) !important;
+}
+
+/* 加深进度条对比度 */
+.p-bar-container,
+.progress-tiny {
+  background: rgba(0, 0, 0, 0.08) !important;
+}
+
+/* 按钮微调 */
+.action-btn {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.action-btn:active {
+  transform: scale(0.9);
 }

@@ -598,11 +598,19 @@ class ExportManager:
                     if item.status == DownloadStatus.SKIPPED:
                         # 抛出取消异常以中止 download_media
                         raise asyncio.CancelledError("Item was skipped by user")
+                    
+                    if item.status == DownloadStatus.PAUSED:
+                         raise asyncio.CancelledError("Item was paused by user")
 
                     bytes_diff = current - last_update['size']
                     item.speed = bytes_diff / elapsed if elapsed > 0 else 0
                     last_update['size'] = current
                     last_update['time'] = now
+                    
+                    # [NEW] 并行下载时，更频繁地通知单个文件的进度变化
+                    # 仅在有进度变化时更新，避免过度通知
+                    if bytes_diff > 0:
+                        asyncio.create_task(self._notify_progress(task.id, task))
             # 日志：记录下载路径
             logger.info(f"任务 {task.id[:8]}: 开始下载文件 '{item.file_name}' -> {item.file_path}")
             
@@ -660,8 +668,8 @@ class ExportManager:
                 task.downloaded_media += 1
                 
                 # 计算任务总速度
-                active_speeds = [i.speed for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING]
-                task.download_speed = sum(active_speeds) if active_speeds else 0
+                active_items = [i for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING]
+                task.download_speed = sum(i.speed for i in active_items) if active_items else 0
                 
                 # 每完成一个下载，通知一次进度
                 await self._notify_progress(task.id, task)
@@ -705,7 +713,8 @@ class ExportManager:
         
         # 将待下载项加入队列
         for item in task.download_queue:
-            if item.status in [DownloadStatus.WAITING, DownloadStatus.PAUSED, DownloadStatus.FAILED]:
+            # 状态残留修复：重启或手动恢复时，将之前的“正在下载”项也重置并入队
+            if item.status in [DownloadStatus.WAITING, DownloadStatus.PAUSED, DownloadStatus.FAILED, DownloadStatus.DOWNLOADING]:
                 item.status = DownloadStatus.WAITING
                 queue.put_nowait(item)
         
