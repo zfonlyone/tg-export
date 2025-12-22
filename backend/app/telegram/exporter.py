@@ -374,113 +374,113 @@ class ExportManager:
                 self._active_download_tasks[task.id].add(current_task)
             
             try:
-            async with semaphore:
-                if task.status == TaskStatus.CANCELLED or item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
-                    return
+                async with semaphore:
+                    if task.status == TaskStatus.CANCELLED or item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
+                        return
 
-                # 等待暂停状态结束 (整体任务暂停 或 个人文件暂停)
-                while (self.is_paused(task.id) or item.status == DownloadStatus.PAUSED) and task.status != TaskStatus.CANCELLED:
-                    await asyncio.sleep(1)
-                
-                if task.status == TaskStatus.CANCELLED:
-                    return
-
-                # 获取原始消息对象用于下载
-                msg = await telegram_client.get_message_by_id(item.chat_id, item.message_id)
-                if not msg:
-                    item.status = DownloadStatus.FAILED
-                    item.error = "无法获取消息对象"
-                    return
-
-
-                # 智能延迟方案：减少 FloodWait
-                # 大文件(>10MB)延迟1秒，小文件延迟0.3秒
-                delay = 1.0 if item.file_size > 10 * 1024 * 1024 else 0.3
-                await asyncio.sleep(delay)
-
-                item.status = DownloadStatus.DOWNLOADING
-                full_path = export_path / item.file_path
-                
-                # 日志：记录下载路径
-                logger.info(f"开始下载文件: {item.file_name}")
-                logger.info(f"  → 目标路径: {full_path}")
-                logger.info(f"  → export_path: {export_path}")
-                
-                # 使用 temp 目录存放下载中的文件
-                temp_dir = Path("/tmp/tg-export-downloads")
-                temp_dir.mkdir(parents=True, exist_ok=True)
-                temp_file_path = temp_dir / f"{item.id}_{full_path.name}"
-                logger.info(f"  → 临时路径: {temp_file_path}")
-                
-                retry_manager = DownloadRetryManager(
-                    max_retries=options.max_download_retries,
-                    initial_delay=options.retry_delay
-                )
-                
-                # 速度计算需要的变量
-                import time
-                last_update = {'size': 0, 'time': time.time()}
-                
-                def progress_cb(current, total):
-                    now = time.time()
-                    elapsed = now - last_update['time']
+                    # 等待暂停状态结束 (整体任务暂停 或 个人文件暂停)
+                    while (self.is_paused(task.id) or item.status == DownloadStatus.PAUSED) and task.status != TaskStatus.CANCELLED:
+                        await asyncio.sleep(1)
                     
-                    item.downloaded_size = current
-                    item.file_size = total
-                    if total > 0:
-                        item.progress = (current / total) * 100
+                    if task.status == TaskStatus.CANCELLED:
+                        return
+
+                    # 获取原始消息对象用于下载
+                    msg = await telegram_client.get_message_by_id(item.chat_id, item.message_id)
+                    if not msg:
+                        item.status = DownloadStatus.FAILED
+                        item.error = "无法获取消息对象"
+                        return
+
+
+                    # 智能延迟方案：减少 FloodWait
+                    # 大文件(>10MB)延迟1秒，小文件延迟0.3秒
+                    delay = 1.0 if item.file_size > 10 * 1024 * 1024 else 0.3
+                    await asyncio.sleep(delay)
+
+                    item.status = DownloadStatus.DOWNLOADING
+                    full_path = export_path / item.file_path
                     
-                    # 计算速度 (至少间隔 0.5 秒更新一次)
-                    if elapsed >= 0.5:
-                        bytes_diff = current - last_update['size']
-                        item.speed = bytes_diff / elapsed if elapsed > 0 else 0
-                        last_update['size'] = current
-                        last_update['time'] = now
-                
-                success, downloaded, failure_info = await retry_manager.download_with_retry(
-                    download_func=telegram_client.download_media,
-                    message=msg,
-                    file_path=temp_file_path,
-                    refresh_message_func=telegram_client.get_message_by_id,
-                    progress_callback=progress_cb
-                )
-                
-                if success and downloaded:
-                    if temp_file_path.exists():
-                        # 确保目标目录存在
-                        full_path.parent.mkdir(parents=True, exist_ok=True)
-                        # 从 temp 移动到最终位置
-                        import shutil
-                        shutil.move(str(temp_file_path), str(full_path))
-                        logger.info(f"✅ 文件已保存: {full_path}")
-                    item.status = DownloadStatus.COMPLETED
-                    item.progress = 100.0
-                    item.speed = 0  # 下载完成，速度归零
-                    task.downloaded_media += 1
+                    # 日志：记录下载路径
+                    logger.info(f"开始下载文件: {item.file_name}")
+                    logger.info(f"  → 目标路径: {full_path}")
+                    logger.info(f"  → export_path: {export_path}")
                     
-                    # 计算任务总速度 (只在完成时计算一次)
-                    task.download_speed = sum(
-                        i.speed for i in task.download_queue 
-                        if i.status == DownloadStatus.DOWNLOADING
+                    # 使用 temp 目录存放下载中的文件
+                    temp_dir = Path("/tmp/tg-export-downloads")
+                    temp_dir.mkdir(parents=True, exist_ok=True)
+                    temp_file_path = temp_dir / f"{item.id}_{full_path.name}"
+                    logger.info(f"  → 临时路径: {temp_file_path}")
+                    
+                    retry_manager = DownloadRetryManager(
+                        max_retries=options.max_download_retries,
+                        initial_delay=options.retry_delay
                     )
                     
-                    # 每完成一个下载，通知一次进度
-                    await self._notify_progress(task.id, task)
-                elif failure_info:
-                    item.status = DownloadStatus.FAILED
-                    item.error = failure_info.get("error_message")
-                    # 记录到任务的失败列表
-                    from ..models import FailedDownload
-                    failed_download = FailedDownload(
-                        message_id=item.message_id,
-                        chat_id=item.chat_id,
-                        file_name=item.file_name,
-                        error_type=failure_info["error_type"],
-                        error_message=failure_info["error_message"],
-                        retry_count=failure_info["retry_count"],
-                        last_retry=datetime.fromisoformat(failure_info["last_retry"])
+                    # 速度计算需要的变量
+                    import time
+                    last_update = {'size': 0, 'time': time.time()}
+                    
+                    def progress_cb(current, total):
+                        now = time.time()
+                        elapsed = now - last_update['time']
+                        
+                        item.downloaded_size = current
+                        item.file_size = total
+                        if total > 0:
+                            item.progress = (current / total) * 100
+                        
+                        # 计算速度 (至少间隔 0.5 秒更新一次)
+                        if elapsed >= 0.5:
+                            bytes_diff = current - last_update['size']
+                            item.speed = bytes_diff / elapsed if elapsed > 0 else 0
+                            last_update['size'] = current
+                            last_update['time'] = now
+                    
+                    success, downloaded, failure_info = await retry_manager.download_with_retry(
+                        download_func=telegram_client.download_media,
+                        message=msg,
+                        file_path=temp_file_path,
+                        refresh_message_func=telegram_client.get_message_by_id,
+                        progress_callback=progress_cb
                     )
-                    task.failed_downloads.append(failed_download)
+                    
+                    if success and downloaded:
+                        if temp_file_path.exists():
+                            # 确保目标目录存在
+                            full_path.parent.mkdir(parents=True, exist_ok=True)
+                            # 从 temp 移动到最终位置
+                            import shutil
+                            shutil.move(str(temp_file_path), str(full_path))
+                            logger.info(f"✅ 文件已保存: {full_path}")
+                        item.status = DownloadStatus.COMPLETED
+                        item.progress = 100.0
+                        item.speed = 0  # 下载完成，速度归零
+                        task.downloaded_media += 1
+                        
+                        # 计算任务总速度 (只在完成时计算一次)
+                        task.download_speed = sum(
+                            i.speed for i in task.download_queue 
+                            if i.status == DownloadStatus.DOWNLOADING
+                        )
+                        
+                        # 每完成一个下载，通知一次进度
+                        await self._notify_progress(task.id, task)
+                    elif failure_info:
+                        item.status = DownloadStatus.FAILED
+                        item.error = failure_info.get("error_message")
+                        # 记录到任务的失败列表
+                        from ..models import FailedDownload
+                        failed_download = FailedDownload(
+                            message_id=item.message_id,
+                            chat_id=item.chat_id,
+                            file_name=item.file_name,
+                            error_type=failure_info["error_type"],
+                            error_message=failure_info["error_message"],
+                            retry_count=failure_info["retry_count"],
+                            last_retry=datetime.fromisoformat(failure_info["last_retry"])
+                        )
+                        task.failed_downloads.append(failed_download)
 
             except asyncio.CancelledError:
                 # 任务被取消（暂停或停止）
