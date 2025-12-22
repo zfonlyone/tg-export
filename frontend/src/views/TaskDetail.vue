@@ -38,28 +38,28 @@
       <div class="stat-card clickable pointer" :class="{ active: currentTab === 'active' }" @click="currentTab = 'active'">
         <div class="stat-icon">⚡</div>
         <div class="stat-info">
-          <div class="stat-value">{{ queueCounts.active || 0 }}</div>
+          <div class="stat-value">{{ stats.active || 0 }}</div>
           <div class="stat-label">正在下载/暂停</div>
         </div>
       </div>
       <div class="stat-card pointer" :class="{ active: currentTab === 'waiting' }" @click="currentTab = 'waiting'">
         <div class="stat-icon">⏳</div>
         <div class="stat-info">
-          <div class="stat-value">{{ queueCounts.waiting || 0 }}</div>
+          <div class="stat-value">{{ stats.waiting || 0 }}</div>
           <div class="stat-label">等待队列</div>
         </div>
       </div>
       <div class="stat-card pointer" :class="{ active: currentTab === 'failed' }" @click="currentTab = 'failed'">
         <div class="stat-icon">❌</div>
         <div class="stat-info">
-          <div class="stat-value">{{ queueCounts.failed || 0 }}</div>
+          <div class="stat-value">{{ stats.failed || 0 }}</div>
           <div class="stat-label">下载失败</div>
         </div>
       </div>
       <div class="stat-card pointer" :class="{ active: currentTab === 'completed' }" @click="currentTab = 'completed'">
         <div class="stat-icon">✅</div>
         <div class="stat-info">
-          <div class="stat-value">{{ queueCounts.completed || 0 }}</div>
+          <div class="stat-value">{{ stats.completed || 0 }}</div>
           <div class="stat-label">已完成/跳过</div>
         </div>
       </div>

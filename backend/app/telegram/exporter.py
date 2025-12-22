@@ -855,7 +855,8 @@ class ExportManager:
             try:
                 async with global_start_lock:
                     now = time.time()
-                    wait_time = max(0, self._last_global_start_time + 3 - now)
+                    # [Smooth Startup] 每 5 秒开启一个 Worker 直到满载
+                    wait_time = max(0, self._last_global_start_time + 5 - now)
                     if wait_time > 0:
                         await asyncio.sleep(wait_time)
                     self._last_global_start_time = time.time()
