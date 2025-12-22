@@ -231,6 +231,7 @@ class ExportManager:
             if item.status == DownloadStatus.DOWNLOADING:
                 item.status = DownloadStatus.PAUSED
         
+        # [NEW] 显式标记任务状态，但保持在活动任务中，不触发清理
         await self._notify_progress(task_id, task)
         return True
     
@@ -394,20 +395,25 @@ class ExportManager:
                 "counts": {"downloading": 0, "waiting": 0, "completed": 0}
             }
         
-        all_downloading = [i for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING]
-        all_waiting = [i for i in task.download_queue if i.status in [DownloadStatus.WAITING, DownloadStatus.PAUSED, DownloadStatus.FAILED]]
+        # 统一列表逻辑：正在下载中包含 DOWNLOADING 和 PAUSED
+        # 这样前端只需展示两个大类：活动中 (Active) 和 已完成 (Completed)
+        all_active = [i for i in task.download_queue if i.status in [DownloadStatus.DOWNLOADING, DownloadStatus.PAUSED]]
+        all_waiting = [i for i in task.download_queue if i.status in [DownloadStatus.WAITING]]
+        all_failed = [i for i in task.download_queue if i.status == DownloadStatus.FAILED]
         all_completed = [i for i in task.download_queue if i.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]]
         
         # 如果 limit <= 0，则返回全量数据
         res_limit = limit if limit > 0 else 999999
         
         return {
-            "downloading": all_downloading[:res_limit],
+            "downloading": all_active[:res_limit], # 兼容旧接口命名，实为 Active
             "waiting": all_waiting[:res_limit],
+            "failed": all_failed[:res_limit],
             "completed": all_completed[:res_limit],
             "counts": {
-                "downloading": len(all_downloading),
+                "active": len(all_active),
                 "waiting": len(all_waiting),
+                "failed": len(all_failed),
                 "completed": len(all_completed)
             }
         }

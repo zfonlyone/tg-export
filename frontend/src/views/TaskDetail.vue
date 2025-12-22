@@ -13,7 +13,7 @@
       </div>
     </div>
 
-    <!-- 顶部操作栏 -->
+    <!-- 顶部操作栏 (增强手机端适配) -->
     <div class="premium-card actions-panel">
       <div class="progress-info">
         <div class="p-main">
@@ -33,91 +33,84 @@
       </div>
     </div>
 
-    <!-- 三段式任务列表 -->
-    <div class="monitoring-grid">
-      <!-- 下载中 -->
-      <div class="monitor-column glass-card">
-        <div class="column-header">
-          <span class="c-title">⚡ 正在下载</span>
-          <span class="c-badge info">{{ queueCounts.downloading }}</span>
+    <!-- 顶部统计卡片 (作为过滤器) -->
+    <div class="summary-grid">
+      <div class="stat-card clickable pointer" :class="{ active: currentTab === 'active' }" @click="currentTab = 'active'">
+        <div class="stat-icon">⚡</div>
+        <div class="stat-info">
+          <div class="stat-value">{{ queueCounts.active || 0 }}</div>
+          <div class="stat-label">正在下载/暂停</div>
         </div>
-        <div class="queue-list">
-          <div v-for="item in queue.downloading" :key="item.id" class="queue-item downloading">
-            <div class="item-main">
-              <div class="item-name" :title="item.file_name">{{ item.file_name }}</div>
-              <div class="item-meta">
-                <span>{{ formatSize(item.file_size) }}</span>
-                <span class="item-percent">{{ (item.progress || 0).toFixed(1) }}%</span>
-                <span class="item-speed" v-if="item.speed > 0">{{ formatSpeed(item.speed) }}</span>
-              </div>
-              <div class="item-progress">
-                <div class="progress-tiny">
-                  <div class="fill" :style="{ width: item.progress + '%' }"></div>
-                </div>
-              </div>
-            </div>
-            <div class="item-actions">
-              <button @click="pauseItem(item.id)" class="action-btn" title="暂停下载">⏸</button>
-              <button @click="retryItem(item.id)" class="action-btn" title="重新开始">🔄</button>
-              <button @click="cancelItem(item.id)" class="action-btn danger" title="跳过/取消">✖</button>
-            </div>
-          </div>
-          <div v-if="!queue.downloading || queue.downloading.length === 0" class="empty-mini">无活跃下载</div>
+      </div>
+      <div class="stat-card pointer" :class="{ active: currentTab === 'waiting' }" @click="currentTab = 'waiting'">
+        <div class="stat-icon">⏳</div>
+        <div class="stat-info">
+          <div class="stat-value">{{ queueCounts.waiting || 0 }}</div>
+          <div class="stat-label">等待队列</div>
+        </div>
+      </div>
+      <div class="stat-card pointer" :class="{ active: currentTab === 'failed' }" @click="currentTab = 'failed'">
+        <div class="stat-icon">❌</div>
+        <div class="stat-info">
+          <div class="stat-value">{{ queueCounts.failed || 0 }}</div>
+          <div class="stat-label">下载失败</div>
+        </div>
+      </div>
+      <div class="stat-card pointer" :class="{ active: currentTab === 'completed' }" @click="currentTab = 'completed'">
+        <div class="stat-icon">✅</div>
+        <div class="stat-info">
+          <div class="stat-value">{{ queueCounts.completed || 0 }}</div>
+          <div class="stat-label">已完成/跳过</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 统一任务列表 -->
+    <div class="unified-task-list">
+      <div class="list-toolbar">
+        <div class="filter-tabs">
+          <button class="tab-btn" :class="{ active: currentTab === 'active' }" @click="currentTab = 'active'">活动中</button>
+          <button class="tab-btn" :class="{ active: currentTab === 'waiting' }" @click="currentTab = 'waiting'">等待中</button>
+          <button class="tab-btn" :class="{ active: currentTab === 'failed' }" @click="currentTab = 'failed'">已失败</button>
+          <button class="tab-btn" :class="{ active: currentTab === 'completed' }" @click="currentTab = 'completed'">已完成</button>
+        </div>
+        <div class="header-right-tools">
+          <button @click="toggleViewAll" class="toggle-all-btn">{{ viewAll ? '显示精简' : '查看全部' }}</button>
         </div>
       </div>
 
-      <!-- 等待中 -->
-      <div class="monitor-column glass-card">
-        <div class="column-header">
-          <span class="c-title">⏳ 等待队列</span>
-          <div class="header-right-tools">
-            <span class="c-badge warning">{{ queueCounts.waiting }}</span>
-            <button @click="toggleViewAll('waiting')" class="toggle-all-btn">{{ viewAll.waiting ? '显示精简' : '查看全部' }}</button>
-          </div>
-        </div>
-        <div class="queue-list">
-          <div v-for="item in queue.waiting" :key="item.id" class="queue-item">
-            <div class="item-main">
-              <div class="item-name" :title="item.file_name">{{ item.file_name }}</div>
-              <div class="item-meta">
-                <span>{{ formatSize(item.file_size) }}</span>
-                <span class="item-status-text" :class="item.status">{{ getStatusLabel(item.status) }}</span>
+      <div class="queue-list" style="max-height: 60vh;">
+        <div v-for="item in filteredList" :key="item.id" class="queue-item" :class="item.status">
+          <div class="item-main">
+            <div class="item-name" :title="item.file_name">
+              <span class="file-type-icon">{{ getFileIcon(item.media_type) }}</span>
+              {{ item.file_name }}
+            </div>
+            <div class="item-meta">
+              <span class="file-size">{{ formatSize(item.file_size) }}</span>
+              <span v-if="item.status === 'downloading'" class="item-speed">{{ formatSpeed(item.speed) }}</span>
+              <span class="item-percent" v-if="item.status === 'downloading' || (item.progress > 0 && item.progress < 100)">{{ item.progress.toFixed(1) }}%</span>
+              <span class="item-status-text" :class="item.status">{{ getStatusLabel(item.status) }}</span>
+            </div>
+            <div class="item-progress" v-if="item.status === 'downloading' || (item.progress > 0 && item.progress < 100)">
+              <div class="progress-tiny">
+                <div class="fill" :style="{ width: item.progress + '%' }"></div>
               </div>
             </div>
-            <div class="item-actions">
-              <button v-if="item.status === 'paused'" @click="resumeItem(item.id)" class="action-btn" title="恢复">▶</button>
-              <button v-else @click="pauseItem(item.id)" class="action-btn" title="暂停">⏸</button>
-              <button @click="cancelItem(item.id)" class="action-btn danger" title="跳过">✖</button>
-            </div>
           </div>
-          <div v-if="!queue.waiting || queue.waiting.length === 0" class="empty-mini">队列已空</div>
-        </div>
-      </div>
-
-      <!-- 已完成/跳过 -->
-      <div class="monitor-column glass-card">
-        <div class="column-header">
-          <span class="c-title">✅ 最近完成</span>
-          <div class="header-right-tools">
-            <span class="c-badge success">{{ queueCounts.completed }}</span>
-            <button @click="toggleViewAll('completed')" class="toggle-all-btn">{{ viewAll.completed ? '显示精简' : '查看全部' }}</button>
+          <div class="item-actions">
+            <!-- 正在下载或等待中：暂停 -->
+            <button v-if="['downloading', 'waiting'].includes(item.status)" @click="pauseItem(item.id)" class="action-btn" title="暂停">⏸</button>
+            <!-- 已暂停：恢复 -->
+            <button v-if="item.status === 'paused'" @click="resumeItem(item.id)" class="action-btn" title="恢复">▶</button>
+            <!-- 失败或已完成：重试 -->
+            <button v-if="['failed', 'completed', 'skipped'].includes(item.status)" @click="retryItem(item.id)" class="action-btn" title="重试/重新下载">🔄</button>
+            <!-- 通用：取消/跳过 -->
+            <button @click="cancelItem(item.id)" class="action-btn danger" title="取消/跳过">✖</button>
           </div>
         </div>
-        <div class="queue-list">
-          <div v-for="item in queue.completed" :key="item.id" class="queue-item completed">
-            <div class="item-main">
-              <div class="item-name" :title="item.file_name">{{ item.file_name }}</div>
-              <div class="item-meta">
-                <span>{{ formatSize(item.file_size) }}</span>
-                <span class="item-status-text" :class="item.status">{{ getStatusLabel(item.status) }}</span>
-              </div>
-            </div>
-            <div class="item-actions">
-              <button @click="retryItem(item.id)" class="action-btn" title="重新下载">🔄</button>
-              <button @click="cancelItem(item.id)" class="action-btn danger" title="移除记录">✖</button>
-            </div>
-          </div>
-          <div v-if="!queue.completed || queue.completed.length === 0" class="empty-mini">暂无记录</div>
+        <div v-if="filteredList.length === 0" class="empty-mini">
+          {{ getEmptyText() }}
         </div>
       </div>
     </div>
@@ -125,7 +118,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import axios from 'axios'
 
@@ -134,19 +127,27 @@ const router = useRouter()
 const taskId = route.params.id
 
 const task = ref({})
-const queue = ref({ downloading: [], waiting: [], completed: [] })
-const queueCounts = ref({ downloading: 0, waiting: 0, completed: 0 })
-const viewAll = reactive({ waiting: false, completed: false })
+const queue = ref({ downloading: [], waiting: [], failed: [], completed: [] })
+const queueCounts = ref({ active: 0, waiting: 0, failed: 0, completed: 0 })
+const currentTab = ref('active')
+const viewAll = ref(false)
 let refreshTimer = null
 
 function getAuthHeader() {
   return { Authorization: `Bearer ${localStorage.getItem('token')}` }
 }
 
+const filteredList = computed(() => {
+  if (currentTab.value === 'active') return queue.value.downloading
+  if (currentTab.value === 'waiting') return queue.value.waiting
+  if (currentTab.value === 'failed') return queue.value.failed
+  if (currentTab.value === 'completed') return queue.value.completed
+  return []
+})
+
 async function fetchData() {
   try {
-    // 如果有任意板块需要查看全部，则传递 limit: 0 (后端对应全量)
-    const currentLimit = (viewAll.waiting || viewAll.completed) ? 0 : 20
+    const currentLimit = viewAll.value ? 0 : 50
     
     const [taskRes, queueRes] = await Promise.all([
       axios.get(`/api/export/${taskId}`, { headers: getAuthHeader() }),
@@ -159,20 +160,11 @@ async function fetchData() {
     task.value = taskRes.data
     const newData = queueRes.data
     
-    // 性能优化：只有在 Downloading 或者 Counts 改变时才全量更新
-    // 下载中的永远更新 (进度/速度变化频繁)
     queue.value.downloading = newData.downloading
+    queue.value.waiting = newData.waiting
+    queue.value.failed = newData.failed || []
+    queue.value.completed = newData.completed
     queueCounts.value = newData.counts
-    
-    // Waiting 和 Completed 列表：如果 count 没变，且 IDs 也没变（这里简化为 count 检查 + viewAll 切换）
-    // 只有在 count 变化（说明有文件完成或新加入）或 viewAll 状态切换时才替换列表
-    if (viewAll.waiting || queue.value.waiting.length !== newData.waiting.length) {
-      queue.value.waiting = newData.waiting
-    }
-    if (viewAll.completed || queue.value.completed.length !== newData.completed.length) {
-      queue.value.completed = newData.completed
-    }
-    
   } catch (err) {
     console.error('获取详情失败:', err)
     if (err.response?.status === 404) {
@@ -181,9 +173,33 @@ async function fetchData() {
   }
 }
 
-function toggleViewAll(type) {
-  viewAll[type] = !viewAll[type]
-  fetchData() // 立即触发一次全量拉取
+function toggleViewAll() {
+  viewAll.value = !viewAll.value
+  fetchData()
+}
+
+function getFileIcon(type) {
+  const icons = {
+    photo: '🖼️',
+    video: '🎬',
+    audio: '🎵',
+    voice: '🎤',
+    video_note: '📹',
+    document: '📄',
+    sticker: '🏷️',
+    animation: '🎡'
+  }
+  return icons[type] || '📁'
+}
+
+function getEmptyText() {
+  const texts = {
+    active: '暂无活跃下载或暂停的任务',
+    waiting: '队列中没有等待中的文件',
+    failed: '没有任何下载失败的记录',
+    completed: '还没有已完成或跳过的文件'
+  }
+  return texts[currentTab.value] || '暂无内容'
 }
 
 // 任务操作
@@ -217,7 +233,7 @@ function formatSpeed(bps) {
 function getStatusLabel(status) {
   const labels = {
     waiting: '等待',
-    downloading: '正在下载',
+    downloading: '下载中',
     paused: '已暂停',
     completed: '完成',
     failed: '失败',
@@ -228,7 +244,7 @@ function getStatusLabel(status) {
 
 onMounted(() => {
   fetchData()
-  refreshTimer = setInterval(fetchData, 2000) // 详情页刷新快一点 (2s)
+  refreshTimer = setInterval(fetchData, 2000)
 })
 
 onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
@@ -270,98 +286,105 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 
 .button-group { display: flex; gap: 12px; flex-shrink: 0; }
 
-.monitoring-grid {
+.summary-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 24px;
-  align-items: start;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  margin-bottom: 24px;
 }
 
-@media (max-width: 1000px) {
-  .monitoring-grid { grid-template-columns: 1fr; }
-}
+/* 复用 style.css 中定义的 stat-card，但在这里添加 active 状态 */
+.stat-card.pointer { cursor: pointer; transition: all 0.2s; border: 1px solid #f4f4f5; }
+.stat-card.pointer:hover { transform: translateY(-2px); border-color: #3b82f6; }
+.stat-card.pointer.active { border-color: #3b82f6; background: #eff6ff; }
 
-.monitor-column {
+.unified-task-list {
   background: white;
   border-radius: 20px;
   border: 1px solid #f4f4f5;
   box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
-  display: flex;
-  flex-direction: column;
-  max-height: 80vh;
 }
 
-.column-header {
+.list-toolbar {
   padding: 16px 20px;
   border-bottom: 1px solid #f4f4f5;
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
-.header-right-tools {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.toggle-all-btn {
-  background: none;
-  border: none;
-  color: #3b82f6;
-  font-size: 0.75rem;
-  font-weight: 700;
-  cursor: pointer;
-  padding: 4px 8px;
-  border-radius: 6px;
-  transition: background 0.2s;
-}
-.toggle-all-btn:hover {
-  background: #eff6ff;
-}
-.c-title { font-weight: 800; color: #18181b; font-size: 1rem; }
-.c-badge {
-  font-size: 0.7rem; font-weight: 800; padding: 4px 10px; border-radius: 50px;
-}
-.c-badge.info { background: #dbeafe; color: #1e40af; }
-.c-badge.warning { background: #fef3c7; color: #92400e; }
-.c-badge.success { background: #dcfce7; color: #166534; }
 
-.queue-list { padding: 10px; overflow-y: auto; flex: 1; }
-.empty-mini { padding: 40px; text-align: center; color: #a1a1aa; font-size: 0.9rem; }
+.filter-tabs {
+  display: flex;
+  background: #f4f4f5;
+  padding: 4px;
+  border-radius: 12px;
+}
+
+.tab-btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #71717a;
+  cursor: pointer;
+}
+
+.tab-btn.active {
+  background: white;
+  color: #18181b;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.queue-list { padding: 10px; overflow-y: auto; }
+.empty-mini { padding: 60px; text-align: center; color: #a1a1aa; font-size: 0.9rem; }
 
 .queue-item {
   display: flex;
-  padding: 12px;
+  padding: 16px;
   background: #fafafa;
-  border-radius: 12px;
-  margin-bottom: 10px;
-  gap: 12px;
+  border-radius: 16px;
+  margin-bottom: 12px;
+  gap: 16px;
   border: 1px solid transparent;
   transition: 0.2s;
 }
-.queue-item:hover { transform: scale(1.02); background: white; border-color: #f4f4f5; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05); }
+.queue-item:hover { background: white; border-color: #3b82f6; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
 
 .item-main { flex: 1; min-width: 0; }
-.item-name { font-size: 0.8rem; font-weight: 700; color: #3f3f46; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; }
-.item-meta { display: flex; justify-content: space-between; font-size: 0.7rem; color: #a1a1aa; font-weight: 600; }
+.item-name { 
+  font-size: 0.9rem; font-weight: 700; color: #18181b; 
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
+  margin-bottom: 6px; display: flex; align-items: center; gap: 8px;
+}
+.file-type-icon { font-size: 1.1rem; }
+
+.item-meta { display: flex; align-items: center; gap: 12px; font-size: 0.75rem; color: #71717a; font-weight: 600; }
 .item-speed { color: #3b82f6; }
-.item-percent { color: #8b5cf6; font-weight: 800; font-variant-numeric: tabular-nums; }
-.item-status-text { font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; background: #f4f4f5; text-transform: uppercase; }
+.item-percent { color: #8b5cf6; }
+
+.item-status-text { 
+  font-size: 0.65rem; padding: 2px 8px; border-radius: 6px; 
+  background: #f4f4f5; text-transform: uppercase; margin-left: auto;
+}
+.item-status-text.downloading { background: #dbeafe; color: #1e40af; }
 .item-status-text.completed { background: #dcfce7; color: #166534; }
-.item-status-text.skipped { background: #f4f4f5; color: #71717a; }
+.item-status-text.paused { background: #fef3c7; color: #92400e; }
 .item-status-text.failed { background: #fee2e2; color: #991b1b; }
 
-.item-progress { margin-top: 6px; }
-.progress-tiny { height: 4px; background: #f4f4f5; border-radius: 2px; overflow: hidden; }
+.item-progress { margin-top: 10px; }
+.progress-tiny { height: 6px; background: #f4f4f5; border-radius: 3px; overflow: hidden; }
 .progress-tiny .fill { height: 100%; background: #3b82f6; transition: width 0.3s; }
 
-.item-actions { display: flex; align-items: center; gap: 4px; }
-.action-btn {
-  width: 28px; height: 28px; border-radius: 8px; border: none; background: white;
-  cursor: pointer; display: flex; align-items: center; justify-content: center;
-  font-size: 0.8rem; border: 1px solid #f4f4f5; transition: 0.2s;
-}
-.action-btn:hover { background: #f4f4f5; transform: translateY(-2px); }
-.action-btn.danger { color: #ef4444; }
+.item-actions { display: flex; align-items: center; gap: 6px; }
 
-@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 640px) {
+  .actions-panel { flex-direction: column; align-items: stretch; gap: 20px; }
+  .summary-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .queue-item { flex-direction: column; gap: 12px; }
+  .item-actions { justify-content: flex-end; border-top: 1px dashed #f4f4f5; padding-top: 10px; }
+  .list-toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
+  .filter-tabs { overflow-x: auto; }
+}
 </style>
