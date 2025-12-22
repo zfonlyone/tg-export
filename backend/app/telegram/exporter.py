@@ -582,6 +582,7 @@ class ExportManager:
             # 速度计算需要的变量
             import time
             last_update = {'size': 0, 'time': time.time()}
+            loop = asyncio.get_running_loop()
             
             def progress_cb(current, total):
                 now = time.time()
@@ -592,8 +593,8 @@ class ExportManager:
                 if total > 0:
                     item.progress = (current / total) * 100
                 
-                # 计算速度 (至少间隔 0.5 秒更新一次)
-                if elapsed >= 0.5:
+                # 计算速度 (至少间隔 1.5 秒更新一次)
+                if elapsed >= 1.5:
                     # 检查是否在此期间被取消了
                     if item.status == DownloadStatus.SKIPPED:
                         # 抛出取消异常以中止 download_media
@@ -607,10 +608,15 @@ class ExportManager:
                     last_update['size'] = current
                     last_update['time'] = now
                     
-                    # [NEW] 并行下载时，更频繁地通知单个文件的进度变化
-                    # 仅在有进度变化时更新，避免过度通知
+                    # [NEW] 并行下载时，安全地通知单个文件的进度变化 (使用 call_soon_threadsafe 修复 loop 错误)
                     if bytes_diff > 0:
-                        asyncio.create_task(self._notify_progress(task.id, task))
+                        try:
+                            loop.call_soon_threadsafe(
+                                lambda: asyncio.create_task(self._notify_progress(task.id, task))
+                            )
+                        except Exception as e:
+                            # 即使通知失败也不要中断任务
+                            pass
             # 日志：记录下载路径
             logger.info(f"任务 {task.id[:8]}: 开始下载文件 '{item.file_name}' -> {item.file_path}")
             
@@ -630,64 +636,70 @@ class ExportManager:
                     "error_message": "Request timed out during download"
                 }
 
+            # 5. 下载结果校验与收尾
             if success and downloaded_path:
-                # [NEW] 增加 0 字节校验，防止“空包”误报成功
                 import os
                 actual_size = os.path.getsize(downloaded_path) if os.path.exists(downloaded_path) else 0
                 if actual_size == 0 and item.file_size > 0:
                     logger.error(f"任务 {task.id[:8]}: 检测到空包! 文件 {item.file_name} 长度为 0，视为下载失败。")
                     if os.path.exists(downloaded_path):
-                        os.remove(downloaded_path)
+                        try: os.remove(downloaded_path)
+                        except: pass
                     success = False
-                    item.status = DownloadStatus.FAILED
-                    item.error = "下载结果为空文件 (0 bytes)"
-                    await self._notify_progress(task.id, task)
-                    # If it's a 0-byte file and considered failed, we should return here
-                    return
 
-                item.status = DownloadStatus.COMPLETED
-                if temp_file_path.exists():
-                    # 确保目标目录存在并具有 777 权限
-                    full_path.parent.mkdir(parents=True, exist_ok=True)
-                    try:
-                        import os
-                        os.chmod(full_path.parent, 0o777)
-                    except: pass
-                    
-                    # 从 temp 移动到最终位置
-                    import shutil
-                    shutil.move(str(temp_file_path), str(full_path))
-                    # 强制设置文件权限 777
-                    try:
-                        os.chmod(full_path, 0o777)
-                    except: pass
-                    logger.info(f"✅ 文件已保存并授权 777: {full_path}")
+            if success:
+                # 下载成功 (注意：downloaded_path 可能是 temp_file_path 或最终路径，视 retry_manager 策略而定)
                 item.status = DownloadStatus.COMPLETED
                 item.progress = 100.0
-                item.speed = 0  # 下载完成，速度归零
+                item.speed = 0
+                
+                # 统一处理路径移动 (如果 downloaded_path 与 full_path 不一致)
+                import shutil
+                if downloaded_path and os.path.exists(downloaded_path):
+                    if str(downloaded_path) != str(full_path):
+                        full_path.parent.mkdir(parents=True, exist_ok=True)
+                        try: os.chmod(full_path.parent, 0o777)
+                        except: pass
+                        shutil.move(str(downloaded_path), str(full_path))
+                    
+                    # 权限设置
+                    try: os.chmod(full_path, 0o777)
+                    except: pass
+                    item.file_path = str(full_path.absolute())
+                elif temp_file_path.exists():
+                    full_path.parent.mkdir(parents=True, exist_ok=True)
+                    try: os.chmod(full_path.parent, 0o777)
+                    except: pass
+                    shutil.move(str(temp_file_path), str(full_path))
+                    try: os.chmod(full_path, 0o777)
+                    except: pass
+                    item.file_path = str(full_path.absolute())
+
+                logger.info(f"任务 {task.id[:8]}: 文件 '{item.file_name}' 下载成功: {item.file_path}")
                 task.downloaded_media += 1
-                
-                # 计算任务总速度
-                active_items = [i for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING]
-                task.download_speed = sum(i.speed for i in active_items) if active_items else 0
-                
-                # 每完成一个下载，通知一次进度
                 await self._notify_progress(task.id, task)
-            elif failure_info:
+                return
+
+            # 如果走到这里，说明 success 为 False (失败)
+            if failure_info:
                 item.status = DownloadStatus.FAILED
-                item.error = failure_info.get("error_message")
+                item.error = failure_info.get("error_message", "Unknown error")
+                
                 # 记录到任务的失败列表
                 from ..models import FailedDownload
+                from datetime import datetime
                 failed_download = FailedDownload(
                     message_id=item.message_id,
                     chat_id=item.chat_id,
                     file_name=item.file_name,
-                    error_type=failure_info["error_type"],
-                    error_message=failure_info["error_message"],
-                    retry_count=failure_info["retry_count"],
-                    last_retry=datetime.fromisoformat(failure_info["last_retry"])
+                    error_type=failure_info.get("error_type", "unknown"),
+                    error_message=item.error,
+                    retry_count=failure_info.get("retry_count", 0),
+                    last_retry=datetime.now() # 使用当前时间
                 )
                 task.failed_downloads.append(failed_download)
+                logger.error(f"任务 {task.id[:8]}: 文件 {item.file_name} 下载失败: {item.error}")
+                await self._notify_progress(task.id, task)
 
         except asyncio.CancelledError:
             # 任务被取消（暂停或停止）
@@ -752,10 +764,10 @@ class ExportManager:
                 
                 # 4. 执行下载 (包含速率限制)
                 try:
-                    # 全局速率限制：每 2 秒只能开始一个新下载 (用户需求：平滑启动)
+                    # 全局速率限制：每 3 秒只能开始一个新下载 (用户需求：平滑启动)
                     async with global_start_lock:
                         now = time.time()
-                        wait_time = max(0, self._last_global_start_time + 2 - now)
+                        wait_time = max(0, self._last_global_start_time + 3 - now)
                         if wait_time > 0:
                             logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 触发全局限速，等待 {wait_time:.1f}s...")
                             await asyncio.sleep(wait_time)
