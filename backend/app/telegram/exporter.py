@@ -340,12 +340,6 @@ class ExportManager:
                         item.speed = bytes_diff / elapsed if elapsed > 0 else 0
                         last_update['size'] = current
                         last_update['time'] = now
-                        
-                        # 更新任务总速度 (所有下载中文件的速度之和)
-                        task.download_speed = sum(
-                            i.speed for i in task.download_queue 
-                            if i.status == DownloadStatus.DOWNLOADING
-                        )
                 
                 success, downloaded, failure_info = await retry_manager.download_with_retry(
                     download_func=telegram_client.download_media,
@@ -365,7 +359,15 @@ class ExportManager:
                         logger.info(f"✅ 文件已保存: {full_path}")
                     item.status = DownloadStatus.COMPLETED
                     item.progress = 100.0
+                    item.speed = 0  # 下载完成，速度归零
                     task.downloaded_media += 1
+                    
+                    # 计算任务总速度 (只在完成时计算一次)
+                    task.download_speed = sum(
+                        i.speed for i in task.download_queue 
+                        if i.status == DownloadStatus.DOWNLOADING
+                    )
+                    
                     # 每完成一个下载，通知一次进度
                     await self._notify_progress(task.id, task)
                 elif failure_info:
@@ -384,9 +386,34 @@ class ExportManager:
                     )
                     task.failed_downloads.append(failed_download)
 
+        # 速度更新任务 - 独立运行，避免阻塞下载
+        async def speed_updater():
+            while True:
+                await asyncio.sleep(3)  # 每3秒更新一次
+                # 检查是否还有下载任务
+                downloading_count = sum(1 for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING)
+                if downloading_count == 0:
+                    task.download_speed = 0
+                    break
+                # 计算总速度
+                task.download_speed = sum(
+                    i.speed for i in task.download_queue 
+                    if i.status == DownloadStatus.DOWNLOADING
+                )
+        
+        # 启动速度更新任务
+        speed_task = asyncio.create_task(speed_updater())
+        
         # 创建并启动所有下载任务
         download_tasks = [download_worker(item) for item in task.download_queue]
         await asyncio.gather(*download_tasks)
+        
+        # 停止速度更新任务
+        speed_task.cancel()
+        try:
+            await speed_task
+        except asyncio.CancelledError:
+            pass
     
     async def _get_chats_to_export(self, options: ExportOptions) -> List[ChatInfo]:
         """获取要导出的聊天列表"""
