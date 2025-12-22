@@ -32,6 +32,7 @@ class ExportManager:
         self.tasks: Dict[str, ExportTask] = {}
         self._running_tasks: Dict[str, asyncio.Task] = {}
         self._active_download_tasks: Dict[str, Set[asyncio.Task]] = {} # 任务ID -> 下载协程集合
+        self._progress_callbacks: Dict[str, List[Callable]] = {}
         self._paused_tasks: set = set()  # 暂停的任务ID
         self._resuming_tasks: set = set() # 正在恢复的任务ID (用于防止取消时重置状态)
         self._task_queues: Dict[str, asyncio.Queue] = {} # 任务ID -> 异步队列
