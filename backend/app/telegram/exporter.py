@@ -42,6 +42,11 @@ class ExportManager:
         settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
         # 启动时加载任务
         self._load_tasks()
+        # 脏标记，用于后台保存
+        self._needs_save = False
+        self._save_lock = asyncio.Lock()
+        # 启动后台保存循环
+        asyncio.create_task(self._auto_save_loop())
     
     def _load_tasks(self):
         """从文件加载任务"""
@@ -79,14 +84,43 @@ class ExportManager:
         except Exception as e:
             logger.error(f"加载任务文件失败: {e}")
     
+    async def _auto_save_loop(self):
+        """后台自动保存循环"""
+        while True:
+            try:
+                await asyncio.sleep(10)  # 每 10 秒检查一次
+                if self._needs_save:
+                    await self._save_tasks_async()
+            except Exception as e:
+                logger.error(f"后台保存出错: {e}")
+
     def _save_tasks(self):
-        """保存任务到文件"""
+        """同步保存（用于某些必须立即保存的场景）"""
         try:
             data = [task.model_dump(mode='json') for task in self.tasks.values()]
             with open(self._tasks_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+            self._needs_save = False
         except Exception as e:
             logger.error(f"保存任务失败: {e}")
+
+    async def _save_tasks_async(self):
+        """异步保存"""
+        async with self._save_lock:
+            if not self._needs_save:
+                return
+            try:
+                # 在线程池中执行 IO
+                data = [task.model_dump(mode='json') for task in self.tasks.values()]
+                def save():
+                    with open(self._tasks_file, 'w', encoding='utf-8') as f:
+                        json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+                
+                await asyncio.get_event_loop().run_in_executor(None, save)
+                self._needs_save = False
+                logger.debug("任务列表已自动保存")
+            except Exception as e:
+                logger.error(f"异步保存任务失败: {e}")
     
     def create_task(self, name: str, options: ExportOptions) -> ExportTask:
         """创建导出任务"""
@@ -115,8 +149,8 @@ class ExportManager:
     
     async def _notify_progress(self, task_id: str, task: ExportTask):
         """通知进度更新"""
-        # 保存任务状态到文件
-        self._save_tasks()
+        # 标记需要保存，不再立即写盘
+        self._needs_save = True
         
         callbacks = self._progress_callbacks.get(task_id, [])
         for callback in callbacks:
@@ -196,10 +230,10 @@ class ExportManager:
         
         logger.info(f"正在恢复/重跑任务: '{task.name}' (ID: {task_id[:8]}...)")
         
-        # 将所有暂停或失败（或已完成，如果是重跑）的下载项恢复为等待状态
+        # 将所有暂停或失败的下载项恢复为等待状态 (已完成的不再重下)
         reset_count = 0
         for item in task.download_queue:
-            if item.status in [DownloadStatus.PAUSED, DownloadStatus.FAILED, DownloadStatus.COMPLETED]:
+            if item.status in [DownloadStatus.PAUSED, DownloadStatus.FAILED]:
                 item.status = DownloadStatus.WAITING
                 item.progress = 0
                 item.downloaded_size = 0
@@ -309,11 +343,50 @@ class ExportManager:
                     item.status = DownloadStatus.WAITING
                     return True
         return False
-
-    def get_download_queue(self, task_id: str) -> List[DownloadItem]:
-        """获取任务的下载队列"""
+    
+    async def cancel_download_item(self, task_id: str, item_id: str) -> bool:
+        """取消 (跳过) 单个下载项"""
         task = self.tasks.get(task_id)
-        return task.download_queue if task else []
+        if not task: return False
+        
+        target_item = None
+        for item in task.download_queue:
+            if item.id == item_id:
+                target_item = item
+                break
+        
+        if not target_item: return False
+        
+        # 1. 标记为已跳过
+        target_item.status = DownloadStatus.SKIPPED
+        target_item.speed = 0
+        
+        # 2. 如果正在下载，尝试通过协程取消
+        if task_id in self._active_download_tasks:
+            # 找到对应的 Worker 协程
+            # 注意：_active_download_tasks 里的 task 没有直接关联 item_id
+            # 我们需要在 _download_item_worker 里维护更细的映射，或者这里简单遍历
+            # 为了简单起见，我们在 worker 内部感知状态变化
+            pass 
+        
+        await self._notify_progress(task_id, task)
+        return True
+
+    def get_download_queue(self, task_id: str, limit: int = 20) -> Dict[str, List[DownloadItem]]:
+        """获取任务的分段下载队列 (极致性能优化：三段式)"""
+        task = self.tasks.get(task_id)
+        if not task:
+            return {"downloading": [], "waiting": [], "completed": []}
+        
+        downloading = [i for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING][:limit]
+        waiting = [i for i in task.download_queue if i.status in [DownloadStatus.WAITING, DownloadStatus.PAUSED, DownloadStatus.FAILED]][:limit]
+        completed = [i for i in task.download_queue if i.status == DownloadStatus.COMPLETED][:limit]
+        
+        return {
+            "downloading": downloading,
+            "waiting": waiting,
+            "completed": completed
+        }
     async def _run_export(self, task: ExportTask):
         """执行导出任务"""
         try:
@@ -498,6 +571,11 @@ class ExportManager:
                 
                 # 计算速度 (至少间隔 0.5 秒更新一次)
                 if elapsed >= 0.5:
+                    # 检查是否在此期间被取消了
+                    if item.status == DownloadStatus.SKIPPED:
+                        # 抛出取消异常以中止 download_media
+                        raise asyncio.CancelledError("Item was skipped by user")
+
                     bytes_diff = current - last_update['size']
                     item.speed = bytes_diff / elapsed if elapsed > 0 else 0
                     last_update['size'] = current

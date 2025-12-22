@@ -234,11 +234,12 @@ async def get_failed_downloads(
 @router.get("/export/{task_id}/downloads")
 async def get_download_queue(
     task_id: str,
+    limit: int = 20,
     current_user: User = Depends(get_current_user)
 ):
-    """获取详细下载队列"""
-    queue = export_manager.get_download_queue(task_id)
-    return queue
+    """获取分段下载队列 (三段式：下载中、等待中、已完成)"""
+    queue_data = export_manager.get_download_queue(task_id, limit=limit)
+    return queue_data
 
 
 @router.post("/export/{task_id}/retry")
@@ -291,6 +292,19 @@ async def resume_download_item(
     raise HTTPException(status_code=400, detail="恢复失败")
 
 
+@router.post("/export/{task_id}/download/{item_id}/cancel")
+async def cancel_download_item(
+    task_id: str,
+    item_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """取消/跳过单个下载项"""
+    success = await export_manager.cancel_download_item(task_id, item_id)
+    if success:
+        return {"status": "ok", "message": "已取消"}
+    raise HTTPException(status_code=400, detail="取消失败")
+
+
 
 
 @router.delete("/export/{task_id}")
@@ -314,8 +328,10 @@ async def delete_task(
 
 @router.get("/export/tasks", response_model=List[ExportTask])
 async def get_tasks(current_user: User = Depends(get_current_user)):
-    """获取所有任务"""
-    return export_manager.get_all_tasks()
+    """获取所有任务 (不带冗长队列)"""
+    tasks = export_manager.get_all_tasks()
+    # 手动排除大字段以减少响应体积
+    return [task.model_dump(exclude={"download_queue", "failed_downloads"}) for task in tasks]
 
 
 @router.get("/export/{task_id}", response_model=ExportTask)
@@ -323,11 +339,11 @@ async def get_task(
     task_id: str,
     current_user: User = Depends(get_current_user)
 ):
-    """获取任务详情"""
+    """获取任务详情 (不带冗长队列)"""
     task = export_manager.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
-    return task
+    return task.model_dump(exclude={"download_queue", "failed_downloads"})
 
 
 # ===== 设置相关 =====

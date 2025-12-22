@@ -237,26 +237,34 @@ class TelegramClient:
         return None
     
     async def get_dialogs(self, limit: int = 100) -> List[ChatInfo]:
-        """获取对话列表"""
+        """获取最近对话列表 (增加缓存优化)"""
         await self._ensure_connected()
         if not self._is_authorized:
             return []
         
-        dialogs = []
+        # 简单缓存机制 (30秒内不再重复拉取)
+        import time
+        if hasattr(self, '_dialogs_cache') and (time.time() - self._dialogs_last_fetch < 30):
+            return self._dialogs_cache
+
+        chats = []
         try:
-            async for dialog in self._client.get_dialogs(limit):
+            async for dialog in self._client.get_dialogs(limit=limit):
                 chat = dialog.chat
-                dialogs.append(ChatInfo(
+                chats.append(ChatInfo(
                     id=chat.id,
                     title=chat.title or chat.first_name or "Unknown",
-                    type=self._convert_chat_type(chat),
+                    type=ChatType(chat.type.value),
                     username=chat.username,
-                    members_count=getattr(chat, 'members_count', None),
-                    photo_url=None
+                    members_count=chat.members_count
                 ))
+            
+            self._dialogs_cache = chats
+            self._dialogs_last_fetch = time.time()
+            return chats
         except Exception as e:
             print(f"[TG] 获取对话列表出错: {e}")
-        return dialogs
+            return []
     
     def get_message_link(self, chat_id: int, message_id: int, username: Optional[str] = None) -> str:
         """
