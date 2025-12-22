@@ -53,7 +53,7 @@ docker_compose() {
 # ===== 显示菜单 =====
 show_menu() {
     echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
-    echo -e "${CYAN}${BOLD}      TG Export - Telegram 全功能导出工具v1.3.2${PLAIN}"
+    echo -e "${CYAN}${BOLD}      TG Export - Telegram 全功能导出工具${APP_VERSION}${PLAIN}"
     echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
     echo -e " ${GREEN}1.${PLAIN} 安装 TG Export"
     echo -e " ${GREEN}2.${PLAIN} 卸载 TG Export"
@@ -978,6 +978,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
+APP_VERSION="1.3.2"
 
 APP_DIR="/opt/tg-export"
 UNIFIED_CERT_DIR="/etc/ssl/wildcard"
@@ -994,7 +995,7 @@ function docker_compose() {
 
 function show_menu() {
     clear
-    echo -e "${GREEN}=== TG Export 管理工具 (tge)v1.3.2 ===${NC}"
+    echo -e "${GREEN}=== TG Export 管理工具 (tge)${APP_VERSION} ===${NC}"
     echo "1. 启动服务"
     echo "2. 停止服务"
     echo "3. 重启服务"

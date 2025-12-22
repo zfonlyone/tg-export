@@ -462,8 +462,8 @@ async function startExport() {
     // 启动任务
     await axios.post(`/api/export/${createRes.data.id}/start`, {}, { headers })
     
-    // 跳转到任务页面
-    router.push('/tasks')
+    // 跳转到任务详情监控页面
+    router.push(`/tasks/${createRes.data.id}`)
   } catch (err) {
     error.value = err.response?.data?.detail || '创建任务失败'
   } finally {

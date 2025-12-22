@@ -25,7 +25,7 @@
     </div>
 
     <div v-else class="task-grid">
-      <div v-for="task in tasks" :key="task.id" class="managed-card">
+      <div v-for="task in tasks" :key="task.id" class="managed-card clickable" @click="goToDetail(task.id)">
         <div class="card-status-strip" :class="task.status"></div>
         <div class="card-main">
           <div class="card-head">
@@ -52,7 +52,6 @@
               </div>
               <div class="p-right" v-if="task.status === 'running'">
                 <span class="speed-label">{{ formatSpeed(task.download_speed) }}</span>
-                <span class="etr">预计剩余: {{ getETR(task) }}</span>
               </div>
             </div>
             <div class="main-progress-bar">
@@ -60,45 +59,14 @@
             </div>
           </div>
 
-          <!-- 文件详情下拉 -->
-          <div class="files-dropdown" v-if="task.download_queue && task.download_queue.length > 0">
-            <button class="expand-btn" @click="toggleDetailed(task.id)">
-              <span>明细内容 ({{ task.download_queue.length }} 个文件)</span>
-              <i class="chevron" :class="{ rotated: isDetailedExpanded(task) }">▼</i>
-            </button>
-            
-            <div v-if="isDetailedExpanded(task)" class="file-list animate-slide">
-              <div v-for="item in task.download_queue" :key="item.id" class="mini-file-item">
-                <div class="file-icon-box">📄</div>
-                <div class="file-details">
-                  <div class="file-row-1">
-                    <span class="f-name" :title="item.file_name">{{ item.file_name }}</span>
-                    <span class="f-size">{{ formatSize(item.file_size) }}</span>
-                  </div>
-                  <div class="mini-bar">
-                    <div class="mini-fill" :class="item.status" :style="{ width: item.progress + '%' }"></div>
-                  </div>
-                </div>
-                <div class="file-actions">
-                  <span class="mini-status" :class="item.status">{{ getFileStatusText(item.status) }}</span>
-                  <span class="mini-speed" v-if="item.status === 'downloading'">{{ formatSpeed(item.speed) }}</span>
-                  <button v-if="['failed', 'completed'].includes(item.status)" class="btn-mini-retry" @click="retryFile(task.id, item.id)" title="重新下载">
-                    🔄
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
           <div class="footer-actions">
-            <button v-if="['running', 'extracting'].includes(task.status)" @click="pauseTask(task.id)" class="btn-f-action pause">⏸ 暂停</button>
-            <button v-if="task.status === 'paused'" @click="resumeTask(task.id)" class="btn-f-action resume">▶ 恢复</button>
-            <button v-if="['extracting', 'running', 'paused'].includes(task.status)" @click="cancelTask(task.id)" class="btn-f-action delete">✖ 取消</button>
-            <button v-if="task.status === 'completed'" @click="resumeTask(task.id)" class="btn-f-action retry">🔄 重跑</button>
+            <button @click.stop="goToDetail(task.id)" class="btn-f-action monitor">📊 进入监控</button>
+            <button v-if="['running', 'extracting'].includes(task.status)" @click.stop="pauseTask(task.id)" class="btn-f-action pause">⏸ 暂停</button>
+            <button v-if="task.status === 'paused'" @click.stop="resumeTask(task.id)" class="btn-f-action resume">▶ 恢复</button>
             
             <div class="footer-right">
-              <a v-if="task.status === 'completed'" :href="'/exports/' + (task.export_name || task.id)" target="_blank" class="btn-f-action open">📂 打开文件</a>
-              <button v-if="['completed', 'failed', 'cancelled'].includes(task.status)" @click="deleteTask(task.id)" class="btn-f-action delete">🗑 删除</button>
+              <a v-if="task.status === 'completed'" @click.stop :href="'/exports/' + (task.export_name || task.id)" target="_blank" class="btn-f-action open">📂 打开文件</a>
+              <button v-if="['completed', 'failed', 'cancelled'].includes(task.status)" @click.stop="deleteTask(task.id)" class="btn-f-action delete">🗑 删除</button>
             </div>
           </div>
         </div>
@@ -113,7 +81,7 @@ import axios from 'axios'
 
 const loading = ref(true)
 const tasks = ref([])
-const expandedDetailed = ref({})
+const router = useRouter()
 let refreshTimer = null
 
 function getAuthHeader() {
@@ -133,21 +101,14 @@ async function fetchTasks() {
 
 async function pauseTask(id) { await axios.post(`/api/export/${id}/pause`, {}, { headers: getAuthHeader() }); fetchTasks() }
 async function resumeTask(id) { await axios.post(`/api/export/${id}/resume`, {}, { headers: getAuthHeader() }); fetchTasks() }
-async function cancelTask(id) { if(confirm('确定取消该任务？')) { await axios.post(`/api/export/${id}/cancel`, {}, { headers: getAuthHeader() }); fetchTasks() } }
 async function deleteTask(id) { if(confirm('确定删除该记录？')) { await axios.delete(`/api/export/${id}`, { headers: getAuthHeader() }); tasks.value = tasks.value.filter(t => t.id !== id) } }
-async function retryFile(taskId, fileId) { await axios.post(`/api/export/${taskId}/retry_file/${fileId}`, {}, { headers: getAuthHeader() }); fetchTasks() }
 
 async function pauseAll() { tasks.value.filter(t => ['running', 'extracting'].includes(t.status)).forEach(t => pauseTask(t.id)) }
 async function resumeAll() { tasks.value.filter(t => t.status === 'paused').forEach(t => resumeTask(t.id)) }
 async function removeCompleted() { if(confirm('清空已完成的历史记录？')) { tasks.value.filter(t => t.status === 'completed').forEach(t => deleteTask(t.id)) } }
 
-function toggleDetailed(taskId) {
-  expandedDetailed.value[taskId] = !expandedDetailed.value[taskId]
-}
-
-function isDetailedExpanded(task) {
-  if (expandedDetailed.value[task.id] !== undefined) return expandedDetailed.value[task.id]
-  return ['running', 'paused', 'extracting'].includes(task.status)
+function goToDetail(id) {
+  router.push(`/tasks/${id}`)
 }
 
 const runningCount = computed(() => tasks.value.filter(t => ['running', 'extracting'].includes(t.status)).length)

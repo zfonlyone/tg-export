@@ -116,7 +116,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="task in recentTasks" :key="task.id" class="table-row">
+              <tr v-for="task in recentTasks" :key="task.id" class="table-row clickable" @click="goToDetail(task.id)">
                 <td class="td-name">{{ task.name }}</td>
                 <td>
                   <span :class="['status-pill', task.status]">
@@ -143,7 +143,10 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import axios from 'axios'
+
+const router = useRouter()
 
 const loading = ref(true)
 const telegramStatus = ref({ authorized: false, user: null })
@@ -204,6 +207,10 @@ function formatSize(bytes) {
 function formatDate(dateStr) {
   if (!dateStr) return ''
   return new Date(dateStr).toLocaleString('zh-CN')
+}
+
+function goToDetail(id) {
+  router.push(`/tasks/${id}`)
 }
 
 onMounted(refreshStatus)
@@ -384,6 +391,9 @@ onMounted(refreshStatus)
 .modern-table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .modern-table th { text-align: left; padding: 12px 16px; color: #71717a; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
 .modern-table td { padding: 16px; border-top: 1px solid #f4f4f5; font-size: 0.9rem; }
+
+.table-row.clickable { cursor: pointer; transition: background 0.2s; }
+.table-row.clickable:hover { background: #fafafa; }
 
 .td-name { font-weight: 700; color: #18181b; }
 .td-time { color: #a1a1aa; font-size: 0.8rem; }

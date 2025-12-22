@@ -380,7 +380,7 @@ class ExportManager:
         
         downloading = [i for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING][:limit]
         waiting = [i for i in task.download_queue if i.status in [DownloadStatus.WAITING, DownloadStatus.PAUSED, DownloadStatus.FAILED]][:limit]
-        completed = [i for i in task.download_queue if i.status == DownloadStatus.COMPLETED][:limit]
+        completed = [i for i in task.download_queue if i.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]][:limit]
         
         return {
             "downloading": downloading,

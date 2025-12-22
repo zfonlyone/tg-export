@@ -11,6 +11,7 @@ const routes = [
     { path: '/dashboard', component: () => import('./views/Dashboard.vue'), meta: { requiresAuth: true } },
     { path: '/export', component: () => import('./views/Export.vue'), meta: { requiresAuth: true } },
     { path: '/tasks', component: () => import('./views/Downloads.vue'), meta: { requiresAuth: true } },
+    { path: '/tasks/:id', component: () => import('./views/TaskDetail.vue'), meta: { requiresAuth: true } },
     { path: '/settings', component: () => import('./views/Settings.vue'), meta: { requiresAuth: true } },
 ]
 
