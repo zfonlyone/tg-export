@@ -281,25 +281,30 @@ class TelegramClient:
         确保私密频道/超级群组带有 -100 前缀
         """
         try:
-            # 如果是纯数字字符串
-            if chat_id_input.isdigit():
-                # 对于 10 位的 ID (常见的超级群组/频道 ID 长度)，添加 -100 前缀
-                if len(chat_id_input) >= 10:
-                    return int(f"-100{chat_id_input}")
-                return int(chat_id_input)
+            if not chat_id_input:
+                return 0
             
-            # 如果已经是带负号的
-            if chat_id_input.startswith("-"):
-                # 如果是 -1234567... 且长度不够，可能需要补齐 -100 (有些用户只输后面部分)
-                if not chat_id_input.startswith("-100") and len(chat_id_input) > 5:
-                     # 谨慎操作，常规群组是 - 开头但不是 -100
-                     pass 
-                return int(chat_id_input)
-                
-            return int(chat_id_input)
+            # 如果是链接，提取最后一部分
+            if "t.me/" in str(chat_id_input):
+                chat_id_input = chat_id_input.split("/")[-1]
+                if chat_id_input.isdigit():
+                    pass # 继续数字处理
+                else:
+                    return chat_id_input # 返回用户名
+
+            # 如果已经是数字，或者甚至是带负号的字符串
+            str_id = str(chat_id_input).strip()
+            
+            # 这里的逻辑是：如果用户输的是 1234567890 (10位+)，很大可能是超级群组 ID
+            # 如果它不是以 - 开头，且长度 >= 10，我们帮他加 -100
+            if str_id.isdigit() and len(str_id) >= 10:
+                return int(f"-100{str_id}")
+            
+            # 如果是正数短 ID，通常是用户 ID，保持不变
+            return int(str_id)
         except (ValueError, TypeError):
             # 如果无法转为数字，可能是用户名，由 Pyrogram 自行解析
-            return chat_id_input
+            return str(chat_id_input).strip()
     
     async def get_chat_history(
         self,
@@ -335,10 +340,23 @@ class TelegramClient:
         if not self._is_authorized:
             return None
         try:
+            # 尝试直接获取
             messages = await self._client.get_messages(chat_id, message_id)
             return messages if isinstance(messages, Message) else None
         except Exception as e:
-            print(f"获取消息失败: {e}")
+            error_str = str(e)
+            # 如果遇到 Peer id invalid，尝试先获取一次 Chat 以强制解析并缓存 Peer
+            if "Peer id invalid" in error_str or "Could not find the input entity" in error_str:
+                logger.warning(f"获取消息遇到 Peer 问题，尝试强制解析 Chat ID: {chat_id}")
+                try:
+                    await self._client.get_chat(chat_id)
+                    # 再次尝试获取消息
+                    messages = await self._client.get_messages(chat_id, message_id)
+                    return messages if isinstance(messages, Message) else None
+                except Exception as ex:
+                    logger.error(f"强制解析后仍无法获取消息: {ex}")
+            else:
+                logger.error(f"获取消息失败: {e}")
             return None
     
     async def download_media(

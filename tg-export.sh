@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================================
-# TG Export 一键部署脚本 v1.2.4
+# TG Export 一键部署脚本 v1.2.8
 # 功能: 安装/卸载 TG Export + Nginx + SSL证书管理 + UFW端口
 # 新增: 下载重试机制 + 暂停/恢复 + 失败记录 + AList 风格 UI
 # ==========================================================
@@ -16,7 +16,7 @@ PLAIN='\033[0m'
 
 # ===== 统一配置 =====
 APP_NAME="TG Export"
-APP_VERSION="1.2.4"
+APP_VERSION="1.2.8"
 APP_DIR="/opt/tg-export"
 CONFIG_FILE=".tge_config"
 DOCKER_IMAGE="zfonlyone/tg-export:latest"
@@ -54,7 +54,7 @@ docker_compose() {
 # ===== 显示菜单 =====
 show_menu() {
     echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
-    echo -e "${CYAN}${BOLD}      TG Export - Telegram 全功能导出工具    ${PLAIN}"
+    echo -e "${CYAN}${BOLD}      TG Export - Telegram 全功能导出工具v1.2.8${PLAIN}"
     echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
     echo -e " ${GREEN}1.${PLAIN} 安装 TG Export"
     echo -e " ${GREEN}2.${PLAIN} 卸载 TG Export"
@@ -123,7 +123,7 @@ SSL_PROVIDER="${SSL_PROVIDER:-1}" # 1=HTTP, 2=CF, 3=阿里, 4=DNSPod
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-/storage/downloads}"
 
 # ===== Docker 镜像 =====
-DOCKER_IMAGE="${DOCKER_IMAGE:-ghcr.io/your-username/tg-export:latest}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-zfonlyone/tg-export:latest}"
 EOF
     chmod 600 "$APP_DIR/$CONFIG_FILE"
     log "配置已保存到 $APP_DIR/$CONFIG_FILE"
@@ -991,7 +991,7 @@ function docker_compose() {
 
 function show_menu() {
     clear
-    echo -e "${GREEN}=== TG Export 管理工具 (tge) ===${NC}"
+    echo -e "${GREEN}=== TG Export 管理工具 (tge)v1.2.8 ===${NC}"
     echo "1. 启动服务"
     echo "2. 停止服务"
     echo "3. 重启服务"

@@ -11,7 +11,7 @@ RUN npm run build
 
 
 FROM python:3.11-slim
-LABEL version="1.2.4"
+LABEL version="1.2.8"
 LABEL description="TG Export - Telegram 全功能导出工具"
 
 WORKDIR /app

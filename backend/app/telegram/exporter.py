@@ -196,15 +196,22 @@ class ExportManager:
         
         logger.info(f"正在恢复/重跑任务: '{task.name}' (ID: {task_id[:8]}...)")
         
-        # 将所有暂停或失败的下载项恢复为等待状态
+        # 将所有暂停或失败（或已完成，如果是重跑）的下载项恢复为等待状态
         reset_count = 0
         for item in task.download_queue:
-            if item.status in [DownloadStatus.PAUSED, DownloadStatus.FAILED]:
+            if item.status in [DownloadStatus.PAUSED, DownloadStatus.FAILED, DownloadStatus.COMPLETED]:
                 item.status = DownloadStatus.WAITING
+                item.progress = 0
+                item.downloaded_size = 0
+                item.speed = 0
                 reset_count += 1
         
         if reset_count > 0:
-            logger.info(f"同时恢复了 {reset_count} 个待处理的下载项")
+            logger.info(f"同时重置了 {reset_count} 个下载项为等待状态 (全量任务重跑)")
+            # 如果是重跑，也要重置任务级的计数
+            if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
+                task.downloaded_media = 0
+                task.downloaded_size = 0
             
         await self._notify_progress(task_id, task)
         

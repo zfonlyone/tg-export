@@ -202,7 +202,7 @@ async def resume_export(
     raise HTTPException(status_code=400, detail="恢复失败")
 
 
-@router.post("/export/{task_id}/file/{item_id}/retry")
+@router.post("/export/{task_id}/retry_file/{item_id}")
 async def retry_file(
     task_id: str,
     item_id: str,
@@ -291,25 +291,6 @@ async def resume_download_item(
     raise HTTPException(status_code=400, detail="恢复失败")
 
 
-@router.post("/export/{task_id}/retry/{item_id}")
-async def retry_single_file(
-    task_id: str,
-    item_id: str,
-    current_user: User = Depends(get_current_user)
-):
-    """重试单个失败的下载"""
-    task = export_manager.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    
-    for item in task.download_queue:
-        if item.id == item_id and item.status == DownloadStatus.FAILED:
-            item.status = DownloadStatus.WAITING
-            item.error = None
-            export_manager._save_tasks()
-            return {"status": "ok", "message": "已重置为等待状态"}
-    
-    raise HTTPException(status_code=400, detail="文件不存在或不是失败状态")
 
 
 @router.delete("/export/{task_id}")

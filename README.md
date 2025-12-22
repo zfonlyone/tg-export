@@ -1,4 +1,4 @@
-# TG Export - Telegram 全功能导出工具
+# TG Export - Telegram 全功能导出工具 v1.2.8
 
 📥 一键导出 Telegram 私密频道、群组、私聊的全部内容，支持 HTML + JSON 格式输出。
 
@@ -37,6 +37,7 @@
 ## 🚀 一键部署
 
 ```bash
+# 稳定版安装
 bash <(curl -sL https://raw.githubusercontent.com/zfonlyone/tg-export/main/tg-export.sh)
 ```
 

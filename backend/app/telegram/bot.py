@@ -330,17 +330,46 @@ Telegram 全功能导出工具，支持：
         for task in tasks[-10:]:  # 最近 10 个
             status_emoji = {
                 TaskStatus.PENDING: "⏳",
+                TaskStatus.EXTRACTING: "🔍",
                 TaskStatus.RUNNING: "🔄",
                 TaskStatus.COMPLETED: "✅",
                 TaskStatus.FAILED: "❌",
-                TaskStatus.CANCELLED: "🚫"
+                TaskStatus.CANCELLED: "🚫",
+                TaskStatus.PAUSED: "⏸"
             }
             emoji = status_emoji.get(task.status, "❓")
             
             text += f"{emoji} **{task.name}**\n"
             text += f"   状态: {task.status.value}\n"
+            
             if task.status == TaskStatus.RUNNING:
+                # 速度显示
+                speed_kb = task.download_speed / 1024
+                if speed_kb > 1024:
+                    speed_str = f"{speed_kb/1024:.2f} MB/s"
+                else:
+                    speed_str = f"{speed_kb:.1f} KB/s"
+                
+                # ETR 计算
+                etr_str = "计算中..."
+                if task.download_speed > 0:
+                    remaining_bytes = task.total_size - task.downloaded_size
+                    if remaining_bytes > 0:
+                        seconds = remaining_bytes / task.download_speed
+                        if seconds > 3600:
+                            etr_str = f"{int(seconds//3600)}h {int((seconds%3600)//60)}m"
+                        elif seconds > 60:
+                            etr_str = f"{int(seconds//60)}m {int(seconds%60)}s"
+                        else:
+                            etr_str = f"{int(seconds)}s"
+                    else:
+                        etr_str = "即刻"
+
+                text += f"   进度: {task.progress:.1f}% ({speed_str})\n"
+                text += f"   剩余: {etr_str} | 已下: {task.downloaded_media}/{task.total_media}\n"
+            else:
                 text += f"   进度: {task.progress:.1f}%\n"
+            
             text += f"   ID: `{task.id[:8]}...`\n\n"
         
         await message.reply(text)
@@ -420,16 +449,25 @@ Telegram 全功能导出工具，支持：
             await message.reply("❌ 任务不存在")
             return
         
-        if not task.failed_downloads:
-            await message.reply("✅ 没有失败的下载需要重试")
-            return
+        # 重置状态并尝试重新加入队列
+        success_count = 0
+        for item in task.download_queue:
+            if item.status == DownloadStatus.FAILED:
+                # 调用统一的 retry_file 逻辑
+                await export_manager.retry_file(task_id, item.id)
+                success_count += 1
         
-        count = len(task.failed_downloads)
-        # 标记为待重试
+        # 同时清理失败任务记录
         for fail in task.failed_downloads:
-            fail.resolved = False
+            fail.resolved = True # 标记为已处理
         
-        await message.reply(f"🔄 已标记 {count} 个失败下载待重试\n使用 /resume {task_id[:8]} 开始重试")
+        if success_count > 0:
+            await message.reply(f"🔄 已将 {success_count} 个失败下载重新加入队列")
+            # 如果任务之前不是运行状态，提醒用户恢复
+            if task.status != TaskStatus.RUNNING:
+                await message.reply(f"💡 任务当前处于 {task.status.value} 状态，发送 /resume {task_id[:8]} 开始下载")
+        else:
+            await message.reply("✅ 没有失败的下载需要重试")
     
     async def _handle_failed(self, message: Message):
         """处理 /failed 命令"""
