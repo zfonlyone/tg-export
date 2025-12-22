@@ -742,6 +742,19 @@ class ExportManager:
         async def worker_logic(worker_id: int):
             """工协程逻辑"""
             logger.info(f"任务 {task.id[:8]}: 下载工协程 #{worker_id} 启动")
+            
+            # [FIX] 全局平滑启动控制：仅在 Worker 首次启动时排队等待，避免在循环内导致序列化
+            try:
+                async with global_start_lock:
+                    now = time.time()
+                    wait_time = max(0, self._last_global_start_time + 3 - now)
+                    if wait_time > 0:
+                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 启动排队，等待 {wait_time:.1f}s...")
+                        await asyncio.sleep(wait_time)
+                    self._last_global_start_time = time.time()
+            except Exception as e:
+                logger.error(f"Worker #{worker_id} 启动延迟控制出错: {e}")
+
             while True:
                 # 1. 检查任务是否已取消
                 if task.status == TaskStatus.CANCELLED:
@@ -762,17 +775,8 @@ class ExportManager:
                     # 检查是否队列真正结束
                     break
                 
-                # 4. 执行下载 (包含速率限制)
+                # 4. 执行下载
                 try:
-                    # 全局速率限制：每 3 秒只能开始一个新下载 (用户需求：平滑启动)
-                    async with global_start_lock:
-                        now = time.time()
-                        wait_time = max(0, self._last_global_start_time + 3 - now)
-                        if wait_time > 0:
-                            logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 触发全局限速，等待 {wait_time:.1f}s...")
-                            await asyncio.sleep(wait_time)
-                        self._last_global_start_time = time.time()
-
                     # 调用核心下载逻辑
                     await self._download_item_worker(task, item, export_path)
                     
