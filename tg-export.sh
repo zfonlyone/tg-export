@@ -777,6 +777,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - WEB_PORT=$WEB_PORT
+      - EXPORT_DIR=/downloads
 YAML
     
     log "拉取镜像..."
