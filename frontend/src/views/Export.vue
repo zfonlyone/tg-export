@@ -1,263 +1,295 @@
 <template>
   <div class="fade-in">
-    <div class="page-header">
-      <h1>📥 Create Export Task</h1>
-      <p class="subtitle">Fast, reliable, and precise message backups</p>
-    </div>
+    <h1 style="margin-bottom: 20px;">📥 导出数据</h1>
     
-    <!-- Modern Step Indicator -->
-    <div class="step-container">
-      <div class="step-progress-bar">
-        <div class="progress-fill" :style="{ width: ((step - 1) / 3 * 100) + '%' }"></div>
-      </div>
-      <div class="steps">
-        <div v-for="i in 4" :key="i" :class="['step-item', step >= i ? 'active' : '', step === i ? 'current' : '']">
-          <div class="step-number">{{ i }}</div>
-          <span class="step-label">{{ stepLabels[i-1] }}</span>
-        </div>
+    <!-- 步骤指示器 -->
+    <div class="card" style="margin-bottom: 20px;">
+      <div style="display: flex; justify-content: space-between;">
+        <div :class="['step', step >= 1 ? 'active' : '']">1. 选择聊天类型</div>
+        <div :class="['step', step >= 2 ? 'active' : '']">2. 选择媒体类型</div>
+        <div :class="['step', step >= 3 ? 'active' : '']">3. 其他选项</div>
+        <div :class="['step', step >= 4 ? 'active' : '']">4. 确认导出</div>
       </div>
     </div>
     
-    <!-- Step 1: Chat Types -->
-    <div v-if="step === 1" class="step-content">
-      <div class="config-grid">
-        <div class="config-card">
-          <div class="card-title">
-            <i class="icon">💬</i>
-            <h3>History Settings</h3>
-          </div>
-          <div class="selection-grid">
-            <label class="custom-checkbox">
-              <input type="checkbox" v-model="options.private_chats">
-              <div class="checkbox-box">
-                <span class="emoji">👤</span>
-                <span class="label">Private Chats</span>
-              </div>
-            </label>
-            <label class="custom-checkbox">
-              <input type="checkbox" v-model="options.bot_chats">
-              <div class="checkbox-box">
-                <span class="emoji">🤖</span>
-                <span class="label">Bots</span>
-              </div>
-            </label>
-            <label class="custom-checkbox">
-              <input type="checkbox" v-model="options.private_groups">
-              <div class="checkbox-box">
-                <span class="emoji">👥</span>
-                <span class="label">Groups</span>
-              </div>
-            </label>
-            <label class="custom-checkbox">
-              <input type="checkbox" v-model="options.private_channels">
-              <div class="checkbox-box">
-                <span class="emoji">📢</span>
-                <span class="label">Channels</span>
-              </div>
-            </label>
-            <label class="custom-checkbox">
-              <input type="checkbox" v-model="options.public_groups">
-              <div class="checkbox-box">
-                <span class="emoji">🌐</span>
-                <span class="label">Pub. Groups</span>
-              </div>
-            </label>
-            <label class="custom-checkbox">
-              <input type="checkbox" v-model="options.public_channels">
-              <div class="checkbox-box">
-                <span class="emoji">📣</span>
-                <span class="label">Pub. Channels</span>
-              </div>
-            </label>
-          </div>
-          <div class="card-footer">
-            <label class="form-checkbox">
-              <input type="checkbox" v-model="options.only_my_messages">
-              <span>Only my messages</span>
-            </label>
-          </div>
-        </div>
-
-        <div class="config-card secondary">
-          <div class="card-title">
-            <i class="icon">📌</i>
-            <h3>Advanced Selection</h3>
-          </div>
-          
-          <div class="option-group">
-            <div class="option-header" @click="enableSpecificChats = !enableSpecificChats">
-              <input type="checkbox" v-model="enableSpecificChats" @click.stop>
-              <h4>Specific Chats</h4>
-            </div>
-            <div v-if="enableSpecificChats" class="option-body animate-slide">
-              <p>Paste IDs or links. We'll handle the rest.</p>
-              <div class="input-stack">
-                <input v-model="specificChatsInput" @input="parseSpecificChats" class="modern-input" placeholder="e.g. -100123... or t.me/join...">
-                <div v-if="parsedChatIds.length > 0" class="tag-cloud">
-                  <span v-for="(id, idx) in parsedChatIds" :key="idx" class="modern-tag" @click="removeChatId(idx)">{{ id }} <span class="close">×</span></span>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="option-group">
-            <div class="option-header" @click="enableMessageRange = !enableMessageRange">
-              <input type="checkbox" v-model="enableMessageRange" @click.stop>
-              <h4>Message Range</h4>
-            </div>
-            <div v-if="enableMessageRange" class="option-body animate-slide">
-              <div class="range-inputs">
-                <div class="range-field">
-                  <label>From ID</label>
-                  <input v-model.number="options.message_from" type="number" class="modern-input short" min="1">
-                </div>
-                <div class="range-sep">to</div>
-                <div class="range-field">
-                  <label>Until (0=Latest)</label>
-                  <input v-model.number="options.message_to" type="number" class="modern-input short" min="0">
-                </div>
-              </div>
+    <!-- 步骤 1: 聊天类型 -->
+    <div v-if="step === 1" class="card">
+      <div class="card-header">
+        <h2>历史记录导出设置</h2>
+      </div>
+      
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.private_chats">
+          <span>👤 私聊</span>
+        </label>
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.bot_chats">
+          <span>🤖 机器人对话</span>
+        </label>
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.private_groups">
+          <span>👥 私密群组</span>
+        </label>
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.private_channels">
+          <span>📢 私密频道</span>
+        </label>
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.public_groups">
+          <span>🌐 公开群组</span>
+        </label>
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.public_channels">
+          <span>📣 公开频道</span>
+        </label>
+      </div>
+      
+      <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border);">
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.only_my_messages">
+          <span>只导出我的消息</span>
+        </label>
+      </div>
+      
+      <!-- 指定聊天 -->
+      <div style="margin-top: 20px; padding: 15px; border: 1px solid var(--border); border-radius: 8px;">
+        <label class="form-checkbox" style="margin-bottom: 0;">
+          <input type="checkbox" v-model="enableSpecificChats">
+          <span style="font-weight: 600;">📌 指定聊天</span>
+        </label>
+        <div v-if="enableSpecificChats" style="margin-top: 12px;">
+          <p style="color: #666; margin-bottom: 8px; font-size: 13px;">粘贴聊天 ID 或链接，系统会自动识别。💡 如果 ID 缺少 -100 前缀，后台将尝试自动补全。</p>
+          <div style="display: flex; gap: 15px;">
+            <input v-model="specificChatsInput" @input="parseSpecificChats" class="form-input" style="flex: 1;" placeholder="例如: -10012345678 或 12345678">
+            <div v-if="parsedChatIds.length > 0" style="flex: 1; display: flex; flex-wrap: wrap; gap: 6px; align-items: center;">
+              <span v-for="(id, idx) in parsedChatIds" :key="idx" class="id-tag" @click="removeChatId(idx)">{{ id }} ×</span>
             </div>
           </div>
         </div>
       </div>
       
-      <div class="action-bar">
-        <router-link to="/dashboard" class="btn-ghost">Cancel</router-link>
-        <button @click="step = 2" class="btn-premium">Next Step <i class="btn-icon">→</i></button>
+      <!-- 消息范围 -->
+      <div style="margin-top: 15px; padding: 15px; border: 1px solid var(--border); border-radius: 8px;">
+        <label class="form-checkbox" style="margin-bottom: 0;">
+          <input type="checkbox" v-model="enableMessageRange">
+          <span style="font-weight: 600;">📊 消息范围</span>
+        </label>
+        <div v-if="enableMessageRange" style="margin-top: 12px;">
+          <p style="color: #666; margin-bottom: 8px; font-size: 13px;">"1-0" 全部，"1-100" 前100条</p>
+          <div style="display: flex; gap: 15px; align-items: center;">
+            <input v-model.number="options.message_from" type="number" class="form-input" style="width: 120px;" placeholder="起始" min="1">
+            <span>-</span>
+            <input v-model.number="options.message_to" type="number" class="form-input" style="width: 120px;" placeholder="结束(0=最新)" min="0">
+          </div>
+        </div>
+      </div>
+      
+      <!-- 消息过滤 -->
+      <div style="margin-top: 15px; padding: 15px; border: 1px solid var(--border); border-radius: 8px;">
+        <label class="form-checkbox" style="margin-bottom: 0;">
+          <input type="checkbox" v-model="enableMessageFilter">
+          <span style="font-weight: 600;">🎯 过滤消息</span>
+        </label>
+        <div v-if="enableMessageFilter" style="margin-top: 12px;">
+          <p style="color: #666; margin-bottom: 8px; font-size: 13px;">TG 链接: https://t.me/c/<strong>群组ID</strong>/<strong>消息ID</strong></p>
+          <div style="display: flex; gap: 20px; margin-bottom: 12px;">
+            <label class="form-checkbox">
+              <input type="radio" v-model="options.filter_mode" value="skip">
+              <span>跳过指定消息</span>
+            </label>
+            <label class="form-checkbox">
+              <input type="radio" v-model="options.filter_mode" value="specify">
+              <span>只下载指定消息</span>
+            </label>
+          </div>
+          <div style="display: flex; gap: 15px;">
+            <textarea v-model="filterMessagesInput" @input="parseFilterMessages" class="form-input" rows="4" style="flex: 1; resize: vertical;" placeholder="粘贴消息 ID 或链接，自动识别数字&#10;例如: 669, https://t.me/c/123/670"></textarea>
+            <div v-if="parsedMessageIds.length > 0" style="flex: 1; max-height: 120px; overflow-y: auto; display: flex; flex-wrap: wrap; gap: 6px; align-content: flex-start;">
+              <span v-for="(id, idx) in parsedMessageIds" :key="idx" class="id-tag" @click="removeMessageId(idx)">{{ id }} ×</span>
+            </div>
+          </div>
+          <p style="color: #888; font-size: 12px; margin-top: 8px;">💡 文件名格式: 消息ID-群ID-文件名</p>
+        </div>
+      </div>
+      
+      <div style="margin-top: 20px; display: flex; justify-content: space-between;">
+        <router-link to="/dashboard" class="btn btn-outline">← 返回首页</router-link>
+        <button @click="step = 2" class="btn btn-primary">下一步 →</button>
       </div>
     </div>
     
-    <!-- Step 2: Media Types -->
-    <div v-if="step === 2" class="step-content">
-      <div class="config-card">
-        <div class="card-title">
-          <i class="icon">📁</i>
-          <h3>Media Files to Export</h3>
+    <!-- 步骤 2: 媒体类型 -->
+    <div v-if="step === 2" class="card">
+      <div class="card-header">
+        <h2>媒体文件导出设置</h2>
+      </div>
+      
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.photos">
+          <span>🖼️ 图片</span>
+        </label>
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.videos">
+          <span>🎬 视频文件</span>
+        </label>
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.voice_messages">
+          <span>🎤 语音消息</span>
+        </label>
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.video_messages">
+          <span>📹 视频消息</span>
+        </label>
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.stickers">
+          <span>🎨 贴纸</span>
+        </label>
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.gifs">
+          <span>🎞️ GIF 动态图</span>
+        </label>
+        <label class="form-checkbox">
+          <input type="checkbox" v-model="options.files">
+          <span>📎 文件</span>
+        </label>
+      </div>
+      
+      <p style="margin-top: 15px; color: #666; font-size: 14px;">
+        ℹ️ 不限制文件大小，将下载所有选中类型的媒体
+      </p>
+      
+      <div style="margin-top: 20px; display: flex; justify-content: space-between;">
+        <button @click="step = 1" class="btn btn-outline">← 上一步</button>
+        <button @click="step = 3" class="btn btn-primary">下一步 →</button>
+      </div>
+    </div>
+    
+    <!-- 步骤 3: 其他选项 -->
+    <div v-if="step === 3" class="card">
+      <div class="card-header">
+        <h2>其他选项</h2>
+      </div>
+      
+      <div class="form-group">
+        <label class="form-label">时间范围 (可选)</label>
+        <div style="display: flex; gap: 15px;">
+          <input type="date" v-model="dateFrom" class="form-input" placeholder="开始日期">
+          <span style="align-self: center;">至</span>
+          <input type="date" v-model="dateTo" class="form-input" placeholder="结束日期">
         </div>
-        <div class="selection-grid large">
-          <label v-for="(val, key) in mediaTypes" :key="key" class="media-checkbox">
-            <input type="checkbox" v-model="options[key]">
-            <div class="media-box">
-              <span class="media-emoji">{{ val.icon }}</span>
-              <div class="media-info">
-                <span class="media-label">{{ val.label }}</span>
-                <span class="media-desc">{{ val.desc }}</span>
-              </div>
-            </div>
+      </div>
+      
+      <div class="form-group">
+        <label class="form-label">保存路径</label>
+        <input v-model="options.export_path" class="form-input" placeholder="/downloads">
+      </div>
+      
+      <div class="form-group">
+        <label class="form-label">导出格式</label>
+        <div style="display: flex; gap: 20px; margin-top: 10px;">
+          <label class="form-checkbox">
+            <input type="radio" v-model="options.export_format" value="html">
+            <span>📄 人类可读的 HTML</span>
+          </label>
+          <label class="form-checkbox">
+            <input type="radio" v-model="options.export_format" value="json">
+            <span>📋 机器可读的 JSON</span>
+          </label>
+          <label class="form-checkbox">
+            <input type="radio" v-model="options.export_format" value="both">
+            <span>📦 以上两者</span>
           </label>
         </div>
       </div>
       
-      <div class="action-bar">
-        <button @click="step = 1" class="btn-ghost">← Back</button>
-        <button @click="step = 3" class="btn-premium">Next Step <i class="btn-icon">→</i></button>
-      </div>
-    </div>
-    
-    <!-- Step 3: Other Options -->
-    <div v-if="step === 3" class="step-content">
-      <div class="config-grid">
-        <div class="config-card">
-          <div class="card-title"><i class="icon">⚙️</i><h3>Download Configuration</h3></div>
-          
-          <div class="settings-stack">
-            <div class="setting-item">
-              <label>Save Path</label>
-              <input v-model="options.export_path" class="modern-input" placeholder="/downloads">
-            </div>
-            
-            <div class="setting-item">
-              <label>Export Format</label>
-              <div class="radio-pill-group">
-                <label v-for="fmt in ['html', 'json', 'both']" :key="fmt" :class="['radio-pill', options.export_format === fmt ? 'selected' : '']">
-                  <input type="radio" v-model="options.export_format" :value="fmt">
-                  <span>{{ fmt.toUpperCase() }}</span>
-                </label>
-              </div>
-            </div>
-
-            <div class="setting-item horizontal">
-              <div class="field-item">
-                <label>Max Concurrency</label>
-                <div class="number-stepper">
-                  <button @click="options.max_concurrent_downloads = Math.max(1, options.max_concurrent_downloads - 1)">-</button>
-                  <input v-model.number="options.max_concurrent_downloads" type="number" readonly>
-                  <button @click="options.max_concurrent_downloads = Math.min(10, options.max_concurrent_downloads + 1)">+</button>
-                </div>
-              </div>
-              <div class="field-item">
-                <label>Resume Download</label>
-                <div class="toggle-switch">
-                  <input type="checkbox" v-model="options.resume_download">
-                  <span class="slider"></span>
-                </div>
-              </div>
-            </div>
-          </div>
+      <!-- 断点续传 -->
+      <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border);">
+        <h3 style="margin-bottom: 10px;">断点续传</h3>
+        <div style="display: flex; gap: 20px;">
+          <label class="form-checkbox">
+            <input type="checkbox" v-model="options.resume_download">
+            <span>启用断点续传</span>
+          </label>
+          <label class="form-checkbox">
+            <input type="checkbox" v-model="options.skip_existing">
+            <span>跳过已下载的文件</span>
+          </label>
         </div>
-
-        <div class="config-card secondary">
-          <div class="card-title"><i class="icon">📅</i><h3>Time Range</h3></div>
-          <div class="date-range-container">
-            <div class="date-input-wrap">
-              <label>Start From</label>
-              <input type="date" v-model="dateFrom" class="modern-input date">
-            </div>
-            <div class="date-input-wrap">
-              <label>Until Date</label>
-              <input type="date" v-model="dateTo" class="modern-input date">
-            </div>
+        <p style="color: #666; font-size: 13px; margin-top: 8px;">
+          ℹ️ 未完成的文件使用 .downloading 后缀，下载完成后自动重命名
+        </p>
+      </div>
+      
+      <!-- 下载设置 -->
+      <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border);">
+        <h3 style="margin-bottom: 10px;">下载设置</h3>
+        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
+          <div class="form-group">
+            <label class="form-label">并发下载数</label>
+            <input v-model.number="options.max_concurrent_downloads" type="number" class="form-input" min="1" max="10">
+            <p style="color: #666; font-size: 12px; margin-top: 4px;">Telegram 免费用户限制 10</p>
           </div>
-          <p class="hint">Leave empty to export all history</p>
+          <div class="form-group">
+            <label class="form-label">下载线程数</label>
+            <input v-model.number="options.download_threads" type="number" class="form-input" min="1" max="10">
+            <p style="color: #666; font-size: 12px; margin-top: 4px;">推荐 10</p>
+          </div>
+          <div class="form-group">
+            <label class="form-label">速度限制 (KB/s)</label>
+            <input v-model.number="options.download_speed_limit" type="number" class="form-input" min="0" placeholder="0 = 无限制">
+            <p style="color: #666; font-size: 12px; margin-top: 4px;">0 = 不限速</p>
+          </div>
         </div>
       </div>
       
-      <div class="action-bar">
-        <button @click="step = 2" class="btn-ghost">← Back</button>
-        <button @click="step = 4" class="btn-premium">Next Step <i class="btn-icon">→</i></button>
+      <div style="margin-top: 20px; display: flex; justify-content: space-between;">
+        <button @click="step = 2" class="btn btn-outline">← 上一步</button>
+        <button @click="step = 4" class="btn btn-primary">下一步 →</button>
       </div>
     </div>
     
-    <!-- Step 4: Finalize -->
-    <div v-if="step === 4" class="step-content">
-      <div class="config-card highlight">
-        <div class="card-title center">
-          <i class="icon hero">✨</i>
-          <h2>Ready to Launch</h2>
-        </div>
-        
-        <div class="task-naming">
-          <input v-model="taskName" class="modern-input hero" placeholder="Give your task a name (e.g. My Backup)">
-        </div>
-
-        <div class="summary-box">
-          <div class="summaries">
-            <div class="summary-item">
-              <span class="s-label">Scope</span>
-              <span class="s-value">{{ getSummaryText('chats') }}</span>
-            </div>
-            <div class="summary-item">
-              <span class="s-label">Content</span>
-              <span class="s-value">{{ getSummaryText('media') }}</span>
-            </div>
-            <div class="summary-item">
-              <span class="s-label">Destination</span>
-              <span class="s-value">{{ options.export_path }} ({{ options.export_format.toUpperCase() }})</span>
-            </div>
-          </div>
-        </div>
-        
-        <div v-if="error" class="error-toast">
-          {{ error }}
-        </div>
-        
-        <div class="final-actions">
-          <button @click="step = 3" class="btn-ghost large">Back to Edit</button>
-          <button @click="startExport" class="btn-premium hero" :disabled="loading">
-            {{ loading ? 'Initializing...' : '🚀 Launch Export' }}
-          </button>
-        </div>
+    <!-- 步骤 4: 确认 -->
+    <div v-if="step === 4" class="card">
+      <div class="card-header">
+        <h2>确认导出</h2>
+      </div>
+      
+      <div class="form-group">
+        <label class="form-label">任务名称</label>
+        <input v-model="taskName" class="form-input" placeholder="例如: 频道备份 2024-01">
+      </div>
+      
+      <h3 style="margin: 20px 0 10px;">导出摘要</h3>
+      <table class="table">
+        <tr>
+          <td><strong>聊天类型</strong></td>
+          <td>{{ getSummaryText('chats') }}</td>
+        </tr>
+        <tr>
+          <td><strong>媒体类型</strong></td>
+          <td>{{ getSummaryText('media') }}</td>
+        </tr>
+        <tr>
+          <td><strong>导出格式</strong></td>
+          <td>{{ formatText[options.export_format] }}</td>
+        </tr>
+        <tr>
+          <td><strong>保存路径</strong></td>
+          <td>{{ options.export_path }}</td>
+        </tr>
+      </table>
+      
+      <div v-if="error" style="color: var(--danger); margin-top: 15px;">
+        {{ error }}
+      </div>
+      
+      <div style="margin-top: 20px; display: flex; justify-content: space-between;">
+        <button @click="step = 3" class="btn btn-outline">← 上一步</button>
+        <button @click="startExport" class="btn btn-success" :disabled="loading">
+          {{ loading ? '创建中...' : '🚀 开始导出' }}
+        </button>
       </div>
     </div>
   </div>
@@ -277,18 +309,6 @@ const specificChatsInput = ref('')
 const filterMessagesInput = ref('')
 const dateFrom = ref('')
 const dateTo = ref('')
-
-const stepLabels = ['Setup Scope', 'Media Selection', 'Performance', 'Final Review']
-
-const mediaTypes = {
-  photos: { label: 'Photos', icon: '🖼️', desc: 'Standard images and profile pics' },
-  videos: { label: 'Videos', icon: '🎬', desc: 'Video files and attachments' },
-  voice_messages: { label: 'Voice', icon: '🎤', desc: 'Audio voice messages' },
-  video_messages: { label: 'Video Msg', icon: '📹', desc: 'Round video notes' },
-  stickers: { label: 'Stickers', icon: '🎨', desc: 'Animated and static stickers' },
-  gifs: { label: 'Animations', icon: '🎞️', desc: 'GIFs and autoplaying videos' },
-  files: { label: 'Documents', icon: '📎', desc: 'Generic files and documents' }
-}
 
 // 启用开关
 const enableSpecificChats = ref(false)
@@ -325,7 +345,6 @@ const options = reactive({
   // 聊天类型
   private_chats: true,
   bot_chats: false,
-  private_groups: true,
   private_groups: true,
   private_channels: true,
   public_groups: false,
@@ -365,39 +384,39 @@ const options = reactive({
 })
 
 const formatText = {
-  html: 'Human Readable HTML',
-  json: 'Machine Readable JSON',
-  both: 'Both HTML & JSON'
+  html: '人类可读的 HTML',
+  json: '机器可读的 JSON',
+  both: 'HTML + JSON'
 }
 
 function getSummaryText(type) {
   if (type === 'chats') {
     const items = []
-    if (options.private_chats) items.push('Private')
-    if (options.bot_chats) items.push('Bots')
-    if (options.private_groups) items.push('Groups')
-    if (options.private_channels) items.push('Channels')
-    if (options.public_groups) items.push('Pub. Groups')
-    if (options.public_channels) items.push('Pub. Channels')
-    return items.join(', ') || 'No Scope selected'
+    if (options.private_chats) items.push('私聊')
+    if (options.bot_chats) items.push('机器人')
+    if (options.private_groups) items.push('私密群组')
+    if (options.private_channels) items.push('私密频道')
+    if (options.public_groups) items.push('公开群组')
+    if (options.public_channels) items.push('公开频道')
+    return items.join(', ') || '无'
   }
   if (type === 'media') {
     const items = []
-    if (options.photos) items.push('Photos')
-    if (options.videos) items.push('Videos')
-    if (options.voice_messages) items.push('Voice')
-    if (options.video_messages) items.push('Round Video')
-    if (options.stickers) items.push('Stickers')
-    if (options.gifs) items.push('GIFs')
-    if (options.files) items.push('Files')
-    return items.join(', ') || 'No Media selected'
+    if (options.photos) items.push('图片')
+    if (options.videos) items.push('视频')
+    if (options.voice_messages) items.push('语音')
+    if (options.video_messages) items.push('视频消息')
+    if (options.stickers) items.push('贴纸')
+    if (options.gifs) items.push('GIF')
+    if (options.files) items.push('文件')
+    return items.join(', ') || '无'
   }
   return ''
 }
 
 async function startExport() {
   if (!taskName.value) {
-    error.value = 'Please enter a task name'
+    error.value = '请输入任务名称'
     return
   }
   
@@ -443,10 +462,10 @@ async function startExport() {
     // 启动任务
     await axios.post(`/api/export/${createRes.data.id}/start`, {}, { headers })
     
-    // 跳转到管理页面
-    router.push('/downloads')
+    // 跳转到任务页面
+    router.push('/tasks')
   } catch (err) {
-    error.value = err.response?.data?.detail || 'Failed to create task'
+    error.value = err.response?.data?.detail || '创建任务失败'
   } finally {
     loading.value = false
   }
@@ -454,423 +473,32 @@ async function startExport() {
 </script>
 
 <style scoped>
-.page-header {
-  margin-bottom: 40px;
-  text-align: center;
+.step {
+  padding: 10px 20px;
+  background: var(--border);
+  border-radius: 20px;
+  color: #666;
+  font-size: 14px;
 }
 
-.page-header h1 {
-  font-size: 2.5rem;
-  font-weight: 800;
-  background: linear-gradient(135deg, var(--primary), #a855f7);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  margin-bottom: 8px;
-}
-
-.subtitle {
-  color: #71717a;
-  font-size: 1.1rem;
-}
-
-/* Step Indicator */
-.step-container {
-  max-width: 800px;
-  margin: 0 auto 50px;
-  position: relative;
-}
-
-.step-progress-bar {
-  position: absolute;
-  top: 20px;
-  left: 40px;
-  right: 40px;
-  height: 4px;
-  background: #e4e4e7;
-  z-index: 1;
-  border-radius: 2px;
-}
-
-.progress-fill {
-  height: 100%;
-  background: var(--primary);
-  transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.steps {
-  display: flex;
-  justify-content: space-between;
-  position: relative;
-  z-index: 2;
-}
-
-.step-item {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
-.step-number {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  background: white;
-  border: 2px solid #e4e4e7;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 700;
-  color: #a1a1aa;
-  transition: all 0.3s ease;
-  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-}
-
-.step-item.active .step-number {
-  border-color: var(--primary);
-  color: var(--primary);
-}
-
-.step-item.current .step-number {
+.step.active {
   background: var(--primary);
   color: white;
-  border-color: var(--primary);
-  transform: scale(1.1);
 }
 
-.step-label {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #71717a;
-}
-
-.step-item.active .step-label {
-  color: #18181b;
-}
-
-/* Config Grid */
-.config-grid {
-  display: grid;
-  grid-template-columns: 1.5fr 1fr;
-  gap: 24px;
-  margin-bottom: 30px;
-}
-
-@media (max-width: 900px) {
-  .config-grid { grid-template-columns: 1fr; }
-}
-
-.config-card {
-  background: white;
-  border-radius: 24px;
-  padding: 30px;
-  border: 1px solid #f4f4f5;
-  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.04);
-}
-
-.config-card.secondary {
-  background: #fafafa;
-}
-
-.config-card.highlight {
-  max-width: 700px;
-  margin: 0 auto;
-  text-align: center;
-  background: linear-gradient(to bottom right, #ffffff, #fdf4ff);
-}
-
-.card-title {
-  display: flex;
+.id-tag {
+  display: inline-flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 24px;
-}
-
-.card-title.center { justify-content: center; flex-direction: column; }
-
-.icon {
-  font-size: 1.5rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  background: #f4f4f5;
-  border-radius: 10px;
-}
-
-.icon.hero {
-  font-size: 3rem;
-  width: 80px;
-  height: 80px;
-  background: #f0abfc22;
-  border-radius: 24px;
-  margin-bottom: 15px;
-}
-
-/* Selection Grids */
-.selection-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-}
-
-.selection-grid.large {
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-}
-
-.custom-checkbox input, .media-checkbox input { display: none; }
-
-.checkbox-box {
-  padding: 16px;
-  border-radius: 16px;
-  border: 2px solid #f4f4f5;
-  background: #fff;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.custom-checkbox input:checked + .checkbox-box {
-  border-color: var(--primary);
-  background: #fdf4ff;
-}
-
-.media-box {
-  padding: 20px;
-  border-radius: 20px;
-  border: 2px solid #f4f4f5;
-  background: #fff;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.media-checkbox input:checked + .media-box {
-  border-color: var(--primary);
-  background: #fdf4ff;
-  box-shadow: 0 4px 6px -1px var(--primary-light);
-}
-
-.media-emoji { font-size: 2rem; }
-.media-label { display: block; font-weight: 700; font-size: 1.1rem; }
-.media-desc { font-size: 0.85rem; color: #71717a; }
-
-/* Advanced Inputs */
-.option-group {
-  background: white;
-  border-radius: 16px;
-  padding: 20px;
-  margin-bottom: 16px;
-  border: 1px solid #f4f4f5;
-}
-
-.option-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  cursor: pointer;
-}
-
-.option-body {
-  margin-top: 15px;
-  padding-top: 15px;
-  border-top: 1px dashed #e4e4e7;
-}
-
-.modern-input {
-  width: 100%;
-  padding: 12px 16px;
+  padding: 4px 10px;
+  background: var(--primary);
+  color: white;
   border-radius: 12px;
-  border: 1.5px solid #e4e4e7;
-  font-size: 1rem;
+  font-size: 12px;
+  cursor: pointer;
   transition: all 0.2s;
 }
 
-.modern-input:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 4px #fdf4ff;
-}
-
-.modern-input.hero {
-  font-size: 1.5rem;
-  padding: 20px;
-  text-align: center;
-  font-weight: 600;
-  border-radius: 20px;
-}
-
-.tag-cloud {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-}
-
-.modern-tag {
-  background: var(--primary);
-  color: white;
-  padding: 6px 12px;
-  border-radius: 50px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-}
-
-.close { opacity: 0.7; }
-
-/* Stepper & Toggles */
-.settings-stack { display: flex; flex-direction: column; gap: 20px; }
-
-.horizontal {
-  display: flex;
-  gap: 24px;
-}
-
-.number-stepper {
-  display: flex;
-  align-items: center;
-  background: #f4f4f5;
-  border-radius: 12px;
-  padding: 4px;
-  width: fit-content;
-}
-
-.number-stepper button {
-  width: 36px;
-  height: 36px;
-  border: none;
-  background: white;
-  border-radius: 8px;
-  font-weight: bold;
-  cursor: pointer;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
-}
-
-.number-stepper input {
-  width: 40px;
-  text-align: center;
-  background: transparent;
-  border: none;
-  font-weight: 700;
-}
-
-.radio-pill-group {
-  display: flex;
-  gap: 10px;
-  background: #f4f4f5;
-  padding: 6px;
-  border-radius: 14px;
-}
-
-.radio-pill {
-  flex: 1;
-  text-align: center;
-  padding: 10px;
-  cursor: pointer;
-  border-radius: 10px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  color: #71717a;
-  transition: all 0.2s;
-}
-
-.radio-pill.selected {
-  background: white;
-  color: var(--primary);
-  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.05);
-}
-
-.radio-pill input { display: none; }
-
-/* Final Review */
-.summary-box {
-  background: #fafafa;
-  border-radius: 20px;
-  padding: 24px;
-  margin-top: 24px;
-}
-
-.summary-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 12px 0;
-  border-bottom: 1px solid #f4f4f5;
-}
-
-.summary-item:last-child { border: none; }
-.s-label { color: #71717a; font-weight: 500; }
-.s-value { font-weight: 700; text-align: right; }
-
-/* Action Bar */
-.action-bar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 40px;
-}
-
-.btn-premium {
-  padding: 14px 28px;
-  background: var(--primary);
-  color: white;
-  border-radius: 16px;
-  font-weight: 700;
-  border: none;
-  cursor: pointer;
-  box-shadow: 0 10px 15px -3px rgba(168, 85, 247, 0.4);
-  transition: all 0.3s;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.btn-premium:hover { transform: translateY(-3px); box-shadow: 0 20px 25px -5px rgba(168, 85, 247, 0.3); }
-
-.btn-premium.hero {
-  width: 100%;
-  padding: 20px;
-  font-size: 1.25rem;
-  justify-content: center;
-  margin-top: 24px;
-}
-
-.btn-ghost {
-  padding: 14px 24px;
-  color: #71717a;
-  font-weight: 600;
-  background: none;
-  border: none;
-  cursor: pointer;
-  transition: color 0.2s;
-}
-
-.btn-ghost:hover { color: #18181b; }
-
-.animate-slide {
-  animation: slideDown 0.3s ease-out;
-}
-
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.error-toast {
-  background: #fef2f2;
-  color: #ef4444;
-  padding: 16px;
-  border-radius: 12px;
-  margin-top: 20px;
-  font-weight: 600;
-  border: 1px solid #fee2e2;
+.id-tag:hover {
+  background: var(--danger);
 }
 </style>
