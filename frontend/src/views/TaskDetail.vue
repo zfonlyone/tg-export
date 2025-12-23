@@ -63,40 +63,37 @@
 
     <!-- 统一任务列表 (v1.6.7.2 布局优化) -->
     <div class="unified-task-list">
-      <div class="list-toolbar flex-wrap">
-        <!-- 并发控制移至此处 (图二组件移动) -->
-        <div class="concurrency-toolbar">
-          <div class="mini-control">
-            <span class="ctrl-label">并发</span>
+      <div class="list-toolbar">
+        <!-- 统一横排工具栏 -->
+        <div class="toolbar-row">
+          <!-- 左侧：并发控制 -->
+          <div class="toolbar-left">
+            <span class="toolbar-label">并发</span>
             <div class="mini-stepper">
               <button @click="adjustConcurrency('max', -1)" :disabled="concurrency.max <= 1">-</button>
               <span class="ctrl-val">{{ concurrency.max }}</span>
               <button @click="adjustConcurrency('max', 1)" :disabled="concurrency.max >= 20">+</button>
             </div>
-          </div>
-          <div class="v-divider-mini"></div>
-          <label class="mini-toggle">
-            <input type="checkbox" v-model="concurrency.enableParallel" @change="toggleParallel">
-            <span class="toggle-text">⚡并行</span>
-          </label>
-        </div>
-
-        <div class="header-right-tools">
-          <div class="active-task-info" v-if="stats.current_concurrency">
-             🚦 {{stats.current_concurrency}} 并发 / {{stats.active_threads}} 线程
+            <label class="toolbar-toggle">
+              <input type="checkbox" v-model="concurrency.enableParallel" @change="toggleParallel">
+              <span>⚡并行</span>
+            </label>
           </div>
           
-          <!-- TDL 下载模式开关 -->
-          <label class="tdl-mode-toggle" :class="{ active: tdlMode }">
-            <input type="checkbox" v-model="tdlMode" @change="toggleTDLMode">
-            <span class="toggle-icon">🚀</span>
-            <span class="toggle-label-text">TDL</span>
-          </label>
-          
-          <button @click="toggleSort" class="btn-premium ghost sm sort-btn" :title="reversedOrder ? '当前为倒序' : '当前为正序'">
-            {{ reversedOrder ? '⇅ 倒序' : '⇅ 正序' }}
-          </button>
-          <button @click="toggleViewAll" class="btn-premium ghost sm">{{ viewAll ? '精简' : '全部' }}</button>
+          <!-- 右侧：状态和功能 -->
+          <div class="toolbar-right">
+            <span class="toolbar-status" v-if="stats.current_concurrency">
+              🚦 {{stats.current_concurrency}} / {{stats.active_threads}}
+            </span>
+            <label class="toolbar-toggle tdl" :class="{ active: tdlMode }">
+              <input type="checkbox" v-model="tdlMode" @change="toggleTDLMode">
+              <span>🚀 TDL</span>
+            </label>
+            <button @click="toggleSort" class="toolbar-btn" :title="reversedOrder ? '倒序' : '正序'">
+              {{ reversedOrder ? '⇅ 倒序' : '⇅ 正序' }}
+            </button>
+            <button @click="toggleViewAll" class="toolbar-btn">{{ viewAll ? '精简' : '全部' }}</button>
+          </div>
         </div>
       </div>
 
@@ -741,13 +738,70 @@ onUnmounted(() => {
 }
 
 .list-toolbar {
-  padding: 16px 20px;
+  padding: 12px 16px;
   border-bottom: 1px solid #f4f4f5;
+}
+
+.toolbar-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
+  flex-wrap: wrap;
 }
+
+.toolbar-left, .toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.toolbar-status {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #3b82f6;
+  padding: 4px 10px;
+  background: #eff6ff;
+  border-radius: 12px;
+}
+
+.toolbar-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.toolbar-toggle input { display: none; }
+.toolbar-toggle:hover { background: #e2e8f0; }
+.toolbar-toggle:has(input:checked) { background: #3b82f6; color: white; border-color: #3b82f6; }
+.toolbar-toggle.tdl:has(input:checked) { background: linear-gradient(135deg, #8b5cf6, #6366f1); border-color: #7c3aed; }
+
+.toolbar-btn {
+  padding: 4px 10px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.toolbar-btn:hover { background: #e2e8f0; border-color: #3b82f6; color: #3b82f6; }
 
 .sort-btn {
   white-space: nowrap;

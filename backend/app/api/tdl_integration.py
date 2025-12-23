@@ -1,12 +1,14 @@
 """
-TDL Integration Module - 使用 TDL 工具下载 Telegram 文件
-支持文件监控进度追踪
+TDL Integration Module - 使用 Docker HTTP API 与 TDL 容器通信
+无需安装 Docker CLI，直接通过 Unix socket 调用 Docker API
 """
 import os
+import json
 import asyncio
 import logging
-import subprocess
-import time
+import socket
+import urllib.request
+import urllib.error
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Callable
 from dataclasses import dataclass, field
@@ -14,6 +16,9 @@ from enum import Enum
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# Docker socket 路径
+DOCKER_SOCKET = "/var/run/docker.sock"
 
 
 class TDLDownloadStatus(str, Enum):
@@ -27,14 +32,14 @@ class TDLDownloadStatus(str, Enum):
 @dataclass
 class TDLDownloadItem:
     """TDL 下载项"""
-    item_id: str              # 下载项 ID (chat_id_msg_id)
-    url: str                  # Telegram 链接
-    file_name: str            # 文件名
-    file_size: int            # 预期文件大小
-    output_path: str          # 输出文件路径
+    item_id: str
+    url: str
+    file_name: str
+    file_size: int
+    output_path: str
     status: TDLDownloadStatus = TDLDownloadStatus.PENDING
-    downloaded_size: int = 0  # 已下载大小
-    progress: float = 0.0     # 下载进度 (0-100)
+    downloaded_size: int = 0
+    progress: float = 0.0
     error: Optional[str] = None
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -46,8 +51,7 @@ class TDLBatchTask:
     task_id: str
     items: List[TDLDownloadItem] = field(default_factory=list)
     status: TDLDownloadStatus = TDLDownloadStatus.PENDING
-    process: Optional[asyncio.subprocess.Process] = None
-    monitor_task: Optional[asyncio.Task] = None
+    exec_id: Optional[str] = None
     output_dir: str = "/downloads"
     threads: int = 4
     limit: int = 2
@@ -55,65 +59,154 @@ class TDLBatchTask:
     completed_at: Optional[datetime] = None
 
 
+class DockerAPIClient:
+    """Docker HTTP API 客户端 (通过 Unix socket)"""
+    
+    def __init__(self, socket_path: str = DOCKER_SOCKET):
+        self.socket_path = socket_path
+    
+    def _make_request(self, method: str, path: str, body: dict = None) -> dict:
+        """发送 HTTP 请求到 Docker daemon"""
+        try:
+            # 创建 Unix socket 连接
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(30)
+            sock.connect(self.socket_path)
+            
+            # 构建 HTTP 请求
+            body_bytes = json.dumps(body).encode() if body else b""
+            headers = [
+                f"{method} {path} HTTP/1.1",
+                "Host: localhost",
+                "Content-Type: application/json",
+                f"Content-Length: {len(body_bytes)}",
+                "",
+                ""
+            ]
+            request = "\r\n".join(headers).encode() + body_bytes
+            
+            # 发送请求
+            sock.sendall(request)
+            
+            # 读取响应
+            response = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                response += chunk
+                # 检查是否读取完毕 (简单检测)
+                if b"\r\n\r\n" in response:
+                    header_end = response.find(b"\r\n\r\n")
+                    header = response[:header_end].decode()
+                    if "Content-Length:" in header:
+                        for line in header.split("\r\n"):
+                            if line.startswith("Content-Length:"):
+                                content_len = int(line.split(":")[1].strip())
+                                body_start = header_end + 4
+                                if len(response) >= body_start + content_len:
+                                    break
+                    elif "Transfer-Encoding: chunked" not in header:
+                        break
+            
+            sock.close()
+            
+            # 解析响应
+            if b"\r\n\r\n" in response:
+                header_end = response.find(b"\r\n\r\n")
+                header = response[:header_end].decode()
+                body = response[header_end + 4:]
+                
+                # 获取状态码
+                status_line = header.split("\r\n")[0]
+                status_code = int(status_line.split()[1])
+                
+                # 解析 JSON body
+                try:
+                    result = json.loads(body.decode()) if body else {}
+                except:
+                    result = {"raw": body.decode()}
+                
+                return {"status_code": status_code, "data": result}
+            
+            return {"status_code": 500, "error": "Invalid response"}
+            
+        except FileNotFoundError:
+            return {"status_code": 0, "error": f"Docker socket 不存在: {self.socket_path}"}
+        except socket.error as e:
+            return {"status_code": 0, "error": f"Socket 错误: {e}"}
+        except Exception as e:
+            return {"status_code": 0, "error": str(e)}
+    
+    def is_available(self) -> tuple:
+        """检查 Docker 是否可用，返回 (是否可用, 错误信息)"""
+        if not os.path.exists(self.socket_path):
+            return False, f"Docker socket 不存在: {self.socket_path}"
+        
+        result = self._make_request("GET", "/version")
+        if result.get("status_code") == 200:
+            return True, None
+        return False, result.get("error", "无法连接 Docker")
+    
+    def get_container_info(self, container_name: str) -> dict:
+        """获取容器信息"""
+        result = self._make_request("GET", f"/containers/{container_name}/json")
+        if result.get("status_code") == 200:
+            return result["data"]
+        return None
+    
+    def is_container_running(self, container_name: str) -> tuple:
+        """检查容器是否运行，返回 (是否运行, 错误信息)"""
+        info = self.get_container_info(container_name)
+        if info is None:
+            return False, f"容器 '{container_name}' 不存在"
+        
+        state = info.get("State", {})
+        if state.get("Running"):
+            return True, None
+        return False, f"容器状态: {state.get('Status', 'unknown')}"
+    
+    def create_exec(self, container_name: str, cmd: List[str]) -> str:
+        """创建 exec 实例，返回 exec ID"""
+        result = self._make_request("POST", f"/containers/{container_name}/exec", {
+            "AttachStdin": False,
+            "AttachStdout": True,
+            "AttachStderr": True,
+            "Tty": False,
+            "Cmd": cmd
+        })
+        if result.get("status_code") == 201:
+            return result["data"].get("Id")
+        logger.error(f"创建 exec 失败: {result}")
+        return None
+    
+    def start_exec(self, exec_id: str) -> dict:
+        """启动 exec 并获取输出"""
+        result = self._make_request("POST", f"/exec/{exec_id}/start", {
+            "Detach": False,
+            "Tty": False
+        })
+        return result
+
+
 class TDLIntegration:
-    """TDL 集成服务 - 支持文件监控进度追踪"""
+    """TDL 集成服务 - 使用 Docker HTTP API"""
     
     def __init__(self):
         self.container_name = os.environ.get("TDL_CONTAINER_NAME", "tdl")
         self.batch_tasks: Dict[str, TDLBatchTask] = {}
-        self._monitor_interval = 1.0  # 文件监控间隔 (秒)
-        self._check_docker_available()
-    
-    def _check_docker_available(self) -> bool:
-        """检查 Docker 是否可用"""
-        try:
-            result = subprocess.run(
-                ["docker", "version"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode != 0:
-                logger.warning(f"Docker 命令失败: {result.stderr}")
-            return result.returncode == 0
-        except FileNotFoundError:
-            logger.warning("Docker 命令未找到，请确保 Docker socket 已挂载")
-            return False
-        except Exception as e:
-            logger.warning(f"Docker 不可用: {e}")
-            return False
-    
-    def _check_container_running(self) -> tuple:
-        """检查 TDL 容器是否运行中，返回 (是否运行, 错误信息)"""
-        try:
-            result = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Running}}", self.container_name],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode != 0:
-                error_msg = result.stderr.strip()
-                if "No such object" in error_msg:
-                    return False, f"容器 '{self.container_name}' 不存在"
-                return False, error_msg
-            
-            is_running = result.stdout.strip() == "true"
-            return is_running, None if is_running else "容器未运行"
-        except Exception as e:
-            return False, str(e)
+        self.docker = DockerAPIClient()
+        self._monitor_interval = 1.0
     
     def get_status(self) -> Dict[str, Any]:
         """获取 TDL 状态"""
-        docker_available = self._check_docker_available()
+        docker_available, docker_error = self.docker.is_available()
         
         container_running = False
-        container_error = None
+        container_error = docker_error
         
         if docker_available:
-            container_running, container_error = self._check_container_running()
-        else:
-            container_error = "Docker 不可用，请检查 /var/run/docker.sock 是否已挂载"
+            container_running, container_error = self.docker.is_container_running(self.container_name)
         
         active_tasks = [t for t in self.batch_tasks.values() 
                        if t.status == TDLDownloadStatus.RUNNING]
@@ -128,12 +221,7 @@ class TDLIntegration:
         }
     
     def generate_telegram_link(self, chat_id: int, message_id: int) -> str:
-        """
-        生成 Telegram 消息链接
-        
-        对于私有频道/群组，chat_id 通常是负数，需要转换
-        例如: chat_id = -1001234567890 -> https://t.me/c/1234567890/123
-        """
+        """生成 Telegram 消息链接"""
         if chat_id < 0:
             clean_id = str(abs(chat_id))
             if clean_id.startswith("100"):
@@ -142,81 +230,58 @@ class TDLIntegration:
         else:
             return f"https://t.me/c/{chat_id}/{message_id}"
     
-    def _get_file_size(self, file_path: str) -> int:
-        """获取文件大小 (通过 docker exec)"""
-        try:
-            result = subprocess.run(
-                ["docker", "exec", self.container_name, "stat", "-c", "%s", file_path],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if result.returncode == 0:
-                return int(result.stdout.strip())
-        except Exception:
-            pass
-        return 0
-    
-    def _check_file_exists(self, file_path: str) -> bool:
-        """检查文件是否存在"""
-        try:
-            result = subprocess.run(
-                ["docker", "exec", self.container_name, "test", "-f", file_path],
-                capture_output=True,
-                timeout=5
-            )
-            return result.returncode == 0
-        except Exception:
-            return False
-    
-    async def _monitor_download_progress(self, batch_task: TDLBatchTask):
-        """监控下载进度 (通过文件大小变化)"""
-        logger.info(f"开始监控下载进度: {batch_task.task_id}")
+    async def download(
+        self,
+        url: str,
+        output_dir: str = "/downloads",
+        threads: int = 4,
+        limit: int = 2
+    ) -> Dict[str, Any]:
+        """使用 TDL 下载单个文件"""
+        running, error = self.docker.is_container_running(self.container_name)
+        if not running:
+            return {"success": False, "error": error or "TDL 容器未运行"}
         
-        while batch_task.status == TDLDownloadStatus.RUNNING:
-            try:
-                all_completed = True
-                
-                for item in batch_task.items:
-                    if item.status in [TDLDownloadStatus.COMPLETED, TDLDownloadStatus.FAILED]:
-                        continue
-                    
-                    all_completed = False
-                    
-                    # 检查文件是否存在
-                    if self._check_file_exists(item.output_path):
-                        current_size = self._get_file_size(item.output_path)
-                        item.downloaded_size = current_size
-                        
-                        if item.file_size > 0:
-                            item.progress = min(100.0, (current_size / item.file_size) * 100)
-                        
-                        # 标记为运行中
-                        if item.status == TDLDownloadStatus.PENDING:
-                            item.status = TDLDownloadStatus.RUNNING
-                            item.started_at = datetime.now()
-                        
-                        # 检查是否下载完成
-                        if item.file_size > 0 and current_size >= item.file_size:
-                            item.status = TDLDownloadStatus.COMPLETED
-                            item.progress = 100.0
-                            item.completed_at = datetime.now()
-                            logger.info(f"文件下载完成: {item.file_name}")
-                
-                if all_completed:
-                    batch_task.status = TDLDownloadStatus.COMPLETED
-                    batch_task.completed_at = datetime.now()
-                    logger.info(f"批量任务完成: {batch_task.task_id}")
-                    break
-                
-                await asyncio.sleep(self._monitor_interval)
-                
-            except asyncio.CancelledError:
-                logger.info(f"监控任务被取消: {batch_task.task_id}")
-                break
-            except Exception as e:
-                logger.error(f"监控下载进度出错: {e}")
-                await asyncio.sleep(self._monitor_interval)
+        cmd = ["tdl", "dl", "-u", url, "-d", output_dir, "-t", str(threads), "-l", str(limit)]
+        
+        exec_id = self.docker.create_exec(self.container_name, cmd)
+        if not exec_id:
+            return {"success": False, "error": "创建 exec 失败"}
+        
+        result = self.docker.start_exec(exec_id)
+        
+        if result.get("status_code") == 200:
+            return {"success": True, "url": url, "output": result.get("data", {}).get("raw", "")}
+        return {"success": False, "error": result.get("error", "执行失败")}
+    
+    async def batch_download(
+        self,
+        urls: List[str],
+        output_dir: str = "/downloads",
+        threads: int = 4,
+        limit: int = 2
+    ) -> Dict[str, Any]:
+        """批量下载"""
+        if not urls:
+            return {"success": False, "error": "URL 列表为空"}
+        
+        running, error = self.docker.is_container_running(self.container_name)
+        if not running:
+            return {"success": False, "error": error or "TDL 容器未运行"}
+        
+        cmd = ["tdl", "dl", "-d", output_dir, "-t", str(threads), "-l", str(limit)]
+        for url in urls:
+            cmd.extend(["-u", url])
+        
+        exec_id = self.docker.create_exec(self.container_name, cmd)
+        if not exec_id:
+            return {"success": False, "error": "创建 exec 失败"}
+        
+        result = self.docker.start_exec(exec_id)
+        
+        if result.get("status_code") == 200:
+            return {"success": True, "count": len(urls), "output": result.get("data", {}).get("raw", "")}
+        return {"success": False, "error": result.get("error", "执行失败")}
     
     async def start_batch_download(
         self,
@@ -227,270 +292,39 @@ class TDLIntegration:
         limit: int = 2,
         progress_callback: Optional[Callable] = None
     ) -> Dict[str, Any]:
-        """
-        启动批量下载任务 (后台运行 + 文件监控)
-        
-        Args:
-            task_id: 任务 ID
-            items: 下载项列表，每项需包含 {id, url, file_name, file_size}
-            output_dir: 输出目录
-            threads: 下载线程数 (-t)
-            limit: 最大并发数 (-l)
-            progress_callback: 进度回调函数
-        
-        Returns:
-            启动结果
-        """
-        if not self._check_container_running():
-            return {
-                "success": False,
-                "error": f"TDL 容器 '{self.container_name}' 未运行"
-            }
+        """启动批量下载任务"""
+        running, error = self.docker.is_container_running(self.container_name)
+        if not running:
+            return {"success": False, "error": error or "TDL 容器未运行"}
         
         if not items:
             return {"success": False, "error": "下载项列表为空"}
         
-        # 创建批量任务
-        download_items = []
-        urls = []
+        urls = [item.get("url", "") for item in items]
         
-        for item_data in items:
-            output_path = f"{output_dir}/{item_data.get('file_name', 'unknown')}"
-            
-            download_item = TDLDownloadItem(
-                item_id=item_data.get("id", ""),
-                url=item_data.get("url", ""),
-                file_name=item_data.get("file_name", "unknown"),
-                file_size=item_data.get("file_size", 0),
-                output_path=output_path
-            )
-            download_items.append(download_item)
-            urls.append(download_item.url)
+        # 直接执行批量下载
+        result = await self.batch_download(urls, output_dir, threads, limit)
         
-        batch_task = TDLBatchTask(
-            task_id=task_id,
-            items=download_items,
-            output_dir=output_dir,
-            threads=threads,
-            limit=limit,
-            started_at=datetime.now()
-        )
-        
-        # 构建命令
-        cmd = [
-            "docker", "exec", self.container_name,
-            "tdl", "dl",
-            "-d", output_dir,
-            "-t", str(threads),
-            "-l", str(limit)
-        ]
-        
-        for url in urls:
-            cmd.extend(["-u", url])
-        
-        logger.info(f"启动 TDL 批量下载: {len(urls)} 个文件, 并发={limit}, 线程={threads}")
-        
-        try:
-            # 后台启动下载进程
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            batch_task.process = process
-            batch_task.status = TDLDownloadStatus.RUNNING
-            self.batch_tasks[task_id] = batch_task
-            
-            # 启动文件监控任务
-            batch_task.monitor_task = asyncio.create_task(
-                self._monitor_download_progress(batch_task)
-            )
-            
-            # 同时监控进程结束
-            asyncio.create_task(self._wait_process_complete(batch_task))
-            
-            return {
-                "success": True,
-                "task_id": task_id,
-                "count": len(urls),
-                "message": f"已启动 TDL 下载: {len(urls)} 个文件"
-            }
-            
-        except Exception as e:
-            logger.exception(f"启动 TDL 下载失败: {e}")
-            return {"success": False, "error": str(e)}
-    
-    async def _wait_process_complete(self, batch_task: TDLBatchTask):
-        """等待进程完成"""
-        if batch_task.process:
-            try:
-                stdout, stderr = await batch_task.process.communicate()
-                
-                if batch_task.process.returncode == 0:
-                    logger.info(f"TDL 进程正常结束: {batch_task.task_id}")
-                    # 标记所有未完成的项为完成
-                    for item in batch_task.items:
-                        if item.status == TDLDownloadStatus.RUNNING:
-                            item.status = TDLDownloadStatus.COMPLETED
-                            item.progress = 100.0
-                            item.completed_at = datetime.now()
-                else:
-                    error_msg = stderr.decode() if stderr else f"Exit code: {batch_task.process.returncode}"
-                    logger.error(f"TDL 进程异常结束: {error_msg}")
-                    # 标记未完成项为失败
-                    for item in batch_task.items:
-                        if item.status not in [TDLDownloadStatus.COMPLETED]:
-                            item.status = TDLDownloadStatus.FAILED
-                            item.error = error_msg
-                
-                batch_task.status = TDLDownloadStatus.COMPLETED
-                batch_task.completed_at = datetime.now()
-                
-                # 取消监控任务
-                if batch_task.monitor_task:
-                    batch_task.monitor_task.cancel()
-                    
-            except Exception as e:
-                logger.error(f"等待进程完成出错: {e}")
+        return {
+            "success": result.get("success"),
+            "task_id": task_id,
+            "count": len(urls),
+            "message": f"已启动 TDL 下载: {len(urls)} 个文件" if result.get("success") else result.get("error")
+        }
     
     def get_batch_task_status(self, task_id: str) -> Optional[Dict[str, Any]]:
         """获取批量任务状态"""
         task = self.batch_tasks.get(task_id)
         if not task:
             return None
-        
-        items_status = []
-        for item in task.items:
-            items_status.append({
-                "id": item.item_id,
-                "file_name": item.file_name,
-                "file_size": item.file_size,
-                "downloaded_size": item.downloaded_size,
-                "progress": item.progress,
-                "status": item.status.value,
-                "error": item.error
-            })
-        
-        return {
-            "task_id": task_id,
-            "status": task.status.value,
-            "items": items_status,
-            "started_at": task.started_at.isoformat() if task.started_at else None,
-            "completed_at": task.completed_at.isoformat() if task.completed_at else None
-        }
+        return {"task_id": task_id, "status": task.status.value}
     
     async def cancel_batch_task(self, task_id: str) -> bool:
         """取消批量任务"""
-        task = self.batch_tasks.get(task_id)
-        if not task:
-            return False
-        
-        if task.process:
-            task.process.terminate()
-        
-        if task.monitor_task:
-            task.monitor_task.cancel()
-        
-        task.status = TDLDownloadStatus.FAILED
-        
-        for item in task.items:
-            if item.status == TDLDownloadStatus.RUNNING:
-                item.status = TDLDownloadStatus.FAILED
-                item.error = "任务已取消"
-        
-        return True
-    
-    # ===== 兼容旧 API =====
-    
-    async def download(
-        self,
-        url: str,
-        output_dir: str = "/downloads",
-        threads: int = 4,
-        limit: int = 2
-    ) -> Dict[str, Any]:
-        """使用 TDL 下载单个文件 (同步等待)"""
-        if not self._check_container_running():
-            return {
-                "success": False,
-                "error": f"TDL 容器 '{self.container_name}' 未运行"
-            }
-        
-        cmd = [
-            "docker", "exec", self.container_name,
-            "tdl", "dl",
-            "-u", url,
-            "-d", output_dir,
-            "-t", str(threads),
-            "-l", str(limit)
-        ]
-        
-        logger.info(f"执行 TDL 下载: {' '.join(cmd)}")
-        
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode == 0:
-                return {"success": True, "url": url, "output": stdout.decode() if stdout else ""}
-            else:
-                error_msg = stderr.decode() if stderr else f"Exit code: {process.returncode}"
-                return {"success": False, "url": url, "error": error_msg}
-                
-        except Exception as e:
-            return {"success": False, "error": str(e)}
-    
-    async def batch_download(
-        self,
-        urls: List[str],
-        output_dir: str = "/downloads",
-        threads: int = 4,
-        limit: int = 2
-    ) -> Dict[str, Any]:
-        """批量下载 (同步等待)"""
-        if not urls:
-            return {"success": False, "error": "URL 列表为空"}
-        
-        if not self._check_container_running():
-            return {
-                "success": False,
-                "error": f"TDL 容器 '{self.container_name}' 未运行"
-            }
-        
-        cmd = [
-            "docker", "exec", self.container_name,
-            "tdl", "dl",
-            "-d", output_dir,
-            "-t", str(threads),
-            "-l", str(limit)
-        ]
-        
-        for url in urls:
-            cmd.extend(["-u", url])
-        
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode == 0:
-                return {"success": True, "count": len(urls), "output": stdout.decode() if stdout else ""}
-            else:
-                error_msg = stderr.decode() if stderr else f"Exit code: {process.returncode}"
-                return {"success": False, "count": len(urls), "error": error_msg}
-                
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        if task_id in self.batch_tasks:
+            del self.batch_tasks[task_id]
+            return True
+        return False
     
     async def download_by_message(
         self,
