@@ -36,6 +36,14 @@
           </div>
         </div>
         <div class="control-group">
+          <label>线程数</label>
+          <div class="stepper">
+            <button @click="adjustConcurrency('threads', -1)" :disabled="concurrency.threads <= 1">−</button>
+            <span class="value">{{ concurrency.threads }}</span>
+            <button @click="adjustConcurrency('threads', 1)" :disabled="concurrency.threads >= 20">+</button>
+          </div>
+        </div>
+        <div class="control-group">
           <label>分块连接</label>
           <div class="stepper">
             <button @click="adjustConcurrency('chunk', -1)" :disabled="concurrency.chunk <= 1">−</button>
@@ -177,7 +185,7 @@ const stats = ref({
 const currentTab = ref('active')
 const viewAll = ref(false)
 const reversedOrder = ref(false)
-const concurrency = ref({ max: 10, chunk: 4 })  // 并发控制状态
+const concurrency = ref({ max: 10, threads: 10, chunk: 4 })  // 并发控制状态
 let refreshTimer = null
 
 function getAuthHeader() {
@@ -241,6 +249,7 @@ async function fetchConcurrency() {
   try {
     const res = await axios.get(`/api/export/${taskId}/concurrency`, { headers: getAuthHeader() })
     concurrency.value.max = res.data.current_max_concurrent_downloads || res.data.max_concurrent_downloads
+    concurrency.value.threads = res.data.download_threads || 10
     concurrency.value.chunk = res.data.parallel_chunk_connections || 4
   } catch (err) {
     console.error('获取并发配置失败:', err)
@@ -248,22 +257,26 @@ async function fetchConcurrency() {
 }
 
 async function adjustConcurrency(type, delta) {
-  const newValue = type === 'max' 
-    ? concurrency.value.max + delta 
-    : concurrency.value.chunk + delta
+  let newValue
+  if (type === 'max') newValue = concurrency.value.max + delta
+  else if (type === 'threads') newValue = concurrency.value.threads + delta
+  else newValue = concurrency.value.chunk + delta
   
   // 边界检查
   if (type === 'max' && (newValue < 1 || newValue > 20)) return
+  if (type === 'threads' && (newValue < 1 || newValue > 20)) return
   if (type === 'chunk' && (newValue < 1 || newValue > 8)) return
   
   // 乐观更新
   if (type === 'max') concurrency.value.max = newValue
+  else if (type === 'threads') concurrency.value.threads = newValue
   else concurrency.value.chunk = newValue
   
   try {
-    const params = type === 'max' 
-      ? { max_concurrent_downloads: newValue }
-      : { parallel_chunk_connections: newValue }
+    let params
+    if (type === 'max') params = { max_concurrent_downloads: newValue }
+    else if (type === 'threads') params = { download_threads: newValue }
+    else params = { parallel_chunk_connections: newValue }
     
     await axios.post(`/api/export/${taskId}/concurrency`, null, { 
       params, 
@@ -272,6 +285,7 @@ async function adjustConcurrency(type, delta) {
   } catch (err) {
     // 回滚
     if (type === 'max') concurrency.value.max -= delta
+    else if (type === 'threads') concurrency.value.threads -= delta
     else concurrency.value.chunk -= delta
     alert('调整失败: ' + (err.response?.data?.detail || err.message))
   }

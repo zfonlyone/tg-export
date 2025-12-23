@@ -1070,6 +1070,11 @@ class ExportManager:
                     # 找到了优先任务（不是从队列获取）
                     item = priority_item
                     from_queue = False
+                    
+                    # [BUG FIX] 立即注册到 _item_to_worker，防止其他 Worker 重复选取同一项目
+                    if task.id not in self._item_to_worker:
+                        self._item_to_worker[task.id] = {}
+                    self._item_to_worker[task.id][item.id] = asyncio.current_task()
                 else:
                     # P4: 从队列取出一个待下载项 (阻塞式等待)
                     item = await queue.get()
@@ -1079,6 +1084,11 @@ class ExportManager:
                     if item is None:
                         queue.task_done()
                         break
+                    
+                    # [BUG FIX] 从队列获取的项目也需要立即注册
+                    if task.id not in self._item_to_worker:
+                        self._item_to_worker[task.id] = {}
+                    self._item_to_worker[task.id][item.id] = asyncio.current_task()
 
                 # 3. [Adaptive Concurrency] 检查当前并发槽位是否允许继续执行 (公平竞争)
                 while True:

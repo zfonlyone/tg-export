@@ -335,6 +335,7 @@ async def cancel_download_item(
 async def update_task_concurrency(
     task_id: str,
     max_concurrent_downloads: Optional[int] = None,
+    download_threads: Optional[int] = None,
     parallel_chunk_connections: Optional[int] = None,
     current_user: User = Depends(get_current_user)
 ):
@@ -343,6 +344,7 @@ async def update_task_concurrency(
     
     Args:
         max_concurrent_downloads: 最大并发下载数 (1-20)
+        download_threads: 下载线程数 (1-20)
         parallel_chunk_connections: 单文件并行连接数 (1-8)
     """
     task = export_manager.get_task(task_id)
@@ -359,6 +361,12 @@ async def update_task_concurrency(
         # 同步更新 Pyrogram 客户端
         telegram_client.set_max_concurrent_transmissions(max_concurrent_downloads)
         changes.append(f"最大并发: {max_concurrent_downloads}")
+    
+    if download_threads is not None:
+        # 限制范围
+        download_threads = max(1, min(20, download_threads))
+        task.options.download_threads = download_threads
+        changes.append(f"下载线程: {download_threads}")
     
     if parallel_chunk_connections is not None:
         # 限制范围
@@ -386,6 +394,7 @@ async def get_task_concurrency(
     return {
         "max_concurrent_downloads": task.options.max_concurrent_downloads,
         "current_max_concurrent_downloads": task.current_max_concurrent_downloads or task.options.max_concurrent_downloads,
+        "download_threads": task.options.download_threads,
         "parallel_chunk_connections": task.options.parallel_chunk_connections,
         "enable_parallel_chunk": task.options.enable_parallel_chunk
     }
