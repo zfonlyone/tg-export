@@ -1042,8 +1042,10 @@ class ExportManager:
                 best_resumed = None
                 best_timestamp = 0
                 for candidate in task.download_queue:
+                    # [FIX] 额外检查 is_manually_paused，避免不一致状态
                     if (candidate.status == DownloadStatus.WAITING 
                         and candidate.resume_timestamp > 0
+                        and not candidate.is_manually_paused
                         and candidate.id not in self._item_to_worker.get(task.id, {})):
                         if candidate.resume_timestamp > best_timestamp:
                             best_timestamp = candidate.resume_timestamp
@@ -1057,7 +1059,9 @@ class ExportManager:
                 # P2: 查找所有 WAITING 状态的任务
                 if not priority_item:
                     for candidate in task.download_queue:
+                        # [FIX] 额外检查 is_manually_paused，避免不一致状态
                         if (candidate.status == DownloadStatus.WAITING 
+                            and not candidate.is_manually_paused
                             and candidate.id not in self._item_to_worker.get(task.id, {})):
                             priority_item = candidate
                             logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P2] 执行等待中的任务: {candidate.file_name}")
@@ -1093,8 +1097,10 @@ class ExportManager:
                 # 3. [Adaptive Concurrency] 检查当前并发槽位是否允许继续执行 (公平竞争)
                 while True:
                     # 统计当前正在下载的项 (通过映射表判断)
+                    # 注意：由于我们在选择项目后立即注册，所以 active_count 已经包含自己
+                    # 因此使用 <= 而不是 < 进行比较
                     active_count = len(self._item_to_worker.get(task.id, {}))
-                    if active_count < (task.current_max_concurrent_downloads or 1):
+                    if active_count <= (task.current_max_concurrent_downloads or 1):
                         break
                     
                     # 如果在等待期间任务被取消、全局暂停，或者项目被手动暂停，则跳过
