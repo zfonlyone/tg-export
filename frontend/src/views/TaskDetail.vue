@@ -79,52 +79,30 @@
       </div>
     </div>
 
-    <!-- 顶部统计卡片 (作为过滤器) -->
-    <div class="summary-grid">
-      <div class="stat-card clickable pointer" :class="{ active: currentTab === 'active' }" @click="currentTab = 'active'">
-        <div class="stat-icon">⚡</div>
-        <div class="stat-info">
-          <div class="stat-value">{{ stats.active || 0 }}</div>
-          <div class="stat-label">正在下载/暂停</div>
-        </div>
-      </div>
-      <div class="stat-card pointer" :class="{ active: currentTab === 'waiting' }" @click="currentTab = 'waiting'">
-        <div class="stat-icon">⏳</div>
-        <div class="stat-info">
-          <div class="stat-value">{{ stats.waiting || 0 }}</div>
-          <div class="stat-label">等待队列</div>
-        </div>
-      </div>
-      <div class="stat-card pointer" :class="{ active: currentTab === 'failed' }" @click="currentTab = 'failed'">
-        <div class="stat-icon">❌</div>
-        <div class="stat-info">
-          <div class="stat-value">{{ stats.failed || 0 }}</div>
-          <div class="stat-label">下载失败</div>
-        </div>
-      </div>
-      <div class="stat-card pointer" :class="{ active: currentTab === 'completed' }" @click="currentTab = 'completed'">
-        <div class="stat-icon">✅</div>
-        <div class="stat-info">
-          <div class="stat-value">{{ stats.completed || 0 }}</div>
-          <div class="stat-label">已完成/跳过</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 统一任务列表 -->
+    <!-- 统一任务列表 (v1.6.7.2 布局优化) -->
     <div class="unified-task-list">
-      <div class="list-toolbar">
-        <div class="filter-tabs-wrapper">
-          <div class="filter-tabs">
-            <button class="tab-btn" :class="{ active: currentTab === 'active' }" @click="currentTab = 'active'">
-              活动中 <span class="tab-sub" v-if="currentTab === 'active' && stats.current_concurrency">(并发: {{stats.current_concurrency}}, 线程: {{stats.active_threads}})</span>
-            </button>
-            <button class="tab-btn" :class="{ active: currentTab === 'waiting' }" @click="currentTab = 'waiting'">等待中</button>
-            <button class="tab-btn" :class="{ active: currentTab === 'failed' }" @click="currentTab = 'failed'">已失败</button>
-            <button class="tab-btn" :class="{ active: currentTab === 'completed' }" @click="currentTab = 'completed'">已完成</button>
+      <div class="list-toolbar flex-wrap">
+        <!-- 并发控制移至此处 (图二组件移动) -->
+        <div class="concurrency-toolbar">
+          <div class="mini-control">
+            <span class="ctrl-label">并发</span>
+            <div class="mini-stepper">
+              <button @click="adjustConcurrency('max', -1)" :disabled="concurrency.max <= 1">-</button>
+              <span class="ctrl-val">{{ concurrency.max }}</span>
+              <button @click="adjustConcurrency('max', 1)" :disabled="concurrency.max >= 20">+</button>
+            </div>
           </div>
+          <div class="v-divider-mini"></div>
+          <label class="mini-toggle">
+            <input type="checkbox" v-model="concurrency.enableParallel" @change="toggleParallel">
+            <span class="toggle-text">⚡并行</span>
+          </label>
         </div>
+
         <div class="header-right-tools">
+          <div class="active-task-info" v-if="stats.current_concurrency">
+             🚦 {{stats.current_concurrency}} 并发 / {{stats.active_threads}} 线程
+          </div>
           <button @click="toggleSort" class="btn-premium ghost sm sort-btn" :title="reversedOrder ? '当前为倒序' : '当前为正序'">
             {{ reversedOrder ? '⇅ 倒序' : '⇅ 正序' }}
           </button>
@@ -430,21 +408,103 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .p-bar-fill.completed { background: #22c55e; }
 .p-bar-fill.paused { background: #f59e0b; }
 
-/* 并发与操作管理 (v1.6.7) */
-.concurrency-management {
+/* 统一工具栏布局 (v1.6.7.2) */
+.list-toolbar {
   display: flex;
   align-items: center;
-  gap: 24px;
-  background: #f8fafc;
-  padding: 12px 24px;
-  border-radius: 16px;
-  border: 1.5px solid #e2e8f0;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: white;
+  border-bottom: 1.5px solid #f1f5f9;
+  gap: 16px;
 }
 
-.toggle-group {
-  border-left: 1.5px solid #e2e8f0;
-  padding-left: 20px;
+.flex-wrap { flex-wrap: wrap; }
+
+/* 紧凑型并发控制 */
+.concurrency-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #f8fafc;
+  padding: 6px 14px;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
 }
+
+.mini-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ctrl-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.mini-stepper {
+  display: flex;
+  align-items: center;
+  background: white;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.mini-stepper button {
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: #f1f5f9;
+  cursor: pointer;
+  font-weight: bold;
+  transition: all 0.2s;
+}
+
+.mini-stepper button:hover:not(:disabled) { background: #e2e8f0; }
+.mini-stepper .ctrl-val {
+  min-width: 24px;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.v-divider-mini {
+  width: 1px;
+  height: 14px;
+  background: #cbd5e1;
+}
+
+.mini-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.mini-toggle .toggle-text {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.active-task-info {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #3b82f6;
+  background: #eff6ff;
+  padding: 4px 10px;
+  border-radius: 20px;
+  margin-right: 8px;
+}
+
+/* 移除旧的 summary-grid 和 filter-tabs 相关样式 */
+.summary-grid, .filter-tabs-wrapper { display: none; }
 
 .toggle-label {
   display: flex;

@@ -481,7 +481,8 @@ class TelegramClient:
         parallel_connections: int = 4,
         progress_callback=None,
         cancel_check=None,
-        task_semaphore: Optional[asyncio.Semaphore] = None
+        task_semaphore: Optional[asyncio.Semaphore] = None,
+        enable_parallel: bool = True
     ) -> Optional[str]:
         """
         高性能并行分块下载 (v1.5.0)
@@ -512,7 +513,8 @@ class TelegramClient:
             downloader = ParallelChunkDownloader(
                 client=self._client,
                 parallel_connections=parallel_connections,
-                task_semaphore=task_semaphore
+                task_semaphore=task_semaphore,
+                enable_parallel=enable_parallel
             )
             
             success, error = await downloader.download(
@@ -527,13 +529,14 @@ class TelegramClient:
                 logger.info(f"并行下载成功: {file_path}")
                 return file_path
             else:
-                # 并行下载失败或文件过小，回退到常规下载
-                if "文件过小" in (error or ""):
-                    logger.debug(f"文件过小，使用常规下载: {file_path}")
-                    return await self.download_media(message, file_path, progress_callback)
+                # 并行下载失败或文件过小，回退到常规下载 (v1.6.7.3 日志优化)
+                error_str = error or ""
+                if "未启用" in error_str or "文件过小" in error_str:
+                    logger.debug(f"并行下载由于策略回退: {error_str}, 使用常规下载: {file_path}")
                 else:
-                    logger.warning(f"并行下载失败 ({error})，回退到常规下载")
-                    return await self.download_media(message, file_path, progress_callback)
+                    logger.warning(f"并行下载失败 ({error_str})，回退到常规下载")
+                
+                return await self.download_media(message, file_path, progress_callback)
                     
         except Exception as e:
             logger.error(f"并行下载异常: {e}")

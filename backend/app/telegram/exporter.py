@@ -459,22 +459,24 @@ class ExportManager:
             changes.append(f"并发: {max_concurrent}")
         
         if parallel_chunk is not None:
-            parallel_chunk = max(1, min(8, parallel_chunk))
-            task.options.parallel_chunk_connections = parallel_chunk
-            changes.append(f"分块: {parallel_chunk}")
+            # [v1.6.7.3] 接收前端数值并转换为自动化开关
+            is_enabled = parallel_chunk > 1
+            task.options.enable_parallel_chunk = is_enabled
+            # 为了兼容性，保留数值但锁定为 3 或 1
+            task.options.parallel_chunk_connections = 3 if is_enabled else 1
+            changes.append(f"并行: {'开启' if is_enabled else '关闭'}")
             
         if changes:
             # [FIX] 设置保存标记，确保刷新网页后配置不回退
             self._needs_save = True
             logger.info(f"任务 {task_id[:8]} 并发设置已更新: {', '.join(changes)}")
             
-            # [FIX] 重新初始化全局并行连接信号量
-            # 规则：允许总连接数 = max_concurrent * parallel_connections
-            # [v1.6.6] 收紧上限，封顶 20 (原为40)，降低触发 Telegram 安全策略的风险
-            new_limit = max(8, task.options.max_concurrent_downloads * task.options.parallel_chunk_connections)
-            new_limit = min(20, new_limit) 
+            # [FIX] 重新初始化全局并行连接信号量 (v1.6.7.3 自动化)
+            chunk_multiplier = 3 if task.options.enable_parallel_chunk else 1
+            new_limit = max(8, task.options.max_concurrent_downloads * chunk_multiplier)
+            new_limit = min(30, new_limit) 
             self._parallel_semaphores[task.id] = asyncio.Semaphore(new_limit)
-            logger.info(f"任务 {task_id[:8]}: 全局并行连接限额动态调整为 {new_limit}")
+            logger.info(f"任务 {task_id[:8]}: 全局并行连接限额动态调整为 {new_limit} (倍率: {chunk_multiplier})")
             # 唤醒队列 (如果并发数增加，且队列中有任务)
             if max_concurrent is not None and task.id in self._task_queues:
                 queue = self._task_queues[task.id]
@@ -622,6 +624,20 @@ class ExportManager:
             discovered_count = 0
             moved_for_resume = 0
             
+            # 媒体分类统计 (v1.6.7.2)
+            # 这里的 key 对应 Telegram Desktop 风格的子目录名
+            media_stats = {
+                "photos": 0,
+                "video_files": 0,
+                "voice_messages": 0,
+                "round_video_messages": 0,
+                "audio_files": 0,
+                "files": 0,
+                "stickers": 0,
+                "gifs": 0,
+                "other": 0
+            }
+            
             # 2.1 遍历目录扫描未在 queue 中的文件 (自动发现)
             # 格式: {msg_id}-{chat_id}-{name}
             # 兼容深度子目录 (chats/chat_xxx/photos/...)
@@ -636,8 +652,20 @@ class ExportManager:
                 # 跳过 temp 目录，只扫正式目录
                 if "temp" in root: continue
                 
+                # 识别当前所在的媒体类型 (根据目录名)
+                current_root = root.replace("\\", "/")
+                media_type_key = "other"
+                for key in media_stats.keys():
+                    if f"/{key}" in current_root or current_root.endswith(f"/{key}"):
+                        media_type_key = key
+                        break
+                
                 for file_name in files:
                     file_check_count += 1
+                    # 只要是文件且不在 temp 且不是隐藏文件，就计入分类统计 (即使没匹配到正则，也是该目录下的文件)
+                    if not file_name.startswith('.'):
+                        media_stats[media_type_key] += 1
+                        
                     match = pattern.match(file_name)
                     if not match: continue
                     
@@ -720,7 +748,21 @@ class ExportManager:
             
             # 更新统计
             self._update_task_stats(task)
-            task.last_verify_result = f"校验完成: 关联 {discovered_count} 个, 物理恢复 {recovered_count} 个, 缺失/修复 {missing_count + failed_count} 个"
+            
+            # 构建详细的分类显示字符串 (v1.6.7.2)
+            type_labels = {
+                "photos": "图片", "video_files": "视频", "voice_messages": "语音",
+                "round_video_messages": "视频消息", "audio_files": "音频",
+                "files": "文件", "stickers": "贴纸", "gifs": "GIF", "other": "其他"
+            }
+            stats_parts = []
+            for k, v in media_stats.items():
+                if v > 0:
+                    stats_parts.append(f"{type_labels.get(k, k)}:{v}")
+            
+            stats_str = " | ".join(stats_parts)
+            summary_str = f"校验完成: 关联{discovered_count}, 恢复{recovered_count}, 修正{missing_count + failed_count}"
+            task.last_verify_result = f"{summary_str} \n目录统计: [{stats_str}]"
             logger.info(f"任务 {task_id[:8]} 校验完成: {task.last_verify_result}")
             
         except Exception as e:
@@ -1102,16 +1144,10 @@ class ExportManager:
                         await self._notify_progress(task.id, task)
 
                 try:
-                    # [v1.5.0] 并行分块下载：大文件使用多连接并发
-                    MIN_PARALLEL_SIZE = 10 * 1024 * 1024  # 10MB
-                    use_parallel = (
-                        options.enable_parallel_chunk and 
-                        item.file_size >= MIN_PARALLEL_SIZE
-                    )
-                    
-                    if use_parallel:
-                        # 大文件使用并行分块下载
-                        logger.info(f"任务 {task.id[:8]}: 启动并行分块下载 ({options.parallel_chunk_connections} 连接)")
+                    # [v1.6.7.3] 并行下载自动化：只要文件 > 10MB 且处于开启状态，即尝试并行
+                    # 具体的分块数由 enable_parallel_chunk 决定 (内部自动 ON=3 / OFF=1)
+                    if item.file_size >= 10 * 1024 * 1024:
+                        logger.info(f"任务 {task.id[:8]}: 处理大文件下载 ({'并行开启' if options.enable_parallel_chunk else '并行关闭'})")
                         
                         def cancel_check():
                             return item.status == DownloadStatus.PAUSED or item.is_manually_paused
@@ -1121,10 +1157,11 @@ class ExportManager:
                                 message=msg,
                                 file_path=str(temp_file_path),
                                 file_size=item.file_size,
-                                parallel_connections=options.parallel_chunk_connections,
+                                parallel_connections=3 if options.enable_parallel_chunk else 1, # 自动分配合理连接数
                                 progress_callback=progress_cb,
                                 cancel_check=cancel_check,
-                                task_semaphore=self._parallel_semaphores.get(task.id)
+                                task_semaphore=self._parallel_semaphores.get(task.id),
+                                enable_parallel=options.enable_parallel_chunk
                             )
 
                             
@@ -1351,11 +1388,11 @@ class ExportManager:
         if task.current_max_concurrent_downloads is None:
             task.current_max_concurrent_downloads = options.max_concurrent_downloads
             
-        # [Adaptive Concurrency] 初始化全局任务信号量，限制总连接数
-        # [FIX] 更加科学的连接限额计算：并发文件数 * 每个文件的分块连接数
-        # [v1.6.6] 收紧上限，封顶 20，防止 session 被 Telegram 锁死
-        sem_limit = max(8, options.max_concurrent_downloads * options.parallel_chunk_connections)
-        sem_limit = min(20, sem_limit)
+        # [Adaptive Concurrency] 初始化全局任务信号量，限制总连接数 (v1.6.7.3 自动化)
+        # [FIX] 使用 3 作为分块系数（若开启）以确保限额符合实际需求
+        chunk_multiplier = 3 if options.enable_parallel_chunk else 1
+        sem_limit = max(8, options.max_concurrent_downloads * chunk_multiplier)
+        sem_limit = min(30, sem_limit) # 略微放宽封顶至 30，确保 10 并发 * 3 连接能跑满
         self._parallel_semaphores[task.id] = asyncio.Semaphore(sem_limit)
         logger.info(f"任务 {task.id[:8]}: 全局并行连接限额设置为 {sem_limit}")
             
