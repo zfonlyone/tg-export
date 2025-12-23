@@ -5,6 +5,7 @@ TG Export - 导出器核心
 import asyncio
 import json
 import uuid
+import time
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -420,6 +421,7 @@ class ExportManager:
                     item.status = DownloadStatus.WAITING
                     item.is_manually_paused = False
                     item.is_suspended = False
+                    item.resume_timestamp = time.time()  # 设置恢复时间戳，用于最高优先级调度
                     logger.info(f"恢复文件: {item.file_name}")
                     
                     is_resident = False
@@ -819,14 +821,45 @@ class ExportManager:
                         await self._notify_progress(task.id, task)
 
                 try:
-                    success, downloaded_path, failure_info = await retry_manager.download_with_retry(
-                        download_func=telegram_client.download_media,
-                        message=msg,
-                        file_path=temp_file_path,
-                        refresh_message_func=telegram_client.get_message_by_id,
-                        progress_callback=progress_cb,
-                        on_flood_wait_callback=on_flood_wait_cb
+                    # [v1.5.0] 并行分块下载：大文件使用多连接并发
+                    MIN_PARALLEL_SIZE = 10 * 1024 * 1024  # 10MB
+                    use_parallel = (
+                        options.enable_parallel_chunk and 
+                        item.file_size >= MIN_PARALLEL_SIZE
                     )
+                    
+                    if use_parallel:
+                        # 大文件使用并行分块下载
+                        logger.info(f"任务 {task.id[:8]}: 启用并行分块下载 ({options.parallel_chunk_connections} 连接)")
+                        
+                        def cancel_check():
+                            return item.status == DownloadStatus.PAUSED or item.is_manually_paused
+                        
+                        downloaded_path = await telegram_client.download_media_parallel(
+                            message=msg,
+                            file_path=str(temp_file_path),
+                            file_size=item.file_size,
+                            parallel_connections=options.parallel_chunk_connections,
+                            progress_callback=progress_cb,
+                            cancel_check=cancel_check
+                        )
+                        
+                        if downloaded_path:
+                            success = True
+                            failure_info = None
+                        else:
+                            success = False
+                            failure_info = {"error_type": "parallel_download_failed", "error_message": "并行下载失败"}
+                    else:
+                        # 小文件使用常规下载 + 重试
+                        success, downloaded_path, failure_info = await retry_manager.download_with_retry(
+                            download_func=telegram_client.download_media,
+                            message=msg,
+                            file_path=temp_file_path,
+                            refresh_message_func=telegram_client.get_message_by_id,
+                            progress_callback=progress_cb,
+                            on_flood_wait_callback=on_flood_wait_cb
+                        )
                 except asyncio.TimeoutError:
                     logger.error(f"任务 {task.id[:8]}: 文件 {item.file_name} 下载超时")
                     success, downloaded_path = False, None
@@ -998,13 +1031,54 @@ class ExportManager:
                 if task.status == TaskStatus.CANCELLED:
                     break
                 
-                # 2. 从队列取出一个待下载项 (阻塞式等待，直到有活干或收到退出信号)
-                item = await queue.get()
+                # 2. [四级优先级调度]
+                # P1: 用户刚点击"恢复"的任务 (resume_timestamp > 0)，按时间戳降序
+                # P2: 下载队列中所有 WAITING 状态的任务 (无论有没有进度)
+                # P3: 程序自动暂停的任务 (PAUSED + 非手动暂停，如限速触发)
+                # P4: 从队列获取新任务
+                priority_item = None
                 
-                # 如果收到 None 信号，说明队列已关闭，Worker 应该辞职了
-                if item is None:
-                    queue.task_done()
-                    break
+                # P1: 查找用户刚恢复的任务 (resume_timestamp > 0)，选最近恢复的
+                best_resumed = None
+                best_timestamp = 0
+                for candidate in task.download_queue:
+                    if (candidate.status == DownloadStatus.WAITING 
+                        and candidate.resume_timestamp > 0
+                        and candidate.id not in self._item_to_worker.get(task.id, {})):
+                        if candidate.resume_timestamp > best_timestamp:
+                            best_timestamp = candidate.resume_timestamp
+                            best_resumed = candidate
+                
+                if best_resumed:
+                    priority_item = best_resumed
+                    priority_item.resume_timestamp = 0  # 清除时间戳，避免重复选择
+                    logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P1] 执行用户刚恢复的任务: {priority_item.file_name}")
+                
+                # P2: 查找所有 WAITING 状态的任务
+                if not priority_item:
+                    for candidate in task.download_queue:
+                        if (candidate.status == DownloadStatus.WAITING 
+                            and candidate.id not in self._item_to_worker.get(task.id, {})):
+                            priority_item = candidate
+                            logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P2] 执行等待中的任务: {candidate.file_name}")
+                            break
+                
+                # 注意: 程序自动暂停的任务(如限速触发)在限制解除前不会被自动恢复
+                # 需要等待限速冷却结束或用户手动恢复
+                
+                if priority_item:
+                    # 找到了优先任务（不是从队列获取）
+                    item = priority_item
+                    from_queue = False
+                else:
+                    # P4: 从队列取出一个待下载项 (阻塞式等待)
+                    item = await queue.get()
+                    from_queue = True
+                    
+                    # 如果收到 None 信号，说明队列已关闭，Worker 应该辞职了
+                    if item is None:
+                        queue.task_done()
+                        break
 
                 # 3. [Adaptive Concurrency] 检查当前并发槽位是否允许继续执行 (公平竞争)
                 while True:
@@ -1015,7 +1089,8 @@ class ExportManager:
                     
                     # 如果在等待期间任务被取消、全局暂停，或者项目被手动暂停，则跳过
                     if task.status == TaskStatus.CANCELLED:
-                        queue.task_done()
+                        if from_queue:
+                            queue.task_done()
                         return
                         
                     if self.is_paused(task.id):
@@ -1031,7 +1106,8 @@ class ExportManager:
                 
                 # 如果排队期间项目被用户手动暂停了，直接跳过
                 if item.status == DownloadStatus.PAUSED or item.is_manually_paused:
-                    queue.task_done()
+                    if from_queue:
+                        queue.task_done()
                     continue
 
                 # 4. 执行下载 (带驻留逻辑，支持单项暂停占位)
@@ -1087,10 +1163,12 @@ class ExportManager:
                     task.consecutive_success_count = 0
                     logger.error(f"Worker #{worker_id} 处理下载项时发生非预期错误: {e}")
                 finally:
-                    # [Resident Worker] 只有当项目真正脱离 Worker 控制时，才解绑映射并完成队列信号
+                    # [Resident Worker] 只有当项目真正脱离 Worker 控制时，才解绑映射
                     if item and task.id in self._item_to_worker:
                         self._item_to_worker[task.id].pop(item.id, None)
-                    queue.task_done()
+                    # 只有从队列获取的任务才调用 task_done()
+                    if from_queue:
+                        queue.task_done()
                     
                     # [Adaptive Concurrency] 成功下载后尝试恢复并发
                     if item.status == DownloadStatus.COMPLETED:

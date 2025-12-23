@@ -331,6 +331,66 @@ async def cancel_download_item(
     raise HTTPException(status_code=400, detail="取消失败")
 
 
+@router.post("/export/{task_id}/concurrency")
+async def update_task_concurrency(
+    task_id: str,
+    max_concurrent_downloads: Optional[int] = None,
+    parallel_chunk_connections: Optional[int] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    运行时更新任务并发配置 (v1.5.0)
+    
+    Args:
+        max_concurrent_downloads: 最大并发下载数 (1-20)
+        parallel_chunk_connections: 单文件并行连接数 (1-8)
+    """
+    task = export_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    changes = []
+    
+    if max_concurrent_downloads is not None:
+        # 限制范围
+        max_concurrent_downloads = max(1, min(20, max_concurrent_downloads))
+        task.options.max_concurrent_downloads = max_concurrent_downloads
+        task.current_max_concurrent_downloads = max_concurrent_downloads
+        # 同步更新 Pyrogram 客户端
+        telegram_client.set_max_concurrent_transmissions(max_concurrent_downloads)
+        changes.append(f"最大并发: {max_concurrent_downloads}")
+    
+    if parallel_chunk_connections is not None:
+        # 限制范围
+        parallel_chunk_connections = max(1, min(8, parallel_chunk_connections))
+        task.options.parallel_chunk_connections = parallel_chunk_connections
+        changes.append(f"分块连接: {parallel_chunk_connections}")
+    
+    if changes:
+        export_manager._save_tasks()
+        return {"status": "ok", "message": "已更新: " + ", ".join(changes)}
+    
+    raise HTTPException(status_code=400, detail="未指定任何参数")
+
+
+@router.get("/export/{task_id}/concurrency")
+async def get_task_concurrency(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """获取任务当前并发配置"""
+    task = export_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    return {
+        "max_concurrent_downloads": task.options.max_concurrent_downloads,
+        "current_max_concurrent_downloads": task.current_max_concurrent_downloads or task.options.max_concurrent_downloads,
+        "parallel_chunk_connections": task.options.parallel_chunk_connections,
+        "enable_parallel_chunk": task.options.enable_parallel_chunk
+    }
+
+
 
 
 @router.delete("/export/{task_id}")

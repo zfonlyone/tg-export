@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# TG Export 一键部署脚本 v1.4.0
+# TG Export 一键部署脚本
 # 功能: 安装/卸载 TG Export + Nginx + SSL证书管理 + UFW端口
 # 新增: 下载重试机制 + 暂停/恢复 + 失败记录 + AList 风格 UI + 速率限制
 # 更新: 目录覆盖 + 并发优化 (3s/5s) + 事件循环修复 (RuntimeError) + 空包检测优化
@@ -16,7 +16,7 @@ PLAIN='\033[0m'
 
 # ===== 统一配置 =====
 APP_NAME="TG Export"
-APP_VERSION="1.4.0"
+APP_VERSION="1.5.0"
 APP_DIR="/opt/tg-export"
 CONFIG_FILE=".tge_config"
 DOCKER_IMAGE="zfonlyone/tg-export:latest"
@@ -746,9 +746,7 @@ install_app() {
     
     save_config
     
-    # 将脚本自身复制到安装目录，以便 tge 工具调用
-    cp "$(readlink -f "$0")" "$APP_DIR/tg-export.sh" 2>/dev/null || cp "$0" "$APP_DIR/tg-export.sh"
-    chmod +x "$APP_DIR/tg-export.sh"
+
     
     # 生成 .env
     cat > .env <<EOF

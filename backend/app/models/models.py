@@ -72,6 +72,7 @@ class DownloadItem(BaseModel):
     speed: float = 0.0                    # 下载速度 (字节/秒)
     is_manually_paused: bool = False     # 是否由用户手动暂停 (Worker 释放槽位去处理其他任务)
     is_suspended: bool = False            # 是否由用户挂起 (Worker 驻留槽位，不处理新任务)
+    resume_timestamp: float = 0.0         # 用户点击恢复的时间戳 (用于优先级调度，值越大优先级越高)
 
 
 class ExportOptions(BaseModel):
@@ -133,6 +134,10 @@ class ExportOptions(BaseModel):
     max_download_retries: int = 5        # 最大重试次数
     retry_delay: float = 2.0             # 重试初始延迟 (秒)
     auto_retry_failed: bool = True       # 自动重试失败的下载
+    
+    # 并行分块下载设置 (单文件多连接并发) [v1.5.0]
+    parallel_chunk_connections: int = 4  # 单文件并行连接数 (免费账号建议 3-4)
+    enable_parallel_chunk: bool = True   # 是否启用分块并行下载 (大文件自动启用)
     
     # 消息过滤 (skip=跳过指定消息, specify=只下载指定消息)
     filter_mode: str = "none"            # none/skip/specify

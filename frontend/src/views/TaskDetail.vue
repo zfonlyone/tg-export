@@ -25,6 +25,26 @@
         </div>
       </div>
       
+      <!-- 运行时并发控制 (v1.5.0) -->
+      <div class="concurrency-controls">
+        <div class="control-group">
+          <label>并发数</label>
+          <div class="stepper">
+            <button @click="adjustConcurrency('max', -1)" :disabled="concurrency.max <= 1">−</button>
+            <span class="value">{{ concurrency.max }}</span>
+            <button @click="adjustConcurrency('max', 1)" :disabled="concurrency.max >= 20">+</button>
+          </div>
+        </div>
+        <div class="control-group">
+          <label>分块连接</label>
+          <div class="stepper">
+            <button @click="adjustConcurrency('chunk', -1)" :disabled="concurrency.chunk <= 1">−</button>
+            <span class="value">{{ concurrency.chunk }}</span>
+            <button @click="adjustConcurrency('chunk', 1)" :disabled="concurrency.chunk >= 8">+</button>
+          </div>
+        </div>
+      </div>
+      
       <div class="button-group">
         <button v-if="['running', 'extracting'].includes(task.status)" @click="pauseTask" class="btn-premium warning sm">⏸ 暂停所有</button>
         <button v-if="task.status === 'paused'" @click="resumeTask" class="btn-premium success sm">▶ 恢复所有</button>
@@ -157,6 +177,7 @@ const stats = ref({
 const currentTab = ref('active')
 const viewAll = ref(false)
 const reversedOrder = ref(false)
+const concurrency = ref({ max: 10, chunk: 4 })  // 并发控制状态
 let refreshTimer = null
 
 function getAuthHeader() {
@@ -214,6 +235,46 @@ function toggleViewAll() {
 function toggleSort() {
   reversedOrder.value = !reversedOrder.value
   fetchData()
+}
+
+async function fetchConcurrency() {
+  try {
+    const res = await axios.get(`/api/export/${taskId}/concurrency`, { headers: getAuthHeader() })
+    concurrency.value.max = res.data.current_max_concurrent_downloads || res.data.max_concurrent_downloads
+    concurrency.value.chunk = res.data.parallel_chunk_connections || 4
+  } catch (err) {
+    console.error('获取并发配置失败:', err)
+  }
+}
+
+async function adjustConcurrency(type, delta) {
+  const newValue = type === 'max' 
+    ? concurrency.value.max + delta 
+    : concurrency.value.chunk + delta
+  
+  // 边界检查
+  if (type === 'max' && (newValue < 1 || newValue > 20)) return
+  if (type === 'chunk' && (newValue < 1 || newValue > 8)) return
+  
+  // 乐观更新
+  if (type === 'max') concurrency.value.max = newValue
+  else concurrency.value.chunk = newValue
+  
+  try {
+    const params = type === 'max' 
+      ? { max_concurrent_downloads: newValue }
+      : { parallel_chunk_connections: newValue }
+    
+    await axios.post(`/api/export/${taskId}/concurrency`, null, { 
+      params, 
+      headers: getAuthHeader() 
+    })
+  } catch (err) {
+    // 回滚
+    if (type === 'max') concurrency.value.max -= delta
+    else concurrency.value.chunk -= delta
+    alert('调整失败: ' + (err.response?.data?.detail || err.message))
+  }
 }
 
 function getFileIcon(type) {
@@ -292,6 +353,7 @@ function getStatusLabel(status) {
 
 onMounted(() => {
   fetchData()
+  fetchConcurrency()  // 获取并发配置
   refreshTimer = setInterval(fetchData, 2000)
 })
 
@@ -333,6 +395,70 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .p-bar-fill.paused { background: #f59e0b; }
 
 .button-group { display: flex; gap: 12px; flex-shrink: 0; }
+
+/* 并发控制 (v1.5.0) */
+.concurrency-controls {
+  display: flex;
+  gap: 20px;
+  padding: 12px 20px;
+  background: #f8fafc;
+  border-radius: 12px;
+  border: 1px solid #e2e8f0;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.control-group label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.stepper button {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #3b82f6;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.stepper button:hover:not(:disabled) {
+  background: #eff6ff;
+}
+
+.stepper button:disabled {
+  color: #cbd5e1;
+  cursor: not-allowed;
+}
+
+.stepper .value {
+  min-width: 32px;
+  text-align: center;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #1e293b;
+}
 
 .summary-grid {
   display: grid;

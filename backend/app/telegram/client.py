@@ -456,6 +456,70 @@ class TelegramClient:
             # [Fast Response] 不在这里捕获 FloodWait，直接抛出，让 exporter 层的自适应逻辑第一时间响应
             raise
 
+    async def download_media_parallel(
+        self,
+        message: Message,
+        file_path: str,
+        file_size: int,
+        parallel_connections: int = 4,
+        progress_callback=None,
+        cancel_check=None
+    ) -> Optional[str]:
+        """
+        高性能并行分块下载 (v1.5.0)
+        
+        对于大文件 (>10MB) 使用多连接并发下载，
+        突破 Telegram 单连接限速，速度提升 3-8 倍。
+        
+        Args:
+            message: 消息对象
+            file_path: 目标文件路径
+            file_size: 文件大小 (字节)
+            parallel_connections: 并行连接数 (免费账号建议 3-4)
+            progress_callback: 进度回调 (current, total)
+            cancel_check: 取消检查函数
+            
+        Returns:
+            成功返回文件路径，失败返回 None
+        """
+        await self._ensure_connected()
+        if not self._client:
+            return None
+        
+        from pathlib import Path
+        from .parallel_downloader import ParallelChunkDownloader
+        
+        try:
+            downloader = ParallelChunkDownloader(
+                client=self._client,
+                parallel_connections=parallel_connections
+            )
+            
+            success, error = await downloader.download(
+                message=message,
+                file_path=Path(file_path),
+                file_size=file_size,
+                progress_callback=progress_callback,
+                cancel_check=cancel_check
+            )
+            
+            if success:
+                logger.info(f"并行下载成功: {file_path}")
+                return file_path
+            else:
+                # 并行下载失败或文件过小，回退到常规下载
+                if "文件过小" in (error or ""):
+                    logger.debug(f"文件过小，使用常规下载: {file_path}")
+                    return await self.download_media(message, file_path, progress_callback)
+                else:
+                    logger.warning(f"并行下载失败 ({error})，回退到常规下载")
+                    return await self.download_media(message, file_path, progress_callback)
+                    
+        except Exception as e:
+            logger.error(f"并行下载异常: {e}")
+            # 异常时也回退到常规下载
+            return await self.download_media(message, file_path, progress_callback)
+
 
 def apply_pyrogram_patch():
     """

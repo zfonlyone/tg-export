@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     
     # 基础配置
     APP_NAME: str = "TG Export"
-    APP_VERSION: str = "1.4.0"
+    APP_VERSION: str = "1.5.0"  # 并行分块下载版本
     DEBUG: bool = False
     WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")
     WEB_PORT: int = int(os.getenv("WEB_PORT", 9528))
@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # 导出设置
     MAX_CONCURRENT_DOWNLOADS: int = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", 5))
     CHUNK_SIZE: int = 1024 * 1024  # 1MB
+    
+    # 并行分块下载设置 (单文件多连接)
+    PARALLEL_CHUNK_CONNECTIONS: int = int(os.getenv("PARALLEL_CHUNK_CONNECTIONS", 4))
+    MIN_PARALLEL_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB，小于此值不启用并行
+    ENABLE_PARALLEL_DOWNLOAD: bool = os.getenv("ENABLE_PARALLEL_DOWNLOAD", "true").lower() == "true"
     
     class Config:
         env_file = ".env"
