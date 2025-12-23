@@ -71,7 +71,6 @@ class DownloadItem(BaseModel):
     progress: float = 0.0
     speed: float = 0.0                    # 下载速度 (字节/秒)
     is_manually_paused: bool = False     # 是否由用户手动暂停 (Worker 释放槽位去处理其他任务)
-    is_suspended: bool = False            # 是否由用户挂起 (Worker 驻留槽位，不处理新任务)
     resume_timestamp: float = 0.0         # 用户点击恢复的时间戳 (用于优先级调度，值越大优先级越高)
     is_retry: bool = False                # 是否为重试任务 (v1.6.1)
 

@@ -144,7 +144,6 @@
             
             <!-- 正在下载或等待中：暂停 (释放槽位) 或 挂起 (驻留槽位) -->
             <button v-if="['downloading', 'waiting'].includes(item.status)" @click="pauseItem(item.id)" class="action-btn-circle warning" title="暂停 (释放槽位，Worker 去下载其他文件)">⏸</button>
-            <button v-if="['downloading', 'waiting'].includes(item.status)" @click="suspendItem(item.id)" class="action-btn-circle" title="挂起 (驻留槽位，降低总并发)" style="background: #6c5ce7; color: white;">⏼</button>
             <!-- 已暂停/挂起：恢复 -->
             <button v-if="item.status === 'paused'" @click="resumeItem(item.id)" class="action-btn-circle success" title="恢复">▶</button>
             
@@ -323,7 +322,6 @@ async function deleteTask() { if(confirm('确定彻底删除该任务？')) { aw
 
 // 单文件操作
 async function pauseItem(itemId) { await axios.post(`/api/export/${taskId}/download/${itemId}/pause`, {}, { headers: getAuthHeader() }); fetchData() }
-async function suspendItem(itemId) { await axios.post(`/api/export/${taskId}/download/${itemId}/suspend`, {}, { headers: getAuthHeader() }); fetchData() }
 async function resumeItem(itemId) { await axios.post(`/api/export/${taskId}/download/${itemId}/resume`, {}, { headers: getAuthHeader() }); fetchData() }
 async function cancelItem(itemId) { if(confirm('确定跳过此文件下载？')) { await axios.post(`/api/export/${taskId}/download/${itemId}/cancel`, {}, { headers: getAuthHeader() }); fetchData() } }
 async function retryItem(itemId) { await axios.post(`/api/export/${taskId}/retry_file/${itemId}`, {}, { headers: getAuthHeader() }); fetchData() }

@@ -18,6 +18,7 @@ from ..models import (
     MessageInfo, MediaType, ChatType, ExportFormat, FailedDownload,
     DownloadItem, DownloadStatus
 )
+from pyrogram.errors import FloodWait
 from .client import telegram_client
 from .retry_manager import DownloadRetryManager
 
@@ -396,7 +397,6 @@ class ExportManager:
                 if item.status in [DownloadStatus.DOWNLOADING, DownloadStatus.WAITING]:
                     item.status = DownloadStatus.PAUSED
                     item.is_manually_paused = True
-                    item.is_suspended = False
                     logger.info(f"暂停文件 (释放槽位): {item.file_name}")
                     
                     if task_id in self._item_to_worker and item_id in self._item_to_worker[task_id]:
@@ -408,29 +408,9 @@ class ExportManager:
                     return True
         return False
 
-    async def suspend_download_item(self, task_id: str, item_id: str) -> bool:
-        """挂起单个下载项 (驻留槽位，Worker 不处理新任务)"""
-        task = self.tasks.get(task_id)
-        if not task: return False
-        for item in task.download_queue:
-            if item.id == item_id:
-                if item.status in [DownloadStatus.DOWNLOADING, DownloadStatus.WAITING]:
-                    item.status = DownloadStatus.PAUSED
-                    item.is_suspended = True
-                    item.is_manually_paused = False
-                    logger.info(f"挂起文件 (驻留槽位): {item.file_name}")
-                    
-                    if task_id in self._item_to_worker and item_id in self._item_to_worker[task_id]:
-                        worker_task = self._item_to_worker[task_id][item_id]
-                        if not worker_task.done():
-                            worker_task.cancel()
-                    
-                    await self._notify_progress(task_id, task)
-                    return True
-        return False
 
     async def resume_download_item(self, task_id: str, item_id: str) -> bool:
-        """恢复单个下载项 (清除所有暂停/挂起标记)"""
+        """恢复单个下载项 (清除状态标记)"""
         task = self.tasks.get(task_id)
         if not task: return False
         for item in task.download_queue:
@@ -438,16 +418,11 @@ class ExportManager:
                 if item.status == DownloadStatus.PAUSED:
                     item.status = DownloadStatus.WAITING
                     item.is_manually_paused = False
-                    item.is_suspended = False
                     item.resume_timestamp = time.time()  # 设置恢复时间戳，用于最高优先级调度
                     logger.info(f"恢复文件: {item.file_name}")
                     
-                    is_resident = False
-                    if task_id in self._item_to_worker and item_id in self._item_to_worker[task_id]:
-                        is_resident = True
-                        logger.info(f"任务 {task_id[:8]}: 检测到驻留 Worker，将通过信号直接恢复")
-
-                    if not is_resident and task.id in self._task_queues:
+                    # 总是将其推回队列，不再处理驻留信号
+                    if task.id in self._task_queues:
                         self._task_queues[task.id].put_nowait(item)
                         
                     await self._notify_progress(task_id, task)
@@ -816,23 +791,6 @@ class ExportManager:
                 await self._notify_progress(task.id, task)
                 await self._process_download_queue(task, export_path)
             
-            # [v1.6.0] 阶段 3: 下载后增量扫描 (发现可能的新消息)
-            if task.status not in [TaskStatus.CANCELLED, TaskStatus.PAUSED] and options.incremental_scan_enabled:
-                logger.info(f"任务 {task.id[:8]}: 正在执行下载后增量扫描...")
-                new_messages = []
-                for chat in chats:
-                    chat_messages = await self._export_chat(task, chat, export_path)
-                    new_messages.extend(chat_messages)
-                
-                if new_messages:
-                    logger.info(f"增量扫描发现了 {len(new_messages)} 条新消息")
-                    all_messages.extend(new_messages)
-                    from ..exporters import json_exporter, html_exporter
-                    if options.export_format in [ExportFormat.JSON, ExportFormat.BOTH]:
-                        await json_exporter.export(task, chats, all_messages, export_path)
-                    if options.export_format in [ExportFormat.HTML, ExportFormat.BOTH]:
-                        await html_exporter.export(task, chats, all_messages, export_path)
-                await self._notify_progress(task.id, task)
 
             if task.status not in [TaskStatus.CANCELLED, TaskStatus.PAUSED]:
                 task.status = TaskStatus.COMPLETED
@@ -1226,9 +1184,11 @@ class ExportManager:
         
         # 将待下载项加入队列
         for item in task.download_queue:
-            # 状态残留修复：重启或手动恢复时，将之前的“正在下载”项也重置并入队
+            # 状态残留修复：重启或手动恢复时，将之前的“正在下载”及“已暂停”项也重置并入队
+            # [v1.6.2] 清除手动暂停标记，确保任务恢复后不再因手动暂停而被跳过
             if item.status in [DownloadStatus.WAITING, DownloadStatus.PAUSED, DownloadStatus.FAILED, DownloadStatus.DOWNLOADING]:
                 item.status = DownloadStatus.WAITING
+                item.is_manually_paused = False
                 queue.put_nowait(item)
         
         # 初始化任务追踪集合
@@ -1288,7 +1248,6 @@ class ExportManager:
                 for candidate in task.download_queue:
                     if (candidate.status == DownloadStatus.WAITING 
                         and getattr(candidate, 'resume_timestamp', 0) > 0
-                        and not getattr(candidate, 'is_manually_paused', False)
                         and candidate.id not in self._item_to_worker.get(task.id, {})):
                         if not best_resumed or candidate.resume_timestamp > best_resumed.resume_timestamp:
                             best_resumed = candidate
@@ -1303,7 +1262,6 @@ class ExportManager:
                     for candidate in task.download_queue:
                         if (candidate.status == DownloadStatus.WAITING 
                             and getattr(candidate, 'is_retry', False)
-                            and not getattr(candidate, 'is_manually_paused', False)
                             and candidate.id not in self._item_to_worker.get(task.id, {})):
                             priority_item = candidate
                             logger.info(f"任务 {task.id[:8]}: [P2] 优先提取重试文件: {priority_item.file_name}")
@@ -1341,11 +1299,6 @@ class ExportManager:
                             queue.task_done()
                             continue
                         
-                        # 如果该项被手动暂停了，也跳过
-                        if item.is_manually_paused:
-                            logger.info(f"任务 {task.id[:8]}: 队列项 {item.message_id} 处于手动暂停状态，跳过。")
-                            queue.task_done()
-                            continue
 
                         # 注册
                         if task.id not in self._item_to_worker:
@@ -1381,14 +1334,14 @@ class ExportManager:
                         await asyncio.sleep(1)
                         continue
                         
-                    if item.status == DownloadStatus.PAUSED or item.is_manually_paused:
+                    if item.status == DownloadStatus.PAUSED:
                         # 项目被手动暂停，不再等待槽位，直接去 queue_done
                         break
                         
                     await asyncio.sleep(0.5)
                 
                 # 如果排队期间项目被用户手动暂停了，直接跳过
-                if item.status == DownloadStatus.PAUSED or item.is_manually_paused:
+                if item.status == DownloadStatus.PAUSED:
                     if from_queue:
                         queue.task_done()
                     continue
@@ -1408,34 +1361,9 @@ class ExportManager:
                             # 如果下载完成（成功或预期内失败退出），跳出驻留循环
                             break
                         except asyncio.CancelledError:
-                            # [挂起模式] 只有 is_suspended=True 才进入驻留等待
-                            if item.is_suspended:
-                                logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 进入挂起驻留模式: {item.file_name}")
-                                
-                                # 驻留：在原地等待用户点击“恢复”
-                                # 只要 item 还是挂起状态，就一直 sleep
-                                while item.is_suspended and task.status == TaskStatus.RUNNING:
-                                    await asyncio.sleep(1)
-                                
-                                # 如果任务被彻底取消，则抛出异常彻底退出
-                                if task.status == TaskStatus.CANCELLED:
-                                    raise
-                                
-                                # 如果任务进入了全局暂停，则向上抛出 Cancellation 以回退到外层监控
-                                if self.is_paused(task.id):
-                                    raise asyncio.CancelledError("Task globally paused during suspend wait")
-
-                                # 用户已点击“恢复”！标记状态为 WAITING 并继续循环重新开始下载逻辑
-                                logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 挂起结束，准备恢复: {item.file_name}")
-                                item.status = DownloadStatus.WAITING
-                                continue
-                            elif item.is_manually_paused or item.status == DownloadStatus.PAUSED:
-                                # [暂停模式] 普通暂停不驻留，直接释放槽位
-                                logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 暂停释放槽位: {item.file_name}")
-                                break
-                            else:
-                                # 非手动暂停引起的取消，向上抛出
-                                raise
+                            # [v1.6.2] 简化逻辑：所有暂停均释放槽位，不再驻留
+                            logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 暂停并释放槽位: {item.file_name}")
+                            break
                 except asyncio.CancelledError:
                     # [Persistence FIX] 系统级暂停，重置状态
                     if item and item.status == DownloadStatus.DOWNLOADING:
