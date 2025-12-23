@@ -632,7 +632,7 @@ class ExportManager:
                 "failed": len(all_failed),
                 "completed": len(all_completed)
             },
-            "current_concurrency": task.current_max_concurrent_downloads or options.max_concurrent_downloads,
+            "current_concurrency": task.current_max_concurrent_downloads or task.options.max_concurrent_downloads,
             "active_threads": len([i for i in all_active if i.status == DownloadStatus.DOWNLOADING])
         }
     async def _run_export(self, task: ExportTask):
