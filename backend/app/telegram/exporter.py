@@ -725,6 +725,7 @@ class ExportManager:
             
             # 5. 下载主逻辑 (带自适应并发与断点续传感知)
             import os
+            import time
             
             # [Optimization] 断点续传：初始化时先检测磁盘上已有的临时文件大小
             disk_size = os.path.getsize(temp_file_path) if temp_file_path.exists() else 0
