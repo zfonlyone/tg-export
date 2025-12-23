@@ -28,6 +28,7 @@
       <div class="button-group">
         <button v-if="['running', 'extracting'].includes(task.status)" @click="pauseTask" class="btn-premium warning sm">⏸ 暂停所有</button>
         <button v-if="task.status === 'paused'" @click="resumeTask" class="btn-premium success sm">▶ 恢复所有</button>
+        <button @click="verifyIntegrity" class="btn-premium info sm">📊 批量校验</button>
         <button @click="cancelTask" class="btn-premium danger sm">✖ 取消导出</button>
         <button @click="deleteTask" class="btn-premium ghost-danger sm">🗑 删除任务</button>
       </div>
@@ -249,6 +250,15 @@ async function pauseItem(itemId) { await axios.post(`/api/export/${taskId}/downl
 async function resumeItem(itemId) { await axios.post(`/api/export/${taskId}/download/${itemId}/resume`, {}, { headers: getAuthHeader() }); fetchData() }
 async function cancelItem(itemId) { if(confirm('确定跳过此文件下载？')) { await axios.post(`/api/export/${taskId}/download/${itemId}/cancel`, {}, { headers: getAuthHeader() }); fetchData() } }
 async function retryItem(itemId) { await axios.post(`/api/export/${taskId}/retry_file/${itemId}`, {}, { headers: getAuthHeader() }); fetchData() }
+async function verifyIntegrity() {
+  try {
+    const res = await axios.post(`/api/export/${taskId}/verify`, {}, { headers: getAuthHeader() })
+    alert(res.data.message)
+    fetchData()
+  } catch (err) {
+    alert('校验失败: ' + (err.response?.data?.detail || err.message))
+  }
+}
 
 function formatSize(bytes) {
   if (!bytes) return '0 B'

@@ -267,6 +267,18 @@ async def retry_all_failed(
     raise HTTPException(status_code=400, detail="没有失败的文件")
 
 
+@router.post("/export/{task_id}/verify")
+async def verify_integrity(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """批量完整性校验：对已完成的下载项执行文件大小验证"""
+    result = await export_manager.verify_integrity(task_id)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=404, detail=result.get("message"))
+    return result
+
+
 @router.post("/export/{task_id}/download/{item_id}/pause")
 async def pause_download_item(
     task_id: str,

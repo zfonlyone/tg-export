@@ -400,11 +400,87 @@ class ExportManager:
                     item.status = DownloadStatus.WAITING
                     item.is_manually_paused = False # 清除手动暂停标记
                     logger.info(f"手动恢复文件: {item.file_name}")
-                    if task.id in self._task_queues:
+                    
+                    # [Resident Worker Optimization]
+                    # 检查是否已经有驻留 Worker 正在等着这个 item (它在 _item_to_worker 里)
+                    # 如果有，我们只需要改状态，不需要重新入队，否则会造成双重下载
+                    is_resident = False
+                    if task_id in self._item_to_worker and item_id in self._item_to_worker[task_id]:
+                        is_resident = True
+                        logger.info(f"任务 {task_id[:8]}: 检测到驻留 Worker，将通过信号直接恢复，不进行二次入队。")
+
+                    if not is_resident and task.id in self._task_queues:
                         self._task_queues[task.id].put_nowait(item)
+                        
                     await self._notify_progress(task_id, task)
                     return True
         return False
+    
+    async def verify_integrity(self, task_id: str) -> Dict[str, Any]:
+        """批量完整性校验：对已完成的项目执行文件大小验证
+        
+        - 若校验失败（大小不匹配）：标记为 FAILED，删除磁盘文件，downloaded_size 设为 0
+        - 若文件不存在：标记为 FAILED，downloaded_size 设为 0
+        """
+        import os
+        from pathlib import Path
+        
+        task = self.tasks.get(task_id)
+        if not task:
+            return {"status": "error", "message": "任务不存在"}
+        
+        export_path = Path(task.options.export_path).expanduser()
+        
+        passed_count = 0
+        failed_count = 0
+        missing_count = 0
+        
+        for item in task.download_queue:
+            if item.status != DownloadStatus.COMPLETED:
+                continue
+            
+            full_path = export_path / item.file_path
+            
+            if not full_path.exists():
+                # 文件不存在
+                logger.warning(f"完整性校验: 文件不存在 (按要求跳过): {item.file_name}")
+                item.status = DownloadStatus.FAILED
+                item.downloaded_size = 0
+                item.error = "文件不存在 (可能已移除)"
+                missing_count += 1
+                continue
+            
+            actual_size = os.path.getsize(full_path)
+            
+            if item.file_size > 0 and actual_size != item.file_size:
+                # 大小不匹配
+                logger.error(f"完整性校验失败: {item.file_name} 预期: {item.file_size}, 实际: {actual_size}")
+                item.status = DownloadStatus.FAILED
+                item.downloaded_size = 0
+                item.error = f"完整性校验失败: 预期 {item.file_size}，实际 {actual_size}"
+                
+                # 删除损坏文件
+                try:
+                    os.remove(full_path)
+                    logger.info(f"已删除不完整文件: {full_path}")
+                except Exception as e:
+                    logger.error(f"删除文件失败: {e}")
+                
+                failed_count += 1
+            else:
+                # 校验通过
+                passed_count += 1
+        
+        self._save_tasks()
+        await self._notify_progress(task_id, task)
+        
+        return {
+            "status": "ok",
+            "passed": passed_count,
+            "failed": failed_count,
+            "missing": missing_count,
+            "message": f"校验完成: {passed_count} 通过, {failed_count} 失败, {missing_count} 缺失"
+        }
     
     async def cancel_download_item(self, task_id: str, item_id: str) -> bool:
         """取消 (跳过) 单个下载项"""
@@ -647,34 +723,7 @@ class ExportManager:
                 initial_delay=options.retry_delay
             )
             
-            # 速度计算需要的变量
-            import time
-            last_update = {
-                'size': item.downloaded_size, 
-                'time': time.time(),
-                'last_progress_time': time.time()  # 用于卡死检测
-            }
-            loop = asyncio.get_running_loop()
-            
-            def progress_cb(current, total):
-                now = time.time()
-                elapsed = now - last_update['time']
-                
-                item.downloaded_size = current
-                item.file_size = total
-                if total > 0:
-                    item.progress = (current / total) * 100
-                
-                # 计算速度 (至少间隔 1.5 秒更新一次)
-                if elapsed >= 1.5:
-                    now_val = current
-                    if now_val > last_update['size']:
-                        last_update['last_progress_time'] = now  # 更新最后进展时间
-                    
-                    # [Stuck Detection] 5分钟无进展自动重试 (仅针对正在下载的项目)
-                    # 暂停的任务和等待任务不计算在此内，因为 progress_cb 只在活跃下载时被调用
-                    if item.status == DownloadStatus.DOWNLOADING and (now - last_update['last_progress_time'] > 300):
-                        logger.warning(f"检测到下载卡死: {item.file_name} (5分钟无进度增长)")
+            # 5. 下载主逻辑 (带自适应并发与断点续传感知)
             import os
             
             # [Optimization] 断点续传：初始化时先检测磁盘上已有的临时文件大小
@@ -698,20 +747,29 @@ class ExportManager:
                 
                 def progress_cb(current, total):
                     now = time.time()
+                    elapsed = now - last_update['time']
+                    
                     # 更新进度
                     item.progress = (current / total) * 100 if total > 0 else 0
                     item.downloaded_size = current
                     
-                    # 卡死检测逻辑
-                    if current > last_update['size']:
+                    # [Speed Fix] 计算瞬时速度 (每秒更新一次)
+                    if elapsed >= 1.0:
+                        bytes_diff = current - last_update['size']
+                        item.speed = bytes_diff / elapsed
                         last_update['size'] = current
+                        last_update['time'] = now
+                    
+                    # [Stuck Detection] 卡死检测逻辑 (只要有字节增长就重置)
+                    if current > last_update['size']:
                         last_update['last_progress_time'] = now
-                    elif now - last_update['last_progress_time'] > 300: # 5分钟无进度
+                    elif now - last_update['last_progress_time'] > 300: # 5分钟无进度增长
                         logger.error(f"任务 {task.id[:8]}: 文件 {item.file_name} 下载卡死 (5分钟无进度)")
                         raise asyncio.TimeoutError("Download stuck for more than 5 minutes")
 
-                    # 用户手动暂停检测 (关键：通过异常强行中止 Pyrogram 内部循环)
+                    # 用户手动暂停检测
                     if item.status == DownloadStatus.PAUSED or item.is_manually_paused:
+                        item.speed = 0 # 暂停时清空速度
                         raise asyncio.CancelledError("Item was paused by user")
 
                 # 日志：记录下载路径
@@ -751,12 +809,11 @@ class ExportManager:
                         on_flood_wait_callback=on_flood_wait_cb
                     )
                 except asyncio.TimeoutError:
-                    logger.error(f"任务 {task.id[:8]}: 下载文件 {item.file_name} (ID: {item.id}) 严重超时 (TimeoutError)")
+                    logger.error(f"任务 {task.id[:8]}: 文件 {item.file_name} 下载超时")
                     success, downloaded_path = False, None
-                    failure_info = {
-                        "error_type": "timeout",
-                        "error_message": "Request timed out during download"
-                    }
+                    failure_info = {"error_type": "timeout", "error_message": "Request timed out"}
+                finally:
+                    item.speed = 0 # 确保退出下载阶段后速度归零
 
             # [CRITICAL FIX] 检查是否是因为暂停/取消而结束
             # 如果 item.status 被标记为 PAUSED，说明是被 progress_cb 里的异常中止的
@@ -958,58 +1015,75 @@ class ExportManager:
                     queue.task_done()
                     continue
 
-                # 4. 执行下载
-                # [Strong Restoration] 注册映射，标记此 item 正在由当前协程处理
-                if task.id not in self._item_to_worker:
-                    self._item_to_worker[task.id] = {}
-                self._item_to_worker[task.id][item.id] = asyncio.current_task()
-                
+                # 4. 执行下载 (带驻留逻辑，支持单项暂停占位)
                 try:
-                    # 记录下载前状态，用于捕获限速
-                    await self._download_item_worker(task, item, export_path)
+                    # [Resident Worker] 核心：建立驻留循环，使 Worker 能紧紧“抓牢”当前项
+                    while True:
+                        # 注册/更新映射，确保下载期间或驻留期间槽位始终被占用
+                        if task.id not in self._item_to_worker:
+                            self._item_to_worker[task.id] = {}
+                        self._item_to_worker[task.id][item.id] = asyncio.current_task()
+                        
+                        try:
+                            # 执行实际下载步骤
+                            await self._download_item_worker(task, item, export_path)
+                            # 如果下载完成（成功或预期内失败退出），跳出驻留循环
+                            break
+                        except asyncio.CancelledError:
+                            # [Manual Pause Handling] 如果是因为手动暂停导致的取消
+                            if item.is_manually_paused or item.status == DownloadStatus.PAUSED:
+                                logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 进入单项驻留模式 (槽位保留): {item.file_name}")
+                                
+                                # 驻留：在原地等待用户点击“恢复”
+                                # 只要 item 还是手动暂停状态，就一直 sleep
+                                while (item.is_manually_paused or item.status == DownloadStatus.PAUSED) and task.status == TaskStatus.RUNNING:
+                                    await asyncio.sleep(1)
+                                
+                                # 如果任务被彻底取消，则抛出异常彻底退出
+                                if task.status == TaskStatus.CANCELLED:
+                                    raise
+                                
+                                # 如果任务进入了全局暂停，则向上抛出 Cancellation 以回退到外层监控
+                                if self.is_paused(task.id):
+                                    raise asyncio.CancelledError("Task globally paused during resident wait")
+
+                                # 用户已点击“恢复”！标记状态为 WAITING 并继续循环重新开始下载逻辑
+                                logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 驻留结束，准备恢复执行: {item.file_name}")
+                                item.status = DownloadStatus.WAITING
+                                continue
+                            else:
+                                # 非手动暂停引起的取消（如自适应降速、全局暂停等），向上抛出
+                                raise
+                except asyncio.CancelledError:
+                    # [Persistence FIX] 系统级暂停，重置状态
+                    if item and item.status == DownloadStatus.DOWNLOADING:
+                        item.status = DownloadStatus.PAUSED
+                    logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 的下载流被外部中断 (Item: {item.id})")
+                except Exception as e:
+                    # 记录并打印非预期错误
+                    task.consecutive_success_count = 0
+                    logger.error(f"Worker #{worker_id} 处理下载项时发生非预期错误: {e}")
+                finally:
+                    # [Resident Worker] 只有当项目真正脱离 Worker 控制时，才解绑映射并完成队列信号
+                    if item and task.id in self._item_to_worker:
+                        self._item_to_worker[task.id].pop(item.id, None)
+                    queue.task_done()
                     
                     # [Adaptive Concurrency] 成功下载后尝试恢复并发
-                    # 如果没有异常（即 success 为 True 且没触发 FloodWait），则增加连续成功计数
                     if item.status == DownloadStatus.COMPLETED:
                         task.consecutive_success_count += 1
-                        
-                        # 每连续成功 15 个文件，尝试恢复 1 个并发槽位
                         if task.consecutive_success_count >= 15:
                             if (task.current_max_concurrent_downloads or 1) < options.max_concurrent_downloads:
                                 old_val = task.current_max_concurrent_downloads
                                 task.current_max_concurrent_downloads += 1
-                                # [Adaptive] 同步恢复底层限额
                                 telegram_client.set_max_concurrent_transmissions(task.current_max_concurrent_downloads)
                                 logger.info(f"任务 {task.id[:8]}: 运行稳定，自动恢复并发: {old_val} -> {task.current_max_concurrent_downloads}")
                             task.consecutive_success_count = 0
                     
-                    # 6. [Random Jitter] 下载完成后随机冷却 (3~10s)
+                    # 随机冷却 (冷却期间不占用槽位，故放在 finally 之后或 task_done 之后)
                     if task.status != TaskStatus.CANCELLED and not self.is_paused(task.id):
                         jitter = random.uniform(3.0, 10.0)
-                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 下载完成，进入 {jitter:.1f}s 随机冷却...")
                         await asyncio.sleep(jitter)
-                except asyncio.CancelledError:
-                    # [Persistence FIX] 如果任务被系统暂停或限速被迫中止，重回循环，不要退出
-                    if item and item.status == DownloadStatus.DOWNLOADING:
-                        item.status = DownloadStatus.PAUSED
-                    logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 的下载项被取消/暂停: {item.file_name if item else 'Unknown'}")
-                except Exception as e:
-                    # 如果在这里捕获到直接异常，重置成功计数
-                    task.consecutive_success_count = 0
-                    
-                    # 如果在这里捕获到 FloodWait（虽重试管理器会先处理），确保并发降低
-                    err_str = str(e).lower()
-                    if "flood" in err_str or "wait" in err_str:
-                        old_val = task.current_max_concurrent_downloads
-                        task.current_max_concurrent_downloads = max(1, (task.current_max_concurrent_downloads or 1) - 1)
-                        logger.warning(f"检测到限速，动态降低并发: {old_val} -> {task.current_max_concurrent_downloads}")
-                    
-                    logger.error(f"Worker #{worker_id} 下载出错: {e}")
-                finally:
-                    # [Strong Restoration] 工作结束，不管是成功、失败还是被取消，都解绑映射
-                    if item and task.id in self._item_to_worker:
-                        self._item_to_worker[task.id].pop(item.id, None)
-                    queue.task_done()
             
             logger.info(f"任务 {task.id[:8]}: 下载工协程 #{worker_id} 正常退出")
 
