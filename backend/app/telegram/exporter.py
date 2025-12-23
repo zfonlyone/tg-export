@@ -269,7 +269,9 @@ class ExportManager:
         if task_id in self._active_download_tasks:
             active_tasks = list(self._active_download_tasks[task_id])
             if active_tasks:
-                logger.info(f"正在中断 {len(active_tasks)} 个下载任务以实现立即暂停")
+                # 统计实际正在下载的文件数（而非协程数）
+                downloading_files = sum(1 for item in task.download_queue if item.status == DownloadStatus.DOWNLOADING)
+                logger.info(f"正在中断 {downloading_files} 个文件的下载 (共 {len(active_tasks)} 个协程)")
                 for t in active_tasks:
                     if not t.done():
                         t.cancel()
@@ -1439,8 +1441,9 @@ class ExportManager:
                 # P2: 标记为重试的任务 (is_retry)
                 # P3: 队列中提取的标准任务 (已按 msg_id 排序)
                 priority_item = None
+                from_queue = False
                 
-                # P1: 查找恢复项
+                # P1: 查找恢复项 (v1.6.7.5 修复：立即注册防止重复)
                 best_resumed = None
                 for candidate in task.download_queue:
                     if (candidate.status == DownloadStatus.WAITING 
@@ -1452,56 +1455,52 @@ class ExportManager:
                 if best_resumed:
                     priority_item = best_resumed
                     priority_item.resume_timestamp = 0
+                    # 立即注册到映射，防止其他 Worker 重复获取
+                    if task.id not in self._item_to_worker:
+                        self._item_to_worker[task.id] = {}
+                    self._item_to_worker[task.id][priority_item.id] = asyncio.current_task()
                     logger.info(f"任务 {task.id[:8]}: [P1] 优先提取恢复文件: {priority_item.file_name}")
                 
-                # P2: 查找重试项
+                # P2: 查找重试项 (v1.6.7.5 修复：立即注册防止重复)
                 if not priority_item:
                     for candidate in task.download_queue:
                         if (candidate.status == DownloadStatus.WAITING 
                             and getattr(candidate, 'is_retry', False)
                             and candidate.id not in self._item_to_worker.get(task.id, {})):
                             priority_item = candidate
+                            # 立即注册到映射
+                            if task.id not in self._item_to_worker:
+                                self._item_to_worker[task.id] = {}
+                            self._item_to_worker[task.id][priority_item.id] = asyncio.current_task()
                             logger.info(f"任务 {task.id[:8]}: [P2] 优先提取重试文件: {priority_item.file_name}")
                             break
-                    # 2. 否则从 FIFO 队列中获取（队列已按 message_id 升序预排列）
-                    # 3. 移除了扫描式 P2 策略，以绝死循环和乱序 Bug
 
-                    # [Task Selection] 优先级：P1 (手动恢复) > P4 (主队列)
-                    # 移除了 P2 (扫描器)，因为它会导致乱序和重复下载
+                # P4: 从主队列获取 (如果没有优先任务)
+                if priority_item:
+                    item = priority_item
+                    # 已在上面注册，无需再次注册
+                else:
+                    # P4: 从队列取出一个待下载项 (阻塞式等待)
+                    item = await queue.get()
+                    from_queue = True
                     
-                    if priority_item:
-                        # 找到了优先任务（手动恢复）
-                        item = priority_item
-                        from_queue = False
-                        
-                        # 立即注册到 _item_to_worker
-                        if task.id not in self._item_to_worker:
-                            self._item_to_worker[task.id] = {}
-                        self._item_to_worker[task.id][item.id] = asyncio.current_task()
-                    else:
-                        # P4: 从队列取出一个待下载项 (阻塞式等待)
-                        item = await queue.get()
-                        from_queue = True
-                        
-                        # 如果收到 None 信号，说明队列已关闭
-                        if item is None:
-                            queue.task_done()
-                            break
-                        
-                        # [Duplicate Check] 检查该项是否已经在下载中，或者已经完成
-                        # (由于 adjust_concurrency 可能导致重复入队)
-                        active_map = self._item_to_worker.get(task.id, {})
-                        if item.id in active_map or item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
-                            logger.debug(f"任务 {task.id[:8]}: 队列项 {item.message_id} 已在执行或已完成，跳过。")
-                            queue.task_done()
-                            continue
-                        
-
-                        # 注册
-                        if task.id not in self._item_to_worker:
-                            self._item_to_worker[task.id] = {}
-                        self._item_to_worker[task.id][item.id] = asyncio.current_task()
-                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P4] 从队列获取任务 (msg#{item.message_id})")
+                    # 如果收到 None 信号，说明队列已关闭
+                    if item is None:
+                        queue.task_done()
+                        break
+                    
+                    # [Duplicate Check] 检查该项是否已经在下载中，或者已经完成
+                    active_map = self._item_to_worker.get(task.id, {})
+                    if item.id in active_map or item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
+                        logger.debug(f"任务 {task.id[:8]}: 队列项 {item.message_id} 已在执行或已完成，跳过。")
+                        queue.task_done()
+                        continue
+                    
+                    # 注册
+                    if task.id not in self._item_to_worker:
+                        self._item_to_worker[task.id] = {}
+                    self._item_to_worker[task.id][item.id] = asyncio.current_task()
+                    logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P4] 从队列获取任务 (msg#{item.message_id})")
 
 
                 # 3. [Adaptive Concurrency] 检查当前并发槽位是否允许继续执行 (公平竞争)

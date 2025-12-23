@@ -320,21 +320,20 @@ class ParallelChunkDownloader:
     
     async def _probe_dc(self, location: Any):
         """
-        通过一个小请求探测该文件所属的 DC (v1.6.6)
+        通过一个小请求探测该文件所属的 DC (v1.6.7.4)
         
-        捕获 FILE_MIGRATE 异常并预设 self.current_dc，
-        防止后续几十个并发分块请求同时触发重定向造成网络风暴。
+        触发一次请求让 Pyrogram 自行处理 FILE_MIGRATE 错误，
+        后续请求会自动使用正确的 DC。
         """
         try:
-            # 请求起始的 4KB 数据
-            await self.client.send(
+            # 请求起始的 4KB 数据，让 Pyrogram 自动处理 DC 迁移
+            await self.client.invoke(
                 raw.functions.upload.GetFile(
                     location=location,
                     offset=0,
                     limit=4096,
                     precise=True
-                ),
-                dc_id=self.current_dc
+                )
             )
         except Exception as e:
             err_str = str(e)
@@ -343,8 +342,7 @@ class ParallelChunkDownloader:
                 match = re.search(r"FILE_MIGRATE_(\d+)", err_str)
                 if match:
                     target_dc = int(match.group(1))
-                    logger.info(f"探测到文件所在 DC 为 {target_dc}，已预热连接。")
-                    self.current_dc = target_dc
+                    logger.info(f"探测到文件所在 DC 为 {target_dc}，Pyrogram 将自动处理迁移。")
             # 探测阶段捕获所有错误但不抛出，由后续实际下载逻辑接手
             pass
 
@@ -356,20 +354,21 @@ class ParallelChunkDownloader:
         retries: int = 3
     ) -> bytes:
         """
-        下载文件的特定字节范围 (带 DC 迁移与重试逻辑)
+        下载文件的特定字节范围 (v1.6.7.4 修复)
+        
+        Pyrogram 会自动处理 FILE_MIGRATE 错误，无需手动指定 dc_id。
         """
         for attempt in range(retries):
             try:
-                # 调用 raw API，如果已知 DC 则显式指定 (v1.6.3)
-                result = await self.client.send(
+                # 调用 raw API，Pyrogram 自动处理 DC 迁移
+                result = await self.client.invoke(
                     raw.functions.upload.GetFile(
                         location=location,
                         offset=offset,
                         limit=limit,
                         precise=True,
                         cdn_supported=False
-                    ),
-                    dc_id=self.current_dc
+                    )
                 )
                 
                 if isinstance(result, raw.types.upload.File):
@@ -384,20 +383,11 @@ class ParallelChunkDownloader:
                 raise
             except Exception as e:
                 err_str = str(e)
-                # 处理 DC 迁移: [303 FILE_MIGRATE_X]
+                # FILE_MIGRATE 现在由 Pyrogram 自动处理，只需记录日志
                 if "FILE_MIGRATE_" in err_str:
-                    import re
-                    match = re.search(r"FILE_MIGRATE_(\d+)", err_str)
-                    if match:
-                        target_dc = int(match.group(1))
-                        if self.current_dc != target_dc:
-                            logger.warning(f"检测到 DC 迁移 ({err_str}), 切换当前下载器到 DC {target_dc} (Attempt {attempt+1}/{retries})")
-                            self.current_dc = target_dc
-                        else:
-                            logger.warning(f"DC 迁移到 {target_dc} 仍未生效, 正在重试... (Attempt {attempt+1}/{retries})")
-                    
+                    logger.info(f"检测到 DC 迁移请求 ({err_str}), Pyrogram 将自动重试...")
                     if attempt < retries - 1:
-                        await asyncio.sleep(1) 
+                        await asyncio.sleep(0.5) 
                         continue
                     raise
                 
