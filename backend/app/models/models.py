@@ -3,7 +3,7 @@ TG Export - 数据模型
 """
 from datetime import datetime
 from enum import Enum
-from typing import Optional, List
+from typing import Optional, List, Dict
 from pydantic import BaseModel, Field, computed_field, field_validator
 
 
