@@ -75,7 +75,7 @@ class TelegramClient:
                 device_model="TG Export Web",
                 system_version="Linux",
                 sleep_threshold=0, # [Fast Response] 禁用内置自动等待，让异常立即抛出
-                workers=20, # [FIX] 提升内部线程数，处理更高并发
+                workers=100, # [FIX] 提升内部线程数，处理更高并发 (v1.6.5 自动化)
                 max_concurrent_transmissions=10  # [FIX v1.3.9] 关键参数：允许最多 10 个并发传输
             )
             print(f"[TG] 客户端已初始化: api_id={api_id}")

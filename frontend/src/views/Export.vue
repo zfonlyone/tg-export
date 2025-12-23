@@ -232,9 +232,9 @@
             <p style="color: #666; font-size: 12px; margin-top: 4px;">Telegram 免费用户限制 10</p>
           </div>
           <div class="form-group">
-            <label class="form-label">下载线程数</label>
-            <input v-model.number="options.download_threads" type="number" class="form-input" min="1" max="10">
-            <p style="color: #666; font-size: 12px; margin-top: 4px;">推荐 10</p>
+            <label class="form-label">单文件分块数</label>
+            <input v-model.number="options.parallel_chunk_connections" type="number" class="form-input" min="1" max="8">
+            <p style="color: #666; font-size: 12px; margin-top: 4px;">推荐 4-8</p>
           </div>
           <div class="form-group">
             <label class="form-label">速度限制 (KB/s)</label>
@@ -375,7 +375,7 @@ const options = reactive({
   
   // 下载设置
   max_concurrent_downloads: 10,
-  download_threads: 10,
+  parallel_chunk_connections: 4,
   download_speed_limit: 0,
   
   // 消息过滤

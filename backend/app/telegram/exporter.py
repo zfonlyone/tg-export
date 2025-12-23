@@ -81,7 +81,12 @@ class ExportManager:
                         # [v1.6.1] 自动添加新版本字段 & 迁移逻辑
                         if "options" in task_data:
                             opts = task_data["options"]
-                            # 默认值补全
+                            # [v1.6.5 Migration] 将旧的 "download_threads" 逻辑迁移至 "parallel_chunk_connections" (分块数)
+                            if "download_threads" in opts and "parallel_chunk_connections" not in opts:
+                                old_threads = opts["download_threads"]
+                                logger.info(f"迁移任务配置: 使用旧线程数 {old_threads} 作为新的分块数")
+                                opts["parallel_chunk_connections"] = min(8, max(1, old_threads))
+                            
                             opts.setdefault("incremental_scan_enabled", True)
                             opts.setdefault("enable_parallel_chunk", True)
                             opts.setdefault("parallel_chunk_connections", 4)
@@ -434,55 +439,45 @@ class ExportManager:
     async def adjust_task_concurrency(self, task_id: str, max_concurrent: int = None, 
                                        download_threads: int = None, 
                                        parallel_chunk: int = None) -> bool:
-        """运行时调整任务并发设置 (v1.5.0)
+        """运行时调整任务并发设置 (v1.6.5)
         
-        当并发设置改变时，将 WAITING 项目推入队列以唤醒空闲的 Worker
+        并发数改变会立即触发 Worker Manager 的扩缩容。
+        分块数改变会影响后续开始下载的文件。
         """
         task = self.tasks.get(task_id)
         if not task:
             return False
         
         changes = []
-        
         if max_concurrent is not None:
             max_concurrent = max(1, min(20, max_concurrent))
             task.options.max_concurrent_downloads = max_concurrent
-            task.current_max_concurrent_downloads = max_concurrent
+            # 更新客户端内部限制 (立即生效)
             telegram_client.set_max_concurrent_transmissions(max_concurrent)
             changes.append(f"并发: {max_concurrent}")
-        
-        if download_threads is not None:
-            download_threads = max(1, min(20, download_threads))
-            task.options.download_threads = download_threads
-            changes.append(f"线程: {download_threads}")
         
         if parallel_chunk is not None:
             parallel_chunk = max(1, min(8, parallel_chunk))
             task.options.parallel_chunk_connections = parallel_chunk
             changes.append(f"分块: {parallel_chunk}")
-        
+            
         if changes:
-            logger.info(f"任务 {task_id[:8]}: 运行时调整 - {', '.join(changes)}")
-            
-            # 将 WAITING 项目推入队列以唤醒空闲 Worker
-            # 注意：P2 优先级会处理这些，队列中的项目会被跳过
-            if task.id in self._task_queues:
+            logger.info(f"任务 {task_id[:8]} 并发设置已更新: {', '.join(changes)}")
+            # 唤醒队列 (如果并发数增加，且队列中有任务)
+            if max_concurrent is not None and task.id in self._task_queues:
                 queue = self._task_queues[task.id]
-                enqueued = 0
+                # 尝试推入几个项目以激活新 Worker
+                count = 0
                 for item in task.download_queue:
-                    if (item.status == DownloadStatus.WAITING 
-                        and item.id not in self._item_to_worker.get(task.id, {})):
+                    if item.status == DownloadStatus.WAITING and item.id not in self._item_to_worker.get(task.id, {}):
                         queue.put_nowait(item)
-                        enqueued += 1
-                        if enqueued >= 5:  # 最多推入5个，避免队列过长
-                            break
-                if enqueued > 0:
-                    logger.info(f"任务 {task_id[:8]}: 推入 {enqueued} 个项目到队列以唤醒 Worker")
+                        count += 1
+                        if count >= 5: break
             
-            self._save_tasks()
-            await self._notify_progress(task_id, task)
+            await self._save_tasks_async()
+            await self._notify_progress(task.id, task)
             return True
-        
+        return False
         return False
     async def verify_integrity(self, task_id: str) -> Dict[str, Any]:
         """完整性校验 (异步触发接口) (v1.6.4)"""
@@ -978,31 +973,37 @@ class ExportManager:
                 last_update = {
                     'size': item.downloaded_size, 
                     'time': time.time(),
-                    'last_progress_time': time.time()  # 用于卡死检测
+                    'last_progress_size': item.downloaded_size,  # 用于卡死检测的记录点
+                    'last_progress_time': time.time()  # 上次进度有变的时间
                 }
                 loop = asyncio.get_running_loop()
                 
                 def progress_cb(current, total):
                     now = time.time()
-                    elapsed = now - last_update['time']
                     
                     # 更新进度
                     item.progress = (current / total) * 100 if total > 0 else 0
                     item.downloaded_size = current
                     
                     # [Speed Fix] 计算瞬时速度 (每秒更新一次)
+                    elapsed = now - last_update['time']
                     if elapsed >= 1.0:
                         bytes_diff = current - last_update['size']
-                        item.speed = bytes_diff / elapsed
+                        item.speed = max(0, bytes_diff / elapsed)
                         last_update['size'] = current
                         last_update['time'] = now
                     
-                    # [Stuck Detection] 卡死检测逻辑 (只要有字节增长就重置)
-                    if current > last_update['size']:
+                    # [Stuck Detection] 卡死检测逻辑 (v1.6.5 优化)
+                    # 只要字节有增长，就重置计时器
+                    if current > last_update['last_progress_size']:
+                        last_update['last_progress_size'] = current
                         last_update['last_progress_time'] = now
-                    elif now - last_update['last_progress_time'] > 300: # 5分钟无进度增长
-                        logger.error(f"任务 {task.id[:8]}: 文件 {item.file_name} 下载卡死 (5分钟无进度)")
-                        raise asyncio.TimeoutError("Download stuck for more than 5 minutes")
+                    
+                    # 超时条件：无进度增长超过 10 分钟 (针对大文件并行下载放宽限制)
+                    # 对于普通下载，Pyrogram 调用频繁，此逻辑也很稳健
+                    if now - last_update['last_progress_time'] > 600: 
+                        logger.error(f"任务 {task.id[:8]}: 文件 {item.file_name} 下载卡死 (10分钟无进度增长)")
+                        raise asyncio.TimeoutError("Download stuck for more than 10 minutes")
 
                     # 用户手动暂停检测
                     if item.status == DownloadStatus.PAUSED or item.is_manually_paused:
@@ -1324,6 +1325,11 @@ class ExportManager:
                 if task.status == TaskStatus.CANCELLED:
                     break
                 
+                # [Dynamic Scaling] 如果当前 Worker ID 超过了设置的并发数，则退出 (v1.6.5)
+                if worker_id >= task.options.max_concurrent_downloads:
+                    logger.info(f"任务 {task.id[:8]}: 并发数调低，下载协程 #{worker_id} 退出")
+                    break
+                
                 # [NEW Compliance] 如果整体任务处于暂停状态，Worker 应在此挂起待命，禁止从队列中“申请”新下载项
                 # 直到用户手动点击“恢复”
                 while self.is_paused(task.id) and task.status != TaskStatus.CANCELLED:
@@ -1494,13 +1500,36 @@ class ExportManager:
             
             logger.info(f"任务 {task.id[:8]}: 下载工协程 #{worker_id} 正常退出")
 
-        # 启动工作协程池
-        worker_tasks = []
+        # 启动工作协程池 (v1.6.5 动态管理)
+        worker_tasks = {} # Dict[int, Task]
         for i in range(options.max_concurrent_downloads):
-            # 立即创建任务，由 worker_logic 内部通过 global_start_lock 自动排队实现 5s 间隔
             t = asyncio.create_task(worker_logic(i))
-            worker_tasks.append(t)
+            worker_tasks[i] = t
             self._active_download_tasks[task.id].add(t)
+
+        # [NEW] 动态 Worker 管理协程
+        async def worker_manager():
+            while task.status not in [TaskStatus.CANCELLED, TaskStatus.COMPLETED, TaskStatus.FAILED]:
+                try:
+                    target = task.options.max_concurrent_downloads
+                    current_count = len([t for t in worker_tasks.values() if not t.done()])
+                    
+                    # 扩容
+                    if target > current_count:
+                        # 查找空缺的 ID 或追加
+                        for i in range(target):
+                            if i not in worker_tasks or worker_tasks[i].done():
+                                logger.info(f"任务 {task.id[:8]}: 动态增加下载协程 #{i}")
+                                t = asyncio.create_task(worker_logic(i))
+                                worker_tasks[i] = t
+                                self._active_download_tasks[task.id].add(t)
+                                # 错峰启动
+                                await asyncio.sleep(2)
+                except Exception as e:
+                    logger.error(f"Worker Manager 出错: {e}")
+                await asyncio.sleep(3)
+        
+        manager_task = asyncio.create_task(worker_manager())
 
         # 速度更新任务
         async def speed_updater():
@@ -1541,8 +1570,9 @@ class ExportManager:
         finally:
             # 清理
             speed_task.cancel()
+            manager_task.cancel()
             # 取消所有 worker
-            for t in worker_tasks:
+            for t in worker_tasks.values():
                 if not t.done():
                     t.cancel()
             # 移除队列引用

@@ -51,11 +51,11 @@
           </div>
         </div>
         <div class="control-group">
-          <label>线程数</label>
+          <label>分块数</label>
           <div class="stepper">
-            <button @click="adjustConcurrency('threads', -1)" :disabled="concurrency.threads <= 1">−</button>
-            <span class="value">{{ concurrency.threads }}</span>
-            <button @click="adjustConcurrency('threads', 1)" :disabled="concurrency.threads >= 20">+</button>
+            <button @click="adjustConcurrency('chunk', -1)" :disabled="concurrency.chunk <= 1">−</button>
+            <span class="value">{{ concurrency.chunk }}</span>
+            <button @click="adjustConcurrency('chunk', 1)" :disabled="concurrency.chunk >= 8">+</button>
           </div>
         </div>
         <div class="control-group">
