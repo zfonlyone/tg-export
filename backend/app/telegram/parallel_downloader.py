@@ -98,6 +98,11 @@ class ParallelChunkDownloader:
         Returns:
             (success, error_message)
         """
+        # [v1.6.0] 支持开关与常规下载
+        if not getattr(self, "enable_parallel", True) or self.parallel_connections <= 1:
+            logger.debug(f"并行下载已禁用或连接数为1, 使用标准下载: {file_path.name}")
+            return False, "并行下载未启用"
+
         # 小文件不使用并行下载
         if file_size < self.MIN_PARALLEL_SIZE:
             logger.debug(f"文件 {file_path.name} 小于 {self.MIN_PARALLEL_SIZE // 1024 // 1024}MB，跳过并行下载")
@@ -136,6 +141,12 @@ class ParallelChunkDownloader:
                             chunk.error = "已取消"
                             return
                         
+                        # [v1.6.0] 启动每个分块请求前增加错峰延迟，防止短时间突发大量请求
+                        import random
+                        delay = random.uniform(0.1, 0.4)
+                        if chunk.index > 0: # 第一个块不需要额外延迟
+                            await asyncio.sleep(delay)
+
                         # 下载数据
                         data = await self._download_chunk(location, chunk.offset, chunk.limit)
                         

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     # 路径配置
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
     DATA_DIR: Path = Path(os.getenv("DATA_DIR", BASE_DIR.parent / "data"))
+    TEMP_DIR: Path = Path(os.getenv("TEMP_DIR", DATA_DIR / "temp"))
     EXPORT_DIR: Path = Path(os.getenv("EXPORT_DIR", DATA_DIR / "exports"))
     SESSIONS_DIR: Path = Path(os.getenv("SESSIONS_DIR", DATA_DIR / "sessions"))
     

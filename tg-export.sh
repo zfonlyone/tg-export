@@ -16,7 +16,7 @@ PLAIN='\033[0m'
 
 # ===== 统一配置 =====
 APP_NAME="TG Export"
-APP_VERSION="1.5.0"
+APP_VERSION="1.6.1"
 APP_DIR="/opt/tg-export"
 CONFIG_FILE=".tge_config"
 DOCKER_IMAGE="zfonlyone/tg-export:latest"
@@ -779,7 +779,9 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - WEB_PORT=$WEB_PORT
+      - DATA_DIR=/app/data
       - EXPORT_DIR=/downloads
+      - TEMP_DIR=/app/data/temp
 YAML
     
     log "拉取镜像..."

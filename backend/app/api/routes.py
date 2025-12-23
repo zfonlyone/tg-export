@@ -257,6 +257,7 @@ async def retry_all_failed(
     for item in task.download_queue:
         if item.status == DownloadStatus.FAILED:
             item.status = DownloadStatus.WAITING
+            item.is_retry = True  # [v1.6.1] 标记为重试，提高优先级
             item.error = None
             count += 1
     

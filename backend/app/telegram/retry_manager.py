@@ -96,7 +96,9 @@ class DownloadRetryManager:
         """计算重试延迟时间"""
         # FloodWait 有特殊等待时间
         if isinstance(error, FloodWait):
-            return min(error.value + 1, self.max_delay)
+            # [v1.6.0] 增加随机抖动 (5-15秒)，更稳健地避开限速墙
+            import random
+            return min(error.value + random.uniform(5.0, 15.0), self.max_delay * 10) # 允许超过基础 max_delay
         
         # 指数退避
         delay = self.initial_delay * (self.backoff_factor ** attempt)

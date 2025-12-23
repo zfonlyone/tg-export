@@ -73,6 +73,7 @@ class DownloadItem(BaseModel):
     is_manually_paused: bool = False     # 是否由用户手动暂停 (Worker 释放槽位去处理其他任务)
     is_suspended: bool = False            # 是否由用户挂起 (Worker 驻留槽位，不处理新任务)
     resume_timestamp: float = 0.0         # 用户点击恢复的时间戳 (用于优先级调度，值越大优先级越高)
+    is_retry: bool = False                # 是否为重试任务 (v1.6.1)
 
 
 class ExportOptions(BaseModel):
@@ -138,6 +139,7 @@ class ExportOptions(BaseModel):
     # 并行分块下载设置 (单文件多连接并发) [v1.5.0]
     parallel_chunk_connections: int = 4  # 单文件并行连接数 (免费账号建议 3-4)
     enable_parallel_chunk: bool = True   # 是否启用分块并行下载 (大文件自动启用)
+    incremental_scan_enabled: bool = True # 是否启用增量扫描 (v1.6.0)
     
     # 消息过滤 (skip=跳过指定消息, specify=只下载指定消息)
     filter_mode: str = "none"            # none/skip/specify
@@ -222,6 +224,7 @@ class ExportTask(BaseModel):
     current_max_concurrent_downloads: Optional[int] = None # 当前动态并发数 (用于自适应限速)
     consecutive_success_count: int = 0    # 连续成功下载数 (用于并发恢复)
     last_flood_wait_time: Optional[datetime] = None # 最近一次触发限速墙的时间
+    last_scanned_id: int = 0              # 上次扫描到的最后消息 ID (用于增量扫描) (v1.6.0)
     
     # 错误信息
     error: Optional[str] = None

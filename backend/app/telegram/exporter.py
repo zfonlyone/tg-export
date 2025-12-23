@@ -74,6 +74,16 @@ class ExportManager:
                 logger.info(f"正在加载 {len(data)} 个任务...")
                 for task_data in data:
                     try:
+                        # [v1.6.1] 自动添加新版本字段 & 迁移逻辑
+                        if "options" in task_data:
+                            opts = task_data["options"]
+                            # 默认值补全
+                            opts.setdefault("incremental_scan_enabled", True)
+                            opts.setdefault("enable_parallel_chunk", True)
+                            opts.setdefault("parallel_chunk_connections", 4)
+                        
+                        task_data.setdefault("last_scanned_id", 0)
+                        
                         task = ExportTask.model_validate(task_data)
                         original_status = task.status
                         
@@ -354,8 +364,10 @@ class ExportManager:
             
         logger.info(f"重试或重跑文件: {target_item.file_name} (Task: {task.name})")
         
-        # 重置状态
+        # 重置状态并标记为重试 (提高优先级)
         target_item.status = DownloadStatus.WAITING
+        target_item.is_retry = True
+        target_item.resume_timestamp = 0  # 重置恢复时间戳
         target_item.error = None
         target_item.progress = 0
         target_item.downloaded_size = 0
@@ -497,71 +509,142 @@ class ExportManager:
         
         return False
     
-    async def verify_integrity(self, task_id: str) -> Dict[str, Any]:
-        """批量完整性校验：对已完成的项目执行文件大小验证
+    import os
+    import shutil
+    from pathlib import Path
+    from ..config import settings
+    
+    task = self.tasks.get(task_id)
+    if not task:
+        return {"status": "error", "message": "任务不存在"}
+    
+    export_path = Path(task.options.export_path).expanduser()
+    temp_dir = settings.TEMP_DIR
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    passed_count = 0
+    failed_count = 0
+    missing_count = 0
+    recovered_count = 0
+    moved_count = 0
+    
+    # 1. 对现有队列中的所有项进行校验
+    for item in task.download_queue:
+        full_path = export_path / item.file_path
         
-        - 若校验失败（大小不匹配）：标记为 FAILED，删除磁盘文件，downloaded_size 设为 0
-        - 若文件不存在：标记为 FAILED，downloaded_size 设为 0
-        """
-        import os
-        from pathlib import Path
-        
-        task = self.tasks.get(task_id)
-        if not task:
-            return {"status": "error", "message": "任务不存在"}
-        
-        export_path = Path(task.options.export_path).expanduser()
-        
-        passed_count = 0
-        failed_count = 0
-        missing_count = 0
-        
-        for item in task.download_queue:
+        # [CASE 1] 文件不存在
+        if not full_path.exists():
             if item.status != DownloadStatus.COMPLETED:
-                continue
-            
-            full_path = export_path / item.file_path
-            
-            if not full_path.exists():
-                # 文件不存在
-                logger.warning(f"完整性校验: 文件不存在 (按要求跳过): {item.file_name}")
-                item.status = DownloadStatus.FAILED
+                # [v1.6.1] 用户要求：若未成功且文件不存在，设为跳过，不重新下载
+                logger.debug(f"完整性校验: 文件未成功且本地不存在, 设为跳过: {item.file_name}")
+                item.status = DownloadStatus.SKIPPED
                 item.downloaded_size = 0
-                item.error = "文件不存在 (可能已移除)"
-                missing_count += 1
-                continue
-            
-            actual_size = os.path.getsize(full_path)
-            
-            if item.file_size > 0 and actual_size != item.file_size:
-                # 大小不匹配
-                logger.error(f"完整性校验失败: {item.file_name} 预期: {item.file_size}, 实际: {actual_size}")
-                item.status = DownloadStatus.FAILED
-                item.downloaded_size = 0
-                item.error = f"完整性校验失败: 预期 {item.file_size}，实际 {actual_size}"
-                
-                # 删除损坏文件
-                try:
-                    os.remove(full_path)
-                    logger.info(f"已删除不完整文件: {full_path}")
-                except Exception as e:
-                    logger.error(f"删除文件失败: {e}")
-                
-                failed_count += 1
+                item.progress = 100.0 # 标记为处理完成
+                passed_count += 1 # 视为这种“处理”已通过
             else:
-                # 校验通过
-                passed_count += 1
+                # 若曾标记完成但现在没了，通常视为失败/缺失
+                logger.warning(f"完整性校验: 已完成文件物理丢失: {item.file_name}")
+                item.status = DownloadStatus.FAILED
+                item.downloaded_size = 0
+                item.error = "文件不存在 (物理文件丢失)"
+                missing_count += 1
+            continue
         
-        self._save_tasks()
-        await self._notify_progress(task_id, task)
+        # [CASE 2] 文件存在
+        actual_size = os.path.getsize(full_path)
         
-        return {
-            "status": "ok",
-            "passed": passed_count,
-            "failed": failed_count,
-            "missing": missing_count,
-            "message": f"校验完成: {passed_count} 通过, {failed_count} 失败, {missing_count} 缺失"
-        }
+        if item.file_size > 0 and actual_size != item.file_size:
+            # 大小不匹配 -> 损坏
+            logger.error(f"完整性校验失败: {item.file_name} 预期: {item.file_size}, 实际: {actual_size}")
+            
+            # 移动到临时目录
+            item_temp_path = temp_dir / f"{item.message_id}_{item.file_name}"
+            try:
+                if item_temp_path.exists(): os.remove(item_temp_path)
+                shutil.move(str(full_path), str(item_temp_path))
+                logger.info(f"已将不完整文件移动到临时目录: {item_temp_path}")
+                moved_count += 1
+            except Exception as e:
+                logger.error(f"移动文件失败: {e}")
+                try: os.remove(full_path) 
+                except: pass
+                
+            # [v1.6.1] 用户要求：损坏的文件添加到等待列表重新下载
+            item.status = DownloadStatus.WAITING
+            item.downloaded_size = 0
+            item.progress = 0
+            item.error = f"完整性校验失败: 预期 {item.file_size}，实际 {actual_size} (已重置等待重试)"
+            failed_count += 1
+        else:
+            # 大小匹配 -> 成功或补全
+            if item.status != DownloadStatus.COMPLETED:
+                recovered_count += 1
+                logger.info(f"完整性校验: 自动补全磁盘已存在的文件: {item.file_name}")
+            
+            item.status = DownloadStatus.COMPLETED
+            item.downloaded_size = actual_size
+            item.progress = 100.0
+            passed_count += 1
+            
+    # [v1.6.0] 2. 扫描目录，寻找“未记录”但实际存在的文件
+    logger.info(f"任务 {task.id[:8]}: 正在扫描物理目录以恢复未记录文件...")
+    
+    # 构建快速查找表
+    queue_map = {item.file_path: item for item in task.download_queue}
+    
+    # 递归遍历目录
+    for root, dirs, files in os.walk(export_path):
+        for file in files:
+            if file.startswith('.') or file in ["export.json", "export.html", "export_results.html"]:
+                continue
+                
+            full_path = Path(root) / file
+            # 这里的相对路径处理需要小心，匹配 DownloadItem.file_path
+            try:
+                rel_path = str(full_path.relative_to(export_path))
+            except: continue
+            
+            if rel_path in queue_map:
+                item = queue_map[rel_path]
+                if item.status != DownloadStatus.COMPLETED:
+                    # 发现磁盘上有文件，但队列里没标记完成
+                    actual_size = os.path.getsize(full_path)
+                    if item.file_size > 0 and actual_size == item.file_size:
+                        logger.info(f"完整性校验: 自动恢复已下载文件 {file}")
+                        item.status = DownloadStatus.COMPLETED
+                        item.downloaded_size = actual_size
+                        item.progress = 100.0
+                        recovered_count += 1
+                    else:
+                        # 虽然文件在那，但大小不对，移动到 temp
+                        logger.warning(f"完整性校验: 发现同名不完整文件 {file}, 移动到 temp 并重置等待")
+                        item_temp_path = temp_dir / f"{item.message_id}_{file}"
+                        try:
+                            if item_temp_path.exists(): os.remove(item_temp_path)
+                            shutil.move(str(full_path), str(item_temp_path))
+                            item.status = DownloadStatus.WAITING
+                            item.downloaded_size = 0
+                            item.progress = 0
+                            moved_count += 1
+                            failed_count += 1
+                        except: pass
+    
+    self._save_tasks()
+    await self._notify_progress(task_id, task)
+    
+    msg = f"校验完成: {passed_count} 通过, {failed_count} 失败, {missing_count} 缺失"
+    if recovered_count > 0: msg += f", 自动恢复 {recovered_count}"
+    if moved_count > 0: msg += f", {moved_count} 个异常文件移至 temp"
+    
+    return {
+        "status": "ok",
+        "passed": passed_count,
+        "failed": failed_count,
+        "missing": missing_count,
+        "recovered": recovered_count,
+        "moved_to_temp": moved_count,
+        "message": msg
+    }
     
     async def cancel_download_item(self, task_id: str, item_id: str) -> bool:
         """取消 (跳过) 单个下载项"""
@@ -732,6 +815,24 @@ class ExportManager:
                 await self._notify_progress(task.id, task)
                 await self._process_download_queue(task, export_path)
             
+            # [v1.6.0] 阶段 3: 下载后增量扫描 (发现可能的新消息)
+            if task.status not in [TaskStatus.CANCELLED, TaskStatus.PAUSED] and options.incremental_scan_enabled:
+                logger.info(f"任务 {task.id[:8]}: 正在执行下载后增量扫描...")
+                new_messages = []
+                for chat in chats:
+                    chat_messages = await self._export_chat(task, chat, export_path)
+                    new_messages.extend(chat_messages)
+                
+                if new_messages:
+                    logger.info(f"增量扫描发现了 {len(new_messages)} 条新消息")
+                    all_messages.extend(new_messages)
+                    from ..exporters import json_exporter, html_exporter
+                    if options.export_format in [ExportFormat.JSON, ExportFormat.BOTH]:
+                        await json_exporter.export(task, chats, all_messages, export_path)
+                    if options.export_format in [ExportFormat.HTML, ExportFormat.BOTH]:
+                        await html_exporter.export(task, chats, all_messages, export_path)
+                await self._notify_progress(task.id, task)
+
             if task.status not in [TaskStatus.CANCELLED, TaskStatus.PAUSED]:
                 task.status = TaskStatus.COMPLETED
                 task.completed_at = datetime.now()
@@ -1114,8 +1215,9 @@ class ExportManager:
         telegram_client.set_max_concurrent_transmissions(options.max_concurrent_downloads)
         logger.info(f"任务 {task.id[:8]}: 并发下载数设置为 {options.max_concurrent_downloads}")
         
-        # 按 message_id 升序排序
-        task.download_queue.sort(key=lambda x: x.message_id)
+        # [v1.6.1] 按优先级和 message_id 排序初始化队列
+        # 优先级规则: is_retry(True优先) > message_id(升序)
+        task.download_queue.sort(key=lambda x: (not getattr(x, 'is_retry', False), x.message_id))
         
         # 初始化任务队列
         queue = asyncio.Queue()
@@ -1174,34 +1276,37 @@ class ExportManager:
                 if task.status == TaskStatus.CANCELLED:
                     break
                 
-                # 2. [四级优先级调度]
-                # P1: 用户刚点击"恢复"的任务 (resume_timestamp > 0)，按时间戳降序
-                # P2: 下载队列中所有 WAITING 状态的任务 (无论有没有进度)
-                # P3: 程序自动暂停的任务 (PAUSED + 非手动暂停，如限速触发)
-                # P4: 从队列获取新任务
-                priority_item = None
-                
-                # P1: 查找用户刚恢复的任务 (resume_timestamp > 0)，选最近恢复的
-                best_resumed = None
-                best_timestamp = 0
+            # [v1.6.1] [三级优先级调度]
+            # P1: 用户点击恢复的任务 (resume_timestamp)
+            # P2: 标记为重试的任务 (is_retry)
+            # P3: 队列中提取的标准任务 (已按 msg_id 排序)
+            priority_item = None
+            
+            # P1: 查找恢复项
+            best_resumed = None
+            for candidate in task.download_queue:
+                if (candidate.status == DownloadStatus.WAITING 
+                    and getattr(candidate, 'resume_timestamp', 0) > 0
+                    and not getattr(candidate, 'is_manually_paused', False)
+                    and candidate.id not in self._item_to_worker.get(task.id, {})):
+                    if not best_resumed or candidate.resume_timestamp > best_resumed.resume_timestamp:
+                        best_resumed = candidate
+            
+            if best_resumed:
+                priority_item = best_resumed
+                priority_item.resume_timestamp = 0
+                logger.info(f"任务 {task.id[:8]}: [P1] 优先提取恢复文件: {priority_item.file_name}")
+            
+            # P2: 查找重试项
+            if not priority_item:
                 for candidate in task.download_queue:
-                    # [FIX] 额外检查 is_manually_paused，避免不一致状态
                     if (candidate.status == DownloadStatus.WAITING 
-                        and candidate.resume_timestamp > 0
-                        and not candidate.is_manually_paused
+                        and getattr(candidate, 'is_retry', False)
+                        and not getattr(candidate, 'is_manually_paused', False)
                         and candidate.id not in self._item_to_worker.get(task.id, {})):
-                        if candidate.resume_timestamp > best_timestamp:
-                            best_timestamp = candidate.resume_timestamp
-                            best_resumed = candidate
-                
-                if best_resumed:
-                    priority_item = best_resumed
-                    priority_item.resume_timestamp = 0  # 清除时间戳，避免重复选择
-                    logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P1] 执行用户刚恢复的任务: {priority_item.file_name}")
-                
-                # [Task Selection] 优先级：P1 (手动恢复) > P4 (主队列)
-                # 策略说明：
-                # 1. 如果有用户手动恢复的项，优先处理
+                        priority_item = candidate
+                        logger.info(f"任务 {task.id[:8]}: [P2] 优先提取重试文件: {priority_item.file_name}")
+                        break
                 # 2. 否则从 FIFO 队列中获取（队列已按 message_id 升序预排列）
                 # 3. 移除了扫描式 P2 策略，以绝死循环和乱序 Bug
 
@@ -1519,12 +1624,27 @@ class ExportManager:
             me = await telegram_client.get_me()
             me_id = me.get("id")
 
+        highest_id_this_scan = 0
+        
+        # [v1.6.0] 慢速扫描策略
+        scan_delay = 0.2  # 基础延迟
+        
         async for msg in telegram_client.get_chat_history(chat.id):
             if task.status == TaskStatus.CANCELLED:
                 break
             
-            # 限制请求速率 (用户需求: 控制请求所有文本消息的api速率防止被限制)
-            await asyncio.sleep(0.1)
+            # 记录本次扫描到的最高 ID (Telegram 历史是从新到旧)
+            if highest_id_this_scan == 0:
+                highest_id_this_scan = msg.id
+                
+            # [v1.6.0] 增量扫描逻辑: 如果到达上次扫描的 ID，则停止 (除非是全局扫描)
+            if options.incremental_scan_enabled and task.last_scanned_id > 0 and msg.id <= task.last_scanned_id:
+                logger.info(f"增量扫描: 已到达上次扫描位置 {task.last_scanned_id}, 停止扫描")
+                break
+
+            # 限制请求速率 (用户需求: 慢速扫描防止封号)
+            import random
+            await asyncio.sleep(scan_delay + random.uniform(0.05, 0.15))
             
             # 等待暂停状态结束
             while task.status == TaskStatus.PAUSED:
@@ -1635,6 +1755,11 @@ class ExportManager:
                     import json
                     with open(progress_file, "w") as f:
                         json.dump({"downloaded_message_ids": list(downloaded_ids)}, f)
+        
+        # [v1.6.0] 更新最后扫描 ID
+        if highest_id_this_scan > task.last_scanned_id:
+            task.last_scanned_id = highest_id_this_scan
+            logger.info(f"聊天 {chat.title} 扫描完成, 更新 last_scanned_id 为 {task.last_scanned_id}")
         
         # 保存最终进度
         if options.resume_download:
