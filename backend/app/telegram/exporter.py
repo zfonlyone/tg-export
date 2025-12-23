@@ -469,7 +469,6 @@ class ExportManager:
                 enqueued = 0
                 for item in task.download_queue:
                     if (item.status == DownloadStatus.WAITING 
-                        and not item.is_manually_paused
                         and item.id not in self._item_to_worker.get(task.id, {})):
                         queue.put_nowait(item)
                         enqueued += 1
@@ -484,9 +483,10 @@ class ExportManager:
         
         return False
     async def verify_integrity(self, task_id: str) -> Dict[str, Any]:
-        """完整性校验: 检查物理文件并同步状态 v1.6.1"""
+        """完整性校验: 检查物理文件并同步状态 v1.6.2"""
         import os
         import shutil
+        import time
         from pathlib import Path
         from ..config import settings
         
@@ -495,131 +495,88 @@ class ExportManager:
             return {"status": "error", "message": "任务不存在"}
         
         export_path = Path(task.options.export_path).expanduser()
-        temp_dir = settings.TEMP_DIR
+        temp_dir = settings.TEMP_DIR / "mismatched"
         temp_dir.mkdir(parents=True, exist_ok=True)
         
         passed_count = 0
-        failed_count = 0
-        missing_count = 0
-        recovered_count = 0
-        moved_count = 0
+        failed_count = 0 # 对应大小不匹配
+        missing_count = 0 # 对应物理丢失
+        recovered_count = 0 
         
-        # 1. 对现有队列中的所有项进行校验
+        # 1. 遍历队列中的所有项进行校验
         for item in task.download_queue:
             full_path = export_path / item.file_path
             
             # [CASE 1] 文件不存在
             if not full_path.exists():
-                if item.status != DownloadStatus.COMPLETED:
-                    # [v1.6.1] 用户要求：若未成功且文件不存在，设为跳过，不重新下载
-                    logger.debug(f"完整性校验: 文件未成功且本地不存在, 设为跳过: {item.file_name}")
+                if item.status == DownloadStatus.COMPLETED:
+                    # [v1.6.2] 已完成但文件物理丢失 -> 设为跳过，不重新下载
+                    logger.warning(f"完整性校验: 已完成文件物理丢失, 设为跳过: {item.file_name}")
                     item.status = DownloadStatus.SKIPPED
                     item.downloaded_size = 0
-                    item.progress = 100.0 # 标记为处理完成
-                    passed_count += 1 # 视为这种“处理”已通过
-                else:
-                    # 若曾标记完成但现在没了，通常视为失败/缺失
-                    logger.warning(f"完整性校验: 已完成文件物理丢失: {item.file_name}")
-                    item.status = DownloadStatus.FAILED
-                    item.downloaded_size = 0
-                    item.error = "文件不存在 (物理文件丢失)"
+                    item.progress = 100.0
                     missing_count += 1
+                else:
+                    # [v1.6.2] 未下载或下载中的文件不存在 -> 正常现状，不处理
+                    logger.debug(f"完整性校验: 等待下载文件尚不存在: {item.file_name}")
                 continue
             
             # [CASE 2] 文件存在
-            actual_size = os.path.getsize(full_path)
+            try:
+                actual_size = os.path.getsize(full_path)
+            except Exception as e:
+                logger.error(f"无法读取文件大小 {item.file_name}: {e}")
+                continue
             
             if item.file_size > 0 and actual_size != item.file_size:
-                # 大小不匹配 -> 损坏
+                # [v1.6.2] 大小不匹配 -> 移动到临时目录并重置为 WAITING
                 logger.error(f"完整性校验失败: {item.file_name} 预期: {item.file_size}, 实际: {actual_size}")
                 
                 # 移动到临时目录
-                item_temp_path = temp_dir / f"{item.message_id}_{item.file_name}"
+                timestamp = int(time.time())
+                item_temp_path = temp_dir / f"{timestamp}_{item.message_id}_{item.file_name}"
                 try:
-                    if item_temp_path.exists(): os.remove(item_temp_path)
                     shutil.move(str(full_path), str(item_temp_path))
-                    logger.info(f"已将不完整文件移动到临时目录: {item_temp_path}")
-                    moved_count += 1
+                    logger.info(f"已将损坏文件移动到临时目录: {item_temp_path}")
                 except Exception as e:
                     logger.error(f"移动文件失败: {e}")
                     try: os.remove(full_path) 
                     except: pass
                     
-                # [v1.6.1] 用户要求：损坏的文件添加到等待列表重新下载
+                # 重置为等待重新下载
                 item.status = DownloadStatus.WAITING
                 item.downloaded_size = 0
                 item.progress = 0
-                item.error = f"完整性校验失败: 预期 {item.file_size}，实际 {actual_size} (已重置等待重试)"
+                item.error = f"文件校验失败: 预期 {item.file_size}，实际 {actual_size} (已移动并重置)"
                 failed_count += 1
             else:
-                # 大小匹配 -> 成功或补全
+                # 大小匹配 -> 记录为完成
                 if item.status != DownloadStatus.COMPLETED:
                     recovered_count += 1
-                    logger.info(f"完整性校验: 自动补全磁盘已存在的文件: {item.file_name}")
+                    logger.info(f"完整性校验: 自动恢复磁盘上已存在的文件: {item.file_name}")
                 
                 item.status = DownloadStatus.COMPLETED
                 item.downloaded_size = actual_size
                 item.progress = 100.0
                 passed_count += 1
                 
-        # [v1.6.0] 2. 扫描目录，寻找“未记录”但实际存在的文件
-        logger.info(f"任务 {task.id[:8]}: 正在扫描物理目录以恢复未记录文件...")
-        
-        # 构建快速查找表
-        queue_map = {item.file_path: item for item in task.download_queue}
-        
-        # 递归遍历目录
-        for root, dirs, files in os.walk(export_path):
-            for file in files:
-                if file.startswith('.') or file in ["export.json", "export.html", "export_results.html"]:
-                    continue
-                    
-                full_path = Path(root) / file
-                # 这里的相对路径处理需要小心，匹配 DownloadItem.file_path
-                try:
-                    rel_path = str(full_path.relative_to(export_path))
-                except: continue
-                
-                if rel_path in queue_map:
-                    item = queue_map[rel_path]
-                    if item.status != DownloadStatus.COMPLETED:
-                        # 发现磁盘上有文件，但队列里没标记完成
-                        actual_size = os.path.getsize(full_path)
-                        if item.file_size > 0 and actual_size == item.file_size:
-                            logger.info(f"完整性校验: 自动恢复已下载文件 {file}")
-                            item.status = DownloadStatus.COMPLETED
-                            item.downloaded_size = actual_size
-                            item.progress = 100.0
-                            recovered_count += 1
-                        else:
-                            # 虽然文件在那，但大小不对，移动到 temp
-                            logger.warning(f"完整性校验: 发现同名不完整文件 {file}, 移动到 temp 并重置等待")
-                            item_temp_path = temp_dir / f"{item.message_id}_{file}"
-                            try:
-                                if item_temp_path.exists(): os.remove(item_temp_path)
-                                shutil.move(str(full_path), str(item_temp_path))
-                                item.status = DownloadStatus.WAITING
-                                item.downloaded_size = 0
-                                item.progress = 0
-                                moved_count += 1
-                                failed_count += 1
-                            except: pass
-        
+        # 更新任务统计
+        self._update_task_stats(task)
         self._save_tasks()
+        
+        message = (f"校验完成: 通过 {passed_count}, 恢复 {recovered_count}, "
+                  f"重置(损坏) {failed_count}, 缺失(跳过) {missing_count}")
+        logger.info(f"任务 {task_id[:8]}: {message}")
+        
         await self._notify_progress(task_id, task)
         
-        msg = f"校验完成: {passed_count} 通过, {failed_count} 失败, {missing_count} 缺失"
-        if recovered_count > 0: msg += f", 自动恢复 {recovered_count}"
-        if moved_count > 0: msg += f", {moved_count} 个异常文件移至 temp"
-        
         return {
-            "status": "ok",
+            "status": "success",
+            "message": message,
             "passed": passed_count,
-            "failed": failed_count,
-            "missing": missing_count,
             "recovered": recovered_count,
-            "moved_to_temp": moved_count,
-            "message": msg
+            "failed": failed_count,
+            "missing": missing_count
         }
     
     async def cancel_download_item(self, task_id: str, item_id: str) -> bool:
