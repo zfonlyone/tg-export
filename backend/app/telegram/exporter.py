@@ -1184,16 +1184,24 @@ class ExportManager:
                             success = False
                             failure_info = {"error_type": "parallel_error", "error_message": str(e)}
                     else:
-
                         # 小文件使用常规下载 + 重试
-                        success, downloaded_path, failure_info = await retry_manager.download_with_retry(
-                            download_func=telegram_client.download_media,
-                            message=msg,
-                            file_path=temp_file_path,
-                            refresh_message_func=telegram_client.get_message_by_id,
-                            progress_callback=progress_cb,
-                            on_flood_wait_callback=on_flood_wait_cb
-                        )
+                        # [v1.6.7.6] 断点续传：检测临时文件是否已完整
+                        temp_disk_size = os.path.getsize(temp_file_path) if temp_file_path.exists() else 0
+                        if item.file_size > 0 and temp_disk_size == item.file_size:
+                            logger.info(f"任务 {task.id[:8]}: 断点续传 - 文件 '{item.file_name}' 在临时目录已完整，跳过下载")
+                            success, downloaded_path, failure_info = True, temp_file_path, None
+                        else:
+                            if temp_disk_size > 0 and temp_disk_size < item.file_size:
+                                logger.info(f"任务 {task.id[:8]}: 检测到部分下载文件 ({temp_disk_size}/{item.file_size} 字节)，Pyrogram 将从头重试")
+                            
+                            success, downloaded_path, failure_info = await retry_manager.download_with_retry(
+                                download_func=telegram_client.download_media,
+                                message=msg,
+                                file_path=temp_file_path,
+                                refresh_message_func=telegram_client.get_message_by_id,
+                                progress_callback=progress_cb,
+                                on_flood_wait_callback=on_flood_wait_cb
+                            )
                 except asyncio.TimeoutError:
                     logger.error(f"任务 {task.id[:8]}: 文件 {item.file_name} 下载超时")
                     success, downloaded_path = False, None

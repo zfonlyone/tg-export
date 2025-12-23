@@ -134,18 +134,38 @@ class ParallelChunkDownloader:
             import aiofiles
             file_path.parent.mkdir(parents=True, exist_ok=True)
             
+            # [v1.6.7.6] 断点续传支持：检测已存在的文件大小并跳过已下载分块
+            import os
+            existing_size = os.path.getsize(file_path) if file_path.exists() else 0
+            skipped_chunks = 0
+            
+            if existing_size > 0:
+                # 标记已完整下载的分块
+                for chunk in chunks:
+                    chunk_end = chunk.offset + chunk.real_size
+                    if chunk_end <= existing_size:
+                        chunk.downloaded = True
+                        skipped_chunks += 1
+                
+                if skipped_chunks > 0:
+                    logger.info(f"断点续传: 跳过 {skipped_chunks}/{len(chunks)} 个已下载分块 (已有 {existing_size / 1024 / 1024:.1f}MB)")
+            
             # 创建写锁，保护 seek/write 操作
             write_lock = asyncio.Lock()
             
-            # 4. 并发下载与流式写入
-            total_downloaded = [0]
+            # 4. 并发下载与流式写入 (从已下载位置继续)
+            total_downloaded = [existing_size]  # 从已下载大小开始
             start_time = time.time()
             chunk_count = len(chunks)
-            last_log_percent = 0
+            last_log_percent = int((existing_size / file_size) * 100 // 20) * 20 if file_size > 0 else 0
             
             async def download_and_write_chunk(chunk: ChunkInfo, f_handle):
                 """下载分块并立即写入文件"""
                 try:
+                    # [v1.6.7.6] 跳过已下载的分块（断点续传）
+                    if chunk.downloaded:
+                        return
+                    
                     async with self._download_semaphore:
                         if cancel_check and cancel_check():
                             chunk.error = "已取消"
