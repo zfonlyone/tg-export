@@ -1446,6 +1446,11 @@ class ExportManager:
         msg_to = options.message_to  # 0 表示最新
         
         # 获取消息
+        me_id = None
+        if options.only_my_messages:
+            me = await telegram_client.get_me()
+            me_id = me.get("id")
+
         async for msg in telegram_client.get_chat_history(chat.id):
             if task.status == TaskStatus.CANCELLED:
                 break
@@ -1473,8 +1478,7 @@ class ExportManager:
             
             # 只导出我的消息
             if options.only_my_messages:
-                me = await telegram_client.get_me()
-                if msg.from_user and msg.from_user.id != me.get("id"):
+                if msg.from_user and msg.from_user.id != me_id:
                     continue
             
             # 断点续传 - 跳过已处理的消息

@@ -33,6 +33,8 @@ class TelegramClient:
         self._phone_code_hash: Optional[str] = None
         self._lock = asyncio.Lock() # 用于保护连接和初始化过程
         self._message_cache = {} # { (chat_id, msg_id): (message_obj, timestamp) }
+        self._me_cache = None    # 缓存 get_me 结果
+        self._me_cache_time = 0  # 缓存时间戳
         self._cache_lock = asyncio.Lock()
     
     @property
@@ -190,22 +192,35 @@ class TelegramClient:
                 self._is_authorized = False
     
     async def get_me(self) -> dict:
-        """获取当前用户信息 (带自动重连)"""
+        """获取当前用户信息 (带自动重连和缓存)"""
         if not self._client:
             return {}
+            
+        import time
+        # 1. 检查缓存 (5分钟有效)
+        async with self._cache_lock:
+            if self._me_cache and (time.time() - self._me_cache_time < 300):
+                return self._me_cache
+
         try:
             # 确保连接状态
             await self._ensure_connected()
             me = await self._client.get_me()
             if me:
-                self._is_authorized = True
-                return {
+                res = {
                     "id": me.id,
                     "first_name": me.first_name,
                     "last_name": me.last_name,
                     "username": me.username,
                     "phone": me.phone_number
                 }
+                # 2. 更新缓存
+                async with self._cache_lock:
+                    self._me_cache = res
+                    self._me_cache_time = time.time()
+                
+                self._is_authorized = True
+                return res
         except Unauthorized:
             self._is_authorized = False
             print("[TG] 会话已失效，需要重新登录")
