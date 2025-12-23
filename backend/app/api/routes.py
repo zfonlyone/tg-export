@@ -285,11 +285,24 @@ async def pause_download_item(
     item_id: str,
     current_user: User = Depends(get_current_user)
 ):
-    """暂停单个下载项"""
+    """暂停单个下载项 (释放槽位)"""
     success = await export_manager.pause_download_item(task_id, item_id)
     if success:
-        return {"status": "ok", "message": "已暂停"}
+        return {"status": "ok", "message": "已暂停 (释放槽位)"}
     raise HTTPException(status_code=400, detail="暂停失败")
+
+
+@router.post("/export/{task_id}/download/{item_id}/suspend")
+async def suspend_download_item(
+    task_id: str,
+    item_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """挂起单个下载项 (驻留槽位)"""
+    success = await export_manager.suspend_download_item(task_id, item_id)
+    if success:
+        return {"status": "ok", "message": "已挂起 (驻留槽位)"}
+    raise HTTPException(status_code=400, detail="挂起失败")
 
 
 @router.post("/export/{task_id}/download/{item_id}/resume")

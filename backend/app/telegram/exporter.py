@@ -369,45 +369,63 @@ class ExportManager:
         return task_id in self._paused_tasks
     
     async def pause_download_item(self, task_id: str, item_id: str) -> bool:
-        """暂停单个下载项 (标记为手动)"""
+        """暂停单个下载项 (释放槽位，Worker 去处理其他任务)"""
         task = self.tasks.get(task_id)
         if not task: return False
         for item in task.download_queue:
-                if item.id == item_id:
-                    if item.status in [DownloadStatus.DOWNLOADING, DownloadStatus.WAITING]:
-                        item.status = DownloadStatus.PAUSED
-                        item.is_manually_paused = True # 标记为手动暂停
-                        logger.info(f"手动暂停文件: {item.file_name}")
-                        
-                        # [Strong Restoration] 强行中止正在执行该項的协程
-                        if task_id in self._item_to_worker and item_id in self._item_to_worker[task_id]:
-                            worker_task = self._item_to_worker[task_id][item_id]
-                            if not worker_task.done():
-                                logger.info(f"任务 {task_id[:8]}: 强行中止卡死的下载协程以释放槽位: {item.file_name}")
-                                worker_task.cancel()
-                        
-                        await self._notify_progress(task_id, task)
-                        return True
+            if item.id == item_id:
+                if item.status in [DownloadStatus.DOWNLOADING, DownloadStatus.WAITING]:
+                    item.status = DownloadStatus.PAUSED
+                    item.is_manually_paused = True
+                    item.is_suspended = False
+                    logger.info(f"暂停文件 (释放槽位): {item.file_name}")
+                    
+                    if task_id in self._item_to_worker and item_id in self._item_to_worker[task_id]:
+                        worker_task = self._item_to_worker[task_id][item_id]
+                        if not worker_task.done():
+                            worker_task.cancel()
+                    
+                    await self._notify_progress(task_id, task)
+                    return True
+        return False
+
+    async def suspend_download_item(self, task_id: str, item_id: str) -> bool:
+        """挂起单个下载项 (驻留槽位，Worker 不处理新任务)"""
+        task = self.tasks.get(task_id)
+        if not task: return False
+        for item in task.download_queue:
+            if item.id == item_id:
+                if item.status in [DownloadStatus.DOWNLOADING, DownloadStatus.WAITING]:
+                    item.status = DownloadStatus.PAUSED
+                    item.is_suspended = True
+                    item.is_manually_paused = False
+                    logger.info(f"挂起文件 (驻留槽位): {item.file_name}")
+                    
+                    if task_id in self._item_to_worker and item_id in self._item_to_worker[task_id]:
+                        worker_task = self._item_to_worker[task_id][item_id]
+                        if not worker_task.done():
+                            worker_task.cancel()
+                    
+                    await self._notify_progress(task_id, task)
+                    return True
         return False
 
     async def resume_download_item(self, task_id: str, item_id: str) -> bool:
-        """恢复单个下载项 (清除手动标记)"""
+        """恢复单个下载项 (清除所有暂停/挂起标记)"""
         task = self.tasks.get(task_id)
         if not task: return False
         for item in task.download_queue:
             if item.id == item_id:
                 if item.status == DownloadStatus.PAUSED:
                     item.status = DownloadStatus.WAITING
-                    item.is_manually_paused = False # 清除手动暂停标记
-                    logger.info(f"手动恢复文件: {item.file_name}")
+                    item.is_manually_paused = False
+                    item.is_suspended = False
+                    logger.info(f"恢复文件: {item.file_name}")
                     
-                    # [Resident Worker Optimization]
-                    # 检查是否已经有驻留 Worker 正在等着这个 item (它在 _item_to_worker 里)
-                    # 如果有，我们只需要改状态，不需要重新入队，否则会造成双重下载
                     is_resident = False
                     if task_id in self._item_to_worker and item_id in self._item_to_worker[task_id]:
                         is_resident = True
-                        logger.info(f"任务 {task_id[:8]}: 检测到驻留 Worker，将通过信号直接恢复，不进行二次入队。")
+                        logger.info(f"任务 {task_id[:8]}: 检测到驻留 Worker，将通过信号直接恢复")
 
                     if not is_resident and task.id in self._task_queues:
                         self._task_queues[task.id].put_nowait(item)
@@ -713,8 +731,8 @@ class ExportManager:
 
             full_path = export_path / item.file_path
             
-            # 使用 temp 目录存放下载中的文件
-            temp_dir = Path("/tmp/tg-export-downloads")
+            # 使用项目 data 目录存放下载中的文件 (对应宿主机 /opt/tg-export/data/temp)
+            temp_dir = Path("/app/data/temp")
             temp_dir.mkdir(parents=True, exist_ok=True)
             temp_file_path = temp_dir / f"{item.id}_{full_path.name}"
             
@@ -1031,13 +1049,13 @@ class ExportManager:
                             # 如果下载完成（成功或预期内失败退出），跳出驻留循环
                             break
                         except asyncio.CancelledError:
-                            # [Manual Pause Handling] 如果是因为手动暂停导致的取消
-                            if item.is_manually_paused or item.status == DownloadStatus.PAUSED:
-                                logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 进入单项驻留模式 (槽位保留): {item.file_name}")
+                            # [挂起模式] 只有 is_suspended=True 才进入驻留等待
+                            if item.is_suspended:
+                                logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 进入挂起驻留模式: {item.file_name}")
                                 
                                 # 驻留：在原地等待用户点击“恢复”
-                                # 只要 item 还是手动暂停状态，就一直 sleep
-                                while (item.is_manually_paused or item.status == DownloadStatus.PAUSED) and task.status == TaskStatus.RUNNING:
+                                # 只要 item 还是挂起状态，就一直 sleep
+                                while item.is_suspended and task.status == TaskStatus.RUNNING:
                                     await asyncio.sleep(1)
                                 
                                 # 如果任务被彻底取消，则抛出异常彻底退出
@@ -1046,14 +1064,18 @@ class ExportManager:
                                 
                                 # 如果任务进入了全局暂停，则向上抛出 Cancellation 以回退到外层监控
                                 if self.is_paused(task.id):
-                                    raise asyncio.CancelledError("Task globally paused during resident wait")
+                                    raise asyncio.CancelledError("Task globally paused during suspend wait")
 
                                 # 用户已点击“恢复”！标记状态为 WAITING 并继续循环重新开始下载逻辑
-                                logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 驻留结束，准备恢复执行: {item.file_name}")
+                                logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 挂起结束，准备恢复: {item.file_name}")
                                 item.status = DownloadStatus.WAITING
                                 continue
+                            elif item.is_manually_paused or item.status == DownloadStatus.PAUSED:
+                                # [暂停模式] 普通暂停不驻留，直接释放槽位
+                                logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 暂停释放槽位: {item.file_name}")
+                                break
                             else:
-                                # 非手动暂停引起的取消（如自适应降速、全局暂停等），向上抛出
+                                # 非手动暂停引起的取消，向上抛出
                                 raise
                 except asyncio.CancelledError:
                     # [Persistence FIX] 系统级暂停，重置状态
