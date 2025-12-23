@@ -779,15 +779,18 @@ services:
     volumes:
       - ./data:/app/data:shared
       - $DOWNLOAD_DIR:/downloads:shared
+      - /var/run/docker.sock:/var/run/docker.sock
     env_file:
       - .env
     environment:
       - TZ=Asia/Shanghai
       - WEB_PORT=$WEB_PORT
-      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
+      - LOG_LEVEL=\${LOG_LEVEL:-DEBUG}
       - DATA_DIR=/app/data
       - EXPORT_DIR=/downloads
       - TEMP_DIR=/app/data/temp
+      - TDL_CONTAINER_NAME=\${TDL_CONTAINER_NAME:-tdl}
+      - USE_IPV6=\${USE_IPV6:-true}
 YAML
     
     log "拉取镜像..."
