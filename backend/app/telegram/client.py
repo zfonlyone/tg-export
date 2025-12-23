@@ -463,7 +463,8 @@ class TelegramClient:
         file_size: int,
         parallel_connections: int = 4,
         progress_callback=None,
-        cancel_check=None
+        cancel_check=None,
+        task_semaphore: Optional[asyncio.Semaphore] = None
     ) -> Optional[str]:
         """
         高性能并行分块下载 (v1.5.0)
@@ -478,6 +479,7 @@ class TelegramClient:
             parallel_connections: 并行连接数 (免费账号建议 3-4)
             progress_callback: 进度回调 (current, total)
             cancel_check: 取消检查函数
+            task_semaphore: 全局任务信号量 (可选)
             
         Returns:
             成功返回文件路径，失败返回 None
@@ -492,7 +494,8 @@ class TelegramClient:
         try:
             downloader = ParallelChunkDownloader(
                 client=self._client,
-                parallel_connections=parallel_connections
+                parallel_connections=parallel_connections,
+                task_semaphore=task_semaphore
             )
             
             success, error = await downloader.download(
