@@ -40,6 +40,9 @@ logging.basicConfig(
     ]
 )
 
+# 禁止 pyrogram 的 DEBUG 日志 (太吵了)
+logging.getLogger("pyrogram").setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 logger.info(f"日志已配置，存储路径: {log_file}")
 

@@ -23,6 +23,21 @@
         <div class="p-bar-container">
           <div class="p-bar-fill" :class="task.status" :style="{ width: (task.progress || 0) + '%' }"></div>
         </div>
+        
+        <!-- 扫描状态显示 (v1.6.4) -->
+        <div v-if="task.status === 'extracting' || task.is_verifying" class="scanning-status-mini fade-in">
+          <div class="s-spinner"></div>
+          <div class="s-info">
+            <span class="s-label">{{ task.is_verifying ? '正在校验:' : '正在扫描:' }}</span>
+            <span class="s-chat">{{ task.current_scanning_chat || '初始化...' }}</span>
+            <span class="s-msg">进度 ID: #{{ task.current_scanning_msg_id || 0 }}</span>
+          </div>
+        </div>
+        <!-- 校验结果显示 (v1.6.4) -->
+        <div v-if="task.last_verify_result && !task.is_verifying" class="verify-result-alert fade-in">
+          <span class="v-icon">ℹ️</span>
+          <span class="v-text">{{ task.last_verify_result }}</span>
+        </div>
       </div>
       
       <!-- 运行时并发控制 (v1.5.0) -->
@@ -621,6 +636,74 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .action-btn-circle.warning:hover { border-color: #f59e0b; color: #f59e0b; background: #fffbeb; }
 .action-btn-circle.success:hover { border-color: #22c55e; color: #22c55e; background: #f0fdf4; }
 .action-btn-circle.danger:hover { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
+
+/* 扫描状态迷你条 (v1.6.4) */
+.scanning-status-mini {
+  margin-top: 12px;
+  background: #f0f9ff;
+  border: 1px solid #bae6fd;
+  border-radius: 12px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.s-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #3b82f6;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.s-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: #0369a1;
+  font-weight: 500;
+  flex: 1;
+}
+
+.s-chat {
+  font-weight: 700;
+  color: #0c4a6e;
+  max-width: 150px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.s-msg {
+  margin-left: auto;
+  font-family: monospace;
+  background: #e0f2fe;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.75rem;
+}
+
+/* 校验结果提示 (v1.6.4) */
+.verify-result-alert {
+  margin-top: 12px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.v-icon { font-size: 1rem; }
+.v-text { font-size: 0.8rem; color: #475569; line-height: 1.4; flex: 1; }
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 
 @media (max-width: 640px) {
   .actions-panel { flex-direction: column; align-items: stretch; gap: 20px; }

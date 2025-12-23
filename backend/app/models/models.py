@@ -221,6 +221,8 @@ class ExportTask(BaseModel):
     is_extracting: bool = False           # 是否处于消息提取阶段
     is_verifying: bool = False            # 是否正在进行完整性检查 (v1.6.4)
     last_verify_result: Optional[str] = None # 最近一次检查结果 (v1.6.4)
+    current_scanning_chat: Optional[str] = None # 当前正在扫描的聊天名称 (v1.6.4)
+    current_scanning_msg_id: int = 0      # 当前正在扫描的消息 ID (v1.6.4)
     download_queue: List[DownloadItem] = Field(default_factory=list) # 下载队列
     current_max_concurrent_downloads: Optional[int] = None # 当前动态并发数 (用于自适应限速)
     consecutive_success_count: int = 0    # 连续成功下载数 (用于并发恢复)

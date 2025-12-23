@@ -567,18 +567,26 @@ class ExportManager:
             # 2.1 遍历目录扫描未在 queue 中的文件 (自动发现)
             # 格式: {msg_id}-{chat_id}-{name}
             pattern = re.compile(r"^(\d+)-(\d+)-(.*)$")
+            task.current_scanning_chat = "正在磁盘扫描..."
             
             # 预处理 queue 中的路径以避免重复检查
             queued_paths = {item.file_path for item in task.download_queue if item.file_path}
             
+            file_check_count = 0
             for root, dirs, files in os.walk(export_path):
                 for file_name in files:
+                    file_check_count += 1
                     match = pattern.match(file_name)
                     if not match: continue
                     
                     msg_id = int(match.group(1))
                     chat_id_abs = int(match.group(2))
                     
+                    # [v1.6.4] 更新发现进度
+                    task.current_scanning_msg_id = msg_id
+                    if file_check_count % 50 == 0:
+                        await self._notify_progress(task_id, task)
+                        
                     # 查找对应项
                     target_item = None
                     # Telegram 聊天 ID 通常是负数，尝试带负号的
@@ -1598,6 +1606,7 @@ class ExportManager:
         export_path: Path
     ) -> Tuple[List[MessageInfo], int]:
         """导出单个聊天, 返回 (消息列表, 本次最高消息ID)"""
+        task.current_scanning_chat = chat.title
         options = task.options
         messages: List[MessageInfo] = []
         
@@ -1653,6 +1662,11 @@ class ExportManager:
         async for msg in telegram_client.get_chat_history(chat.id):
             if task.status == TaskStatus.CANCELLED:
                 break
+            
+            # [v1.6.4] 更新扫描状态
+            task.current_scanning_msg_id = msg.id
+            if task.processed_messages % 20 == 0:
+                await self._notify_progress(task.id, task)
             
             # 记录本次扫描到的最高 ID (Telegram 历史是从新到旧)
             if highest_id_this_scan == 0:
