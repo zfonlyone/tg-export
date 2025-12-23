@@ -436,6 +436,61 @@ class ExportManager:
                     return True
         return False
     
+    async def adjust_task_concurrency(self, task_id: str, max_concurrent: int = None, 
+                                       download_threads: int = None, 
+                                       parallel_chunk: int = None) -> bool:
+        """运行时调整任务并发设置 (v1.5.0)
+        
+        当并发设置改变时，将 WAITING 项目推入队列以唤醒空闲的 Worker
+        """
+        task = self.tasks.get(task_id)
+        if not task:
+            return False
+        
+        changes = []
+        
+        if max_concurrent is not None:
+            max_concurrent = max(1, min(20, max_concurrent))
+            task.options.max_concurrent_downloads = max_concurrent
+            task.current_max_concurrent_downloads = max_concurrent
+            telegram_client.set_max_concurrent_transmissions(max_concurrent)
+            changes.append(f"并发: {max_concurrent}")
+        
+        if download_threads is not None:
+            download_threads = max(1, min(20, download_threads))
+            task.options.download_threads = download_threads
+            changes.append(f"线程: {download_threads}")
+        
+        if parallel_chunk is not None:
+            parallel_chunk = max(1, min(8, parallel_chunk))
+            task.options.parallel_chunk_connections = parallel_chunk
+            changes.append(f"分块: {parallel_chunk}")
+        
+        if changes:
+            logger.info(f"任务 {task_id[:8]}: 运行时调整 - {', '.join(changes)}")
+            
+            # 将 WAITING 项目推入队列以唤醒空闲 Worker
+            # 注意：P2 优先级会处理这些，队列中的项目会被跳过
+            if task.id in self._task_queues:
+                queue = self._task_queues[task.id]
+                enqueued = 0
+                for item in task.download_queue:
+                    if (item.status == DownloadStatus.WAITING 
+                        and not item.is_manually_paused
+                        and item.id not in self._item_to_worker.get(task.id, {})):
+                        queue.put_nowait(item)
+                        enqueued += 1
+                        if enqueued >= 5:  # 最多推入5个，避免队列过长
+                            break
+                if enqueued > 0:
+                    logger.info(f"任务 {task_id[:8]}: 推入 {enqueued} 个项目到队列以唤醒 Worker")
+            
+            self._save_tasks()
+            await self._notify_progress(task_id, task)
+            return True
+        
+        return False
+    
     async def verify_integrity(self, task_id: str) -> Dict[str, Any]:
         """批量完整性校验：对已完成的项目执行文件大小验证
         

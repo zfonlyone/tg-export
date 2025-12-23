@@ -351,31 +351,22 @@ async def update_task_concurrency(
     if not task:
         raise HTTPException(status_code=404, detail="任务不存在")
     
-    changes = []
+    # 使用新的 adjust_task_concurrency 方法，会自动唤醒 Worker
+    result = await export_manager.adjust_task_concurrency(
+        task_id,
+        max_concurrent=max_concurrent_downloads,
+        download_threads=download_threads,
+        parallel_chunk=parallel_chunk_connections
+    )
     
-    if max_concurrent_downloads is not None:
-        # 限制范围
-        max_concurrent_downloads = max(1, min(20, max_concurrent_downloads))
-        task.options.max_concurrent_downloads = max_concurrent_downloads
-        task.current_max_concurrent_downloads = max_concurrent_downloads
-        # 同步更新 Pyrogram 客户端
-        telegram_client.set_max_concurrent_transmissions(max_concurrent_downloads)
-        changes.append(f"最大并发: {max_concurrent_downloads}")
-    
-    if download_threads is not None:
-        # 限制范围
-        download_threads = max(1, min(20, download_threads))
-        task.options.download_threads = download_threads
-        changes.append(f"下载线程: {download_threads}")
-    
-    if parallel_chunk_connections is not None:
-        # 限制范围
-        parallel_chunk_connections = max(1, min(8, parallel_chunk_connections))
-        task.options.parallel_chunk_connections = parallel_chunk_connections
-        changes.append(f"分块连接: {parallel_chunk_connections}")
-    
-    if changes:
-        export_manager._save_tasks()
+    if result:
+        changes = []
+        if max_concurrent_downloads is not None:
+            changes.append(f"最大并发: {max_concurrent_downloads}")
+        if download_threads is not None:
+            changes.append(f"下载线程: {download_threads}")
+        if parallel_chunk_connections is not None:
+            changes.append(f"分块连接: {parallel_chunk_connections}")
         return {"status": "ok", "message": "已更新: " + ", ".join(changes)}
     
     raise HTTPException(status_code=400, detail="未指定任何参数")
