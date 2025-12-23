@@ -104,8 +104,10 @@ class TelegramClient:
         Pyrogram 的 Client 对象在运行时支持修改此属性。
         """
         if self._client:
-            self._client.max_concurrent_transmissions = value
-            print(f"[TG] 已设置最大并发传输数: {value}")
+            # [FIX] 确保并发传输数不超过内部 workers 数，防止 Pyrogram 内部死锁
+            safe_value = min(value, self._client.workers)
+            self._client.max_concurrent_transmissions = safe_value
+            print(f"[TG] 已设置最大并发传输数: {safe_value} (原始请求: {value})")
         else:
             print(f"[TG] 警告: 客户端未初始化，无法设置并发数")
     

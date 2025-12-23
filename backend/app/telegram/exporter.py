@@ -12,7 +12,7 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Callable, Any, Tuple
+from typing import Dict, List, Optional, Callable, Any, Tuple, Union
 from pyrogram.types import Message
 
 from ..config import settings
@@ -452,6 +452,8 @@ class ExportManager:
         if max_concurrent is not None:
             max_concurrent = max(1, min(20, max_concurrent))
             task.options.max_concurrent_downloads = max_concurrent
+            # [FIX] 同步运行时动态并发数，防止 Worker 锁死在旧槽位上限
+            task.current_max_concurrent_downloads = max_concurrent
             # 更新客户端内部限制 (立即生效)
             telegram_client.set_max_concurrent_transmissions(max_concurrent)
             changes.append(f"并发: {max_concurrent}")
@@ -462,7 +464,17 @@ class ExportManager:
             changes.append(f"分块: {parallel_chunk}")
             
         if changes:
+            # [FIX] 设置保存标记，确保刷新网页后配置不回退
+            self._needs_save = True
             logger.info(f"任务 {task_id[:8]} 并发设置已更新: {', '.join(changes)}")
+            
+            # [FIX] 重新初始化全局并行连接信号量
+            # 规则：允许总连接数 = max_concurrent * parallel_connections，合理上限 40
+            # 提高默认下限为 10，防止单文件下载时信号量过窄
+            new_limit = max(10, task.options.max_concurrent_downloads * task.options.parallel_chunk_connections)
+            new_limit = min(40, new_limit) # 封顶 40，防止 session 级别 FloodWait
+            self._parallel_semaphores[task.id] = asyncio.Semaphore(new_limit)
+            logger.info(f"任务 {task_id[:8]}: 全局并行连接限额动态调整为 {new_limit}")
             # 唤醒队列 (如果并发数增加，且队列中有任务)
             if max_concurrent is not None and task.id in self._task_queues:
                 queue = self._task_queues[task.id]
@@ -678,10 +690,7 @@ class ExportManager:
             
             if full_path.exists():
                 logger.debug(f"正在移动不完整文件到缓存以备断点续传: {full_path.name} -> {temp_file_name}")
-                # 如果目标已存在，删除之以覆盖 (可能是旧的残余)
-                if temp_file_path.exists():
-                    os.remove(temp_file_path)
-                shutil.move(str(full_path), str(temp_file_path))
+                self._safe_move(full_path, temp_file_path)
                 return True
         except Exception as e:
             logger.error(f"移动文件到缓存失败: {e}")
@@ -1139,11 +1148,7 @@ class ExportManager:
                         full_path.parent.mkdir(parents=True, exist_ok=True)
                         try: os.chmod(full_path.parent, 0o777)
                         except: pass
-                        # [Optimization] 重试下载后，如果目标目录已存在同名文件，执行覆盖移动
-                        if full_path.exists():
-                            try: os.remove(full_path)
-                            except: pass
-                        shutil.move(str(downloaded_path), str(full_path))
+                        self._safe_move(downloaded_path, full_path)
                     
                     # 权限设置
                     try: os.chmod(full_path, 0o777)
@@ -1153,11 +1158,7 @@ class ExportManager:
                     full_path.parent.mkdir(parents=True, exist_ok=True)
                     try: os.chmod(full_path.parent, 0o777)
                     except: pass
-                    # [Optimization] 同上
-                    if full_path.exists():
-                        try: os.remove(full_path)
-                        except: pass
-                    shutil.move(str(temp_file_path), str(full_path))
+                    self._safe_move(temp_file_path, full_path)
                     try: os.chmod(full_path, 0o777)
                     except: pass
                     item.file_path = str(full_path.absolute())
@@ -1295,10 +1296,13 @@ class ExportManager:
         if task.current_max_concurrent_downloads is None:
             task.current_max_concurrent_downloads = options.max_concurrent_downloads
             
-        # [Adaptive Concurrency] 初始化全局任务信号量，限制总连接数 (防止 10 workers * 4 connections = 40 连接触发封号)
-        # 建议总连接数控制在 max_concurrent_downloads * 2 左右
-        self._parallel_semaphores[task.id] = asyncio.Semaphore(options.max_concurrent_downloads * 2)
-        logger.info(f"任务 {task.id[:8]}: 全局并行连接限额设置为 {options.max_concurrent_downloads * 2}")
+        # [Adaptive Concurrency] 初始化全局任务信号量，限制总连接数
+        # [FIX] 更加科学的连接限额计算：并发文件数 * 每个文件的分块连接数
+        # 允许一定冗余但封顶，防止 10 workers * 4 chunks = 40 连接导致 session 被 Telegram 锁死
+        sem_limit = max(10, options.max_concurrent_downloads * options.parallel_chunk_connections)
+        sem_limit = min(40, sem_limit)
+        self._parallel_semaphores[task.id] = asyncio.Semaphore(sem_limit)
+        logger.info(f"任务 {task.id[:8]}: 全局并行连接限额设置为 {sem_limit}")
             
         import random
         import time
@@ -1843,6 +1847,33 @@ class ExportManager:
             MediaType.ANIMATION: options.gifs,
         }
         return mapping.get(media_type, False)
+
+    def _safe_move(self, src: Union[str, Path], dst: Union[str, Path]) -> bool:
+        """稳健的文件移动：如果目标已存在，先删除再移动，确保覆盖成功"""
+        src_path = Path(src)
+        dst_path = Path(dst)
+        
+        if not src_path.exists():
+            return False
+            
+        try:
+            # 确保目标目录存在
+            dst_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            # 如果目标已存在，显式删除
+            if dst_path.exists():
+                try:
+                    os.remove(dst_path)
+                except Exception as e:
+                    logger.warning(f"删除已存在的目标文件失败: {dst_path}, 错误: {e}")
+            
+            # 执行移动
+            import shutil
+            shutil.move(str(src_path), str(dst_path))
+            return True
+        except Exception as e:
+            logger.error(f"安全移动文件失败: {src} -> {dst}, 错误: {e}")
+            return False
     
     def _safe_filename(self, name: str) -> str:
         """生成安全的文件名 - 移除 emoji 和特殊符号"""
