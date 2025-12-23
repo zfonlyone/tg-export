@@ -73,13 +73,18 @@ class TDLIntegration:
                 text=True,
                 timeout=5
             )
+            if result.returncode != 0:
+                logger.warning(f"Docker 命令失败: {result.stderr}")
             return result.returncode == 0
+        except FileNotFoundError:
+            logger.warning("Docker 命令未找到，请确保 Docker socket 已挂载")
+            return False
         except Exception as e:
             logger.warning(f"Docker 不可用: {e}")
             return False
     
-    def _check_container_running(self) -> bool:
-        """检查 TDL 容器是否运行中"""
+    def _check_container_running(self) -> tuple:
+        """检查 TDL 容器是否运行中，返回 (是否运行, 错误信息)"""
         try:
             result = subprocess.run(
                 ["docker", "inspect", "-f", "{{.State.Running}}", self.container_name],
@@ -87,15 +92,28 @@ class TDLIntegration:
                 text=True,
                 timeout=5
             )
-            return result.stdout.strip() == "true"
+            if result.returncode != 0:
+                error_msg = result.stderr.strip()
+                if "No such object" in error_msg:
+                    return False, f"容器 '{self.container_name}' 不存在"
+                return False, error_msg
+            
+            is_running = result.stdout.strip() == "true"
+            return is_running, None if is_running else "容器未运行"
         except Exception as e:
-            logger.warning(f"检查容器状态失败: {e}")
-            return False
+            return False, str(e)
     
     def get_status(self) -> Dict[str, Any]:
         """获取 TDL 状态"""
         docker_available = self._check_docker_available()
-        container_running = self._check_container_running() if docker_available else False
+        
+        container_running = False
+        container_error = None
+        
+        if docker_available:
+            container_running, container_error = self._check_container_running()
+        else:
+            container_error = "Docker 不可用，请检查 /var/run/docker.sock 是否已挂载"
         
         active_tasks = [t for t in self.batch_tasks.values() 
                        if t.status == TDLDownloadStatus.RUNNING]
@@ -104,6 +122,7 @@ class TDLIntegration:
             "docker_available": docker_available,
             "container_name": self.container_name,
             "container_running": container_running,
+            "container_error": container_error,
             "active_tasks": len(active_tasks),
             "total_tasks": len(self.batch_tasks)
         }

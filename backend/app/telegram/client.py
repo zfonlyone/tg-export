@@ -45,6 +45,30 @@ class TelegramClient:
     def is_initialized(self) -> bool:
         return self._client is not None
     
+    def _check_ipv6_support(self) -> bool:
+        """检测系统是否支持 IPv6 连接到 Telegram"""
+        import socket
+        
+        # Telegram IPv6 服务器地址 (DC2)
+        telegram_ipv6_hosts = [
+            ("2001:67c:4e8:f002::a", 443),  # DC2 IPv6
+            ("2001:67c:4e8:f003::a", 443),  # DC3 IPv6
+        ]
+        
+        for host, port in telegram_ipv6_hosts:
+            try:
+                sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+                sock.settimeout(3)
+                sock.connect((host, port))
+                sock.close()
+                print(f"[TG] IPv6 连接测试成功: {host}")
+                return True
+            except (socket.error, OSError) as e:
+                print(f"[TG] IPv6 连接测试失败 ({host}): {e}")
+                continue
+        
+        return False
+    
     async def init(self, api_id: int, api_hash: str, session_name: str = "tg_export"):
         """初始化客户端（只创建实例，不连接）"""
         async with self._lock:
@@ -67,6 +91,14 @@ class TelegramClient:
                 self._client = None
             
             session_path = settings.SESSIONS_DIR / session_name
+            
+            # IPv6 自动检测与回退
+            use_ipv6 = settings.USE_IPV6
+            if use_ipv6:
+                use_ipv6 = self._check_ipv6_support()
+                if not use_ipv6:
+                    print("[TG] IPv6 不可用，自动切换到 IPv4")
+            
             self._client = Client(
                 name=str(session_path),
                 api_id=api_id,
@@ -74,11 +106,12 @@ class TelegramClient:
                 workdir=str(settings.SESSIONS_DIR),
                 device_model="TG Export Web",
                 system_version="Linux",
+                ipv6=use_ipv6,  # IPv6 支持 (自动检测)
                 sleep_threshold=0, # [Fast Response] 禁用内置自动等待，让异常立即抛出
                 workers=100, # [FIX] 提升内部线程数，处理更高并发 (v1.6.5 自动化)
                 max_concurrent_transmissions=10  # [FIX v1.3.9] 关键参数：允许最多 10 个并发传输
             )
-            print(f"[TG] 客户端已初始化: api_id={api_id}")
+            print(f"[TG] 客户端已初始化: api_id={api_id}, ipv6={use_ipv6}")
     
     async def _ensure_connected(self):
         """确保客户端已连接"""

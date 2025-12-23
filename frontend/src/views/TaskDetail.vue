@@ -333,8 +333,16 @@ async function toggleTDLMode() {
     if (tdlMode.value) {
       // 开启 TDL 模式 - 检查容器并启动下载
       const statusRes = await axios.get('/api/tdl/status', { headers: getAuthHeader() })
-      if (!statusRes.data.container_running) {
-        alert('⚠️ TDL 容器未运行，请先启动 TDL 容器')
+      const status = statusRes.data
+      
+      if (!status.docker_available) {
+        alert(`⚠️ Docker 不可用\n\n${status.container_error || '请检查 Docker socket 是否已挂载'}`)
+        tdlMode.value = false
+        return
+      }
+      
+      if (!status.container_running) {
+        alert(`⚠️ TDL 容器未运行\n\n容器名: ${status.container_name}\n错误: ${status.container_error || '未知'}`)
         tdlMode.value = false
         return
       }
@@ -346,17 +354,14 @@ async function toggleTDLMode() {
       
       if (result.data.success) {
         console.log('TDL 下载已启动:', result.data.message)
-        // 开始轮询 TDL 进度
         startTDLProgressPolling()
       } else {
         alert(result.data.message || 'TDL 启动失败')
         tdlMode.value = false
       }
     } else {
-      // 关闭 TDL 模式 - 取消 TDL 下载
-      await axios.post(`/api/export/${taskId}/tdl-cancel`, null, {
-        headers: getAuthHeader()
-      })
+      // 关闭 TDL 模式
+      await axios.post(`/api/export/${taskId}/tdl-cancel`, null, { headers: getAuthHeader() })
       stopTDLProgressPolling()
     }
   } catch (err) {
