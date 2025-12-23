@@ -103,6 +103,7 @@
           <div class="active-task-info" v-if="stats.current_concurrency">
              🚦 {{stats.current_concurrency}} 并发 / {{stats.active_threads}} 线程
           </div>
+          <button @click="batchDownloadWithTDL" class="btn-premium info sm" title="使用 TDL 批量下载失败的文件">🚀 TDL 下载</button>
           <button @click="toggleSort" class="btn-premium ghost sm sort-btn" :title="reversedOrder ? '当前为倒序' : '当前为正序'">
             {{ reversedOrder ? '⇅ 倒序' : '⇅ 正序' }}
           </button>
@@ -144,6 +145,9 @@
             
             <!-- 失败或已完成：重试 -->
             <button v-if="['failed', 'completed', 'skipped'].includes(item.status)" @click="retryItem(item.id)" class="action-btn-circle" title="重试/重新下载">🔄</button>
+            
+            <!-- TDL 下载按钮 -->
+            <button @click="downloadWithTDL(item)" class="action-btn-circle tdl" title="使用 TDL 下载">🚀</button>
             
             <!-- 通用：取消/跳过 -->
             <button @click="cancelItem(item.id)" class="action-btn-circle danger" title="取消/跳过">✖</button>
@@ -334,6 +338,56 @@ async function verifyIntegrity() {
     fetchData()
   } catch (err) {
     alert('校验失败: ' + (err.response?.data?.detail || err.message))
+  }
+}
+
+// TDL 下载功能
+async function downloadWithTDL(item) {
+  try {
+    const res = await axios.post('/api/tdl/download-by-message', null, {
+      params: {
+        chat_id: item.chat_id,
+        message_id: item.message_id,
+        output_dir: task.value.options?.export_path || '/downloads'
+      },
+      headers: getAuthHeader()
+    })
+    if (res.data.success) {
+      alert(`✅ TDL 下载已启动: ${item.file_name}`)
+    } else {
+      alert('❌ TDL 下载失败: ' + res.data.error)
+    }
+  } catch (err) {
+    alert('TDL 下载失败: ' + (err.response?.data?.detail || err.message))
+  }
+}
+
+async function batchDownloadWithTDL() {
+  // 获取失败的文件列表
+  const failedItems = queue.value.failed || []
+  if (failedItems.length === 0) {
+    alert('没有失败的文件需要下载')
+    return
+  }
+  
+  if (!confirm(`确定使用 TDL 下载 ${failedItems.length} 个失败的文件？`)) {
+    return
+  }
+  
+  try {
+    const itemIds = failedItems.map(item => item.id)
+    const res = await axios.post('/api/tdl/download-from-task', {
+      task_id: taskId,
+      item_ids: itemIds
+    }, { headers: getAuthHeader() })
+    
+    if (res.data.success) {
+      alert(`✅ TDL 批量下载已启动: ${res.data.found} 个文件`)
+    } else {
+      alert('❌ TDL 批量下载失败: ' + res.data.error)
+    }
+  } catch (err) {
+    alert('TDL 批量下载失败: ' + (err.response?.data?.detail || err.message))
   }
 }
 
@@ -774,6 +828,8 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .action-btn-circle.warning:hover { border-color: #f59e0b; color: #f59e0b; background: #fffbeb; }
 .action-btn-circle.success:hover { border-color: #22c55e; color: #22c55e; background: #f0fdf4; }
 .action-btn-circle.danger:hover { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
+.action-btn-circle.tdl { border-color: #8b5cf6; color: #8b5cf6; }
+.action-btn-circle.tdl:hover { background: #f5f3ff; border-color: #7c3aed; color: #7c3aed; }
 
 /* 扫描状态迷你条 (v1.6.4) */
 .scanning-status-mini {

@@ -8,6 +8,7 @@ services:
     volumes:
       - ./data:/app/data:shared
       - /storage/downloads:/downloads:shared
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       - TZ=Asia/Shanghai
       - DEBUG=false
@@ -21,6 +22,7 @@ services:
       - API_ID=${API_ID:-}
       - API_HASH=${API_HASH:-}
       - BOT_TOKEN=${BOT_TOKEN:-}
+      - TDL_CONTAINER_NAME=${TDL_CONTAINER_NAME:-tdl}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
       interval: 30s

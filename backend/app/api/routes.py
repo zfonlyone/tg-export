@@ -16,6 +16,7 @@ from .auth import (
     authenticate_user, create_access_token, get_current_user,
     create_user, get_user
 )
+from .tdl_integration import tdl_integration
 
 
 router = APIRouter()
@@ -479,3 +480,92 @@ async def save_bot_token(
     import os
     os.environ["BOT_TOKEN"] = token
     return {"status": "ok", "message": "Bot Token 已保存"}
+
+
+# ===== TDL 集成 =====
+
+@router.get("/tdl/status")
+async def get_tdl_status(current_user: User = Depends(get_current_user)):
+    """获取 TDL 状态"""
+    return tdl_integration.get_status()
+
+
+@router.post("/tdl/download")
+async def tdl_download(
+    url: str,
+    output_dir: str = "/downloads",
+    threads: int = 4,
+    limit: int = 2,
+    current_user: User = Depends(get_current_user)
+):
+    """使用 TDL 下载单个链接"""
+    result = await tdl_integration.download(url, output_dir, threads, limit)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "下载失败"))
+    return result
+
+
+@router.post("/tdl/download-by-message")
+async def tdl_download_by_message(
+    chat_id: int,
+    message_id: int,
+    output_dir: str = "/downloads",
+    current_user: User = Depends(get_current_user)
+):
+    """通过消息 ID 使用 TDL 下载"""
+    result = await tdl_integration.download_by_message(chat_id, message_id, output_dir)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "下载失败"))
+    return result
+
+
+@router.post("/tdl/batch-download")
+async def tdl_batch_download(
+    urls: List[str],
+    output_dir: str = "/downloads",
+    threads: int = 4,
+    limit: int = 2,
+    current_user: User = Depends(get_current_user)
+):
+    """使用 TDL 批量下载"""
+    if not urls:
+        raise HTTPException(status_code=400, detail="URL 列表不能为空")
+    result = await tdl_integration.batch_download(urls, output_dir, threads, limit)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "批量下载失败"))
+    return result
+
+
+@router.post("/tdl/download-from-task")
+async def tdl_download_from_task(
+    task_id: str,
+    item_ids: List[str],
+    output_dir: Optional[str] = None,
+    current_user: User = Depends(get_current_user)
+):
+    """从导出任务中选择文件使用 TDL 下载"""
+    task = export_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    # 从下载队列中找到对应的项并生成链接
+    urls = []
+    for item in task.download_queue:
+        if item.id in item_ids:
+            url = tdl_integration.generate_telegram_link(item.chat_id, item.message_id)
+            urls.append(url)
+    
+    if not urls:
+        raise HTTPException(status_code=400, detail="未找到指定的下载项")
+    
+    # 使用任务的导出路径
+    target_dir = output_dir or task.options.export_path
+    
+    result = await tdl_integration.batch_download(urls, target_dir)
+    return {
+        "success": result.get("success"),
+        "requested": len(item_ids),
+        "found": len(urls),
+        "output": result.get("output"),
+        "error": result.get("error")
+    }
