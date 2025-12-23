@@ -324,11 +324,16 @@ class ExportManager:
         return True
     
     def _get_export_path(self, task: ExportTask) -> Path:
-        """获取任务的导出路径"""
+        """获取任务的导出路径 (带标识符后缀以防同名冲突)"""
         import re
         safe_name = re.sub(r'[<>:"/\\|?*]', '_', task.name)
         safe_name = safe_name.strip()[:100]  # 限制长度并去除首尾空格
-        export_dir_name = safe_name
+        
+        # [FIX] 增加 ID 后缀，防止同名任务覆盖同一个文件夹
+        # 使用 ID 的前 5 位作为后缀
+        suffix = f"_{task.id[:5]}"
+        export_dir_name = f"{safe_name}{suffix}"
+        
         export_path = settings.EXPORT_DIR / export_dir_name
         return export_path
 
@@ -1038,8 +1043,71 @@ class ExportManager:
             if current_task and task.id in self._active_download_tasks:
                 self._active_download_tasks[task.id].discard(current_task)
 
+    async def _sync_task_with_disk(self, task: ExportTask, export_path: Path):
+        """
+        同步任务状态与磁盘文件 (v1.6.0)
+        
+        功能:
+        1. 检查已下载的文件是否存在。
+        2. 如果存在，校验大小是否一致。
+        3. 如果一致且任务未标记完成，标记为 COMPLETED。
+        4. 如果不一致，删除本地文件并标记为 WAITING。
+        5. 如果任务标记为完成但文件丢失，标记为 WAITING。
+        """
+        import os
+        logger.info(f"任务 {task.id[:8]}: 正在执行磁盘同步...")
+        
+        completed_count = 0
+        reset_count = 0
+        
+        for item in task.download_queue:
+            # 完整物理路径
+            full_path = export_path / item.file_path
+            
+            # [CASE 1] 本地文件存在
+            if full_path.exists():
+                actual_size = os.path.getsize(full_path)
+                
+                # [A] 大小完全匹配
+                if item.file_size > 0 and actual_size == item.file_size:
+                    if item.status != DownloadStatus.COMPLETED:
+                        item.status = DownloadStatus.COMPLETED
+                        item.downloaded_size = actual_size
+                        item.progress = 100.0
+                        completed_count += 1
+                
+                # [B] 大小不匹配 (损坏或不完整)
+                elif item.file_size > 0 and actual_size != item.file_size:
+                    logger.warning(f"同步: 文件 {item.file_name} 大小不一致 (预期 {item.file_size}, 实际 {actual_size}), 将重新下载")
+                    try:
+                        os.remove(full_path)
+                    except:
+                        pass
+                    item.status = DownloadStatus.WAITING
+                    item.downloaded_size = 0
+                    item.progress = 0
+                    reset_count += 1
+            
+            # [CASE 2] 本地文件不存在
+            else:
+                # 如果标记为已完成但物理文件没了
+                if item.status == DownloadStatus.COMPLETED:
+                    logger.warning(f"同步: 文件 {item.file_name} 已完成但物理文件丢失, 已重置为等待状态")
+                    item.status = DownloadStatus.WAITING
+                    item.downloaded_size = 0
+                    item.progress = 0
+                    reset_count += 1
+                    
+        if completed_count > 0 or reset_count > 0:
+            logger.info(f"同步完成: 补全了 {completed_count} 个完成项, 重置了 {reset_count} 个错误/丢失项")
+            # 重新计算任务总进度
+            task.downloaded_media = sum(1 for i in task.download_queue if i.status == DownloadStatus.COMPLETED)
+            await self._notify_progress(task.id, task)
+
     async def _process_download_queue(self, task: ExportTask, export_path: Path):
         """处理下载队列 (Worker Pool 模式)"""
+        # [FIX] 启动前先进行一次磁盘同步
+        await self._sync_task_with_disk(task, export_path)
         options = task.options
         
         # [v1.4.0] 动态设置 Pyrogram 并发传输数，使 UI 配置生效

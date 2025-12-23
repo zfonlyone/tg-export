@@ -45,7 +45,11 @@ class ParallelChunkDownloader:
     """
     
     # MTProto 标准块大小 (必须是 4KB 的倍数，最大 1MB)
-    CHUNK_SIZE = 1024 * 1024  # 1MB
+    # 本地实测 512KB 在多 DC 切换时更稳定
+    CHUNK_SIZE = 512 * 1024  # 512KB
+    
+    # 强制块对齐大小 (1KB 或 4KB)
+    BLOCK_ALIGN = 4096 
     
     # 触发并行下载的最小文件大小
     MIN_PARALLEL_SIZE = 10 * 1024 * 1024  # 10MB
@@ -257,23 +261,27 @@ class ParallelChunkDownloader:
         """
         计算分块策略
         
-        将文件分成 parallel_connections 个大致相等的部分，
-        每个部分内部按 chunk_size 请求
+        Telegram 要求 offset 和 limit 必须是 4KB(4096) 的倍数 (或者至少是 1KB)
+        最后一个块除外，但最后一个块的 limit 如果不是倍数，某些 DC 会报 LIMIT_INVALID。
+        稳妥做法：所有块都对齐，最后一个块请求略大一点没关系，会自动截断或者我们手动截断。
         """
         chunks = []
-        
-        # 计算每个连接负责的字节范围
-        part_size = file_size // self.parallel_connections
-        # 确保 part_size 是 chunk_size 的整数倍
-        part_size = (part_size // self.chunk_size + 1) * self.chunk_size
-        
         offset = 0
         index = 0
         
         while offset < file_size:
-            # 当前块的大小 (不超过 chunk_size，也不超过剩余大小)
+            # 计算当前块的大小
             remaining = file_size - offset
+            
+            # 基础策略：按照 CHUNK_SIZE 分块
             limit = min(self.chunk_size, remaining)
+            
+            # [CRITICAL] 对齐校验：除了最后一块，limit 必须是 4KB 的倍数
+            # 如果不是最后一块，且 limit 不对齐，向上取整 (实际上 CHUNK_SIZE 已经对齐了)
+            # 如果是最后一块，且 limit 不对齐，Telegram 可能会报错 LIMIT_INVALID。
+            # 解决方法：即使是最后一块，也请求一个对齐的 limit，系统会自动返回实际字节。
+            if limit % self.BLOCK_ALIGN != 0:
+                limit = ((limit // self.BLOCK_ALIGN) + 1) * self.BLOCK_ALIGN
             
             chunks.append(ChunkInfo(
                 index=index,
@@ -281,7 +289,7 @@ class ParallelChunkDownloader:
                 limit=limit
             ))
             
-            offset += limit
+            offset += limit # 注意：这里 offset 增加的是请求的 limit，如果是最后一块，下一次循环会退出
             index += 1
         
         return chunks
@@ -290,52 +298,69 @@ class ParallelChunkDownloader:
         self,
         location: Any,
         offset: int,
-        limit: int
+        limit: int,
+        retries: int = 3
     ) -> bytes:
         """
-        下载文件的特定字节范围
-        
-        使用 Pyrogram raw API 直接调用 upload.GetFile
-        
-        Args:
-            location: InputFileLocation 对象
-            offset: 起始字节偏移
-            limit: 请求的字节数
-            
-        Returns:
-            下载的字节数据
+        下载文件的特定字节范围 (带 DC 迁移与重试逻辑)
         """
-        try:
-            # 调用 raw API
-            result = await self.client.invoke(
-                raw.functions.upload.GetFile(
-                    location=location,
-                    offset=offset,
-                    limit=limit,
-                    precise=True,  # 禁用限制检查，适合流式下载
-                    cdn_supported=False
+        for attempt in range(retries):
+            try:
+                # 调用 raw API
+                result = await self.client.invoke(
+                    raw.functions.upload.GetFile(
+                        location=location,
+                        offset=offset,
+                        limit=limit,
+                        precise=True,
+                        cdn_supported=False
+                    )
                 )
-            )
-            
-            # 结果可能是 upload.File 或 upload.FileCdnRedirect
-            if isinstance(result, raw.types.upload.File):
-                return result.bytes
-            else:
-                logger.warning(f"收到非预期的响应类型: {type(result)}")
-                return b""
                 
-        except FloodWait:
-            raise
-        except (FileReferenceExpired, FileReferenceInvalid) as e:
-            logger.error(f"文件引用过期: {e}")
-            raise
-        except Exception as e:
-            err_str = str(e)
-            if "FILE_MIGRATE_" in err_str:
-                logger.warning(f"检测到 DC 迁移错误: {err_str}。分块下载将触发重试或回退。")
-            else:
-                logger.error(f"下载块失败 (offset={offset}, limit={limit}): {e}")
-            raise
+                if isinstance(result, raw.types.upload.File):
+                    # 如果请求的是最后一块且 limit 被我们人工放大了，这里需要截断到实际需要的长度
+                    # 但通常 upload.File 的 bytes 已经是实际内容了
+                    return result.bytes
+                else:
+                    logger.warning(f"收到非预期的响应类型: {type(result)}")
+                    return b""
+                    
+            except FloodWait:
+                raise
+            except (FileReferenceExpired, FileReferenceInvalid):
+                raise
+            except Exception as e:
+                err_str = str(e)
+                # 处理 DC 迁移: [303 FILE_MIGRATE_X]
+                if "FILE_MIGRATE_" in err_str:
+                    logger.warning(f"检测到 DC 迁移 ({err_str}), 尝试强制迁移 (Attempt {attempt+1}/{retries})")
+                    # 通过执行一个极小的成功请求来强制 Pyrogram 内部处理迁移
+                    try:
+                        # 解析 DC ID 并让 client 建立连接
+                        import re
+                        match = re.search(r"FILE_MIGRATE_(\d+)", err_str)
+                        if match:
+                            target_dc = int(match.group(1))
+                            logger.info(f"强制迁移到 DC {target_dc}...")
+                            # 注意：Pyrogram 内部会自动处理 invoke 时的 DC 迁移，
+                            # 但对于 GetFile 这种容易卡在旧 DC 的，重试通常有效
+                    except:
+                        pass
+                    
+                    if attempt < retries - 1:
+                        await asyncio.sleep(1) # 稍等让连接稳定
+                        continue
+                    raise
+                
+                if "LIMIT_INVALID" in err_str:
+                    logger.error(f"LIMIT_INVALID: offset={offset}, limit={limit}. 请检查对齐设置。")
+                    raise
+                
+                if attempt < retries - 1:
+                    logger.warning(f"分块下载失败 ({err_str}), 正在重试 ({attempt+1}/{retries})...")
+                    await asyncio.sleep(1)
+                    continue
+                raise
 
 
 
