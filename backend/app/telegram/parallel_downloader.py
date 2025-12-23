@@ -54,20 +54,24 @@ class ParallelChunkDownloader:
         self,
         client: Client,
         parallel_connections: int = 4,
-        chunk_size: int = CHUNK_SIZE
+        chunk_size: int = CHUNK_SIZE,
+        task_semaphore: Optional[asyncio.Semaphore] = None
     ):
         """
         初始化并行下载器
         
         Args:
             client: Pyrogram Client 实例
-            parallel_connections: 并行连接数 (免费账号建议 3-4)
+            parallel_connections: 单文件并行连接数
             chunk_size: 每次请求的块大小 (默认 1MB)
+            task_semaphore: 全局任务信号量 (可选，用于限制总并发连接)
         """
         self.client = client
         self.parallel_connections = parallel_connections
         self.chunk_size = chunk_size
-        self._download_semaphore = asyncio.Semaphore(parallel_connections)
+        # 如果外部提供了全局信号量，则优先使用全局限额
+        self._download_semaphore = task_semaphore or asyncio.Semaphore(parallel_connections)
+
     
     async def download(
         self,
@@ -342,7 +346,8 @@ async def parallel_download_media(
     file_path: Path,
     file_size: int,
     parallel_connections: int = 4,
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    task_semaphore: Optional[asyncio.Semaphore] = None
 ) -> Tuple[bool, Optional[str]]:
     """
     并行下载媒体文件的便捷函数
@@ -354,14 +359,17 @@ async def parallel_download_media(
         file_size: 文件大小
         parallel_connections: 并行连接数
         progress_callback: 进度回调
+        task_semaphore: 全局任务信号量 (可选)
         
     Returns:
         (success, error_message)
     """
     downloader = ParallelChunkDownloader(
         client=client,
-        parallel_connections=parallel_connections
+        parallel_connections=parallel_connections,
+        task_semaphore=task_semaphore
     )
+
     return await downloader.download(
         message=message,
         file_path=file_path,

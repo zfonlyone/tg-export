@@ -38,6 +38,7 @@ class ExportManager:
         self._resuming_tasks: set = set() # 正在恢复的任务ID (用于防止取消时重置状态)
         self._task_queues: Dict[str, asyncio.Queue] = {} # 任务ID -> 异步队列
         self._item_to_worker: Dict[str, Dict[str, asyncio.Task]] = {} # 任务ID -> {项ID: 协程任务}
+        self._parallel_semaphores: Dict[str, asyncio.Semaphore] = {} # 任务ID -> 并行连接信号量
         self._tasks_file = settings.DATA_DIR / self.TASKS_FILE
         # 确保数据目录存在
         settings.DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -885,27 +886,41 @@ class ExportManager:
                     
                     if use_parallel:
                         # 大文件使用并行分块下载
-                        logger.info(f"任务 {task.id[:8]}: 启用并行分块下载 ({options.parallel_chunk_connections} 连接)")
+                        logger.info(f"任务 {task.id[:8]}: 启动并行分块下载 ({options.parallel_chunk_connections} 连接)")
                         
                         def cancel_check():
                             return item.status == DownloadStatus.PAUSED or item.is_manually_paused
                         
-                        downloaded_path = await telegram_client.download_media_parallel(
-                            message=msg,
-                            file_path=str(temp_file_path),
-                            file_size=item.file_size,
-                            parallel_connections=options.parallel_chunk_connections,
-                            progress_callback=progress_cb,
-                            cancel_check=cancel_check
-                        )
-                        
-                        if downloaded_path:
-                            success = True
-                            failure_info = None
-                        else:
+                        try:
+                            downloaded_path = await telegram_client.download_media_parallel(
+                                message=msg,
+                                file_path=str(temp_file_path),
+                                file_size=item.file_size,
+                                parallel_connections=options.parallel_chunk_connections,
+                                progress_callback=progress_cb,
+                                cancel_check=cancel_check,
+                                task_semaphore=self._parallel_semaphores.get(task.id)
+                            )
+
+                            
+                            if downloaded_path:
+                                success = True
+                                failure_info = None
+                            else:
+                                success = False
+                                failure_info = {"error_type": "parallel_download_failed", "error_message": "并行下载失败 (未知原因)"}
+                        except FloodWait as e:
+                            logger.warning(f"任务 {task.id[:8]}: 并行下载触发 FloodWait ({e.value}s)")
+                            # 触发自适应降压
+                            await on_flood_wait_cb(e.value)
                             success = False
-                            failure_info = {"error_type": "parallel_download_failed", "error_message": "并行下载失败"}
+                            failure_info = {"error_type": "flood_wait", "error_message": f"FloodWait: {e.value}s"}
+                        except Exception as e:
+                            logger.error(f"任务 {task.id[:8]}: 并行下载发生错误: {e}")
+                            success = False
+                            failure_info = {"error_type": "parallel_error", "error_message": str(e)}
                     else:
+
                         # 小文件使用常规下载 + 重试
                         success, downloaded_path, failure_info = await retry_manager.download_with_retry(
                             download_func=telegram_client.download_media,
@@ -1053,6 +1068,11 @@ class ExportManager:
         if task.current_max_concurrent_downloads is None:
             task.current_max_concurrent_downloads = options.max_concurrent_downloads
             
+        # [Adaptive Concurrency] 初始化全局任务信号量，限制总连接数 (防止 10 workers * 4 connections = 40 连接触发封号)
+        # 建议总连接数控制在 max_concurrent_downloads * 2 左右
+        self._parallel_semaphores[task.id] = asyncio.Semaphore(options.max_concurrent_downloads * 2)
+        logger.info(f"任务 {task.id[:8]}: 全局并行连接限额设置为 {options.max_concurrent_downloads * 2}")
+            
         import random
         import time
         self._last_global_start_time = 0
@@ -1111,30 +1131,21 @@ class ExportManager:
                     priority_item.resume_timestamp = 0  # 清除时间戳，避免重复选择
                     logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P1] 执行用户刚恢复的任务: {priority_item.file_name}")
                 
-                # P2: 查找所有 WAITING 状态的任务，按 message_id 从小到大排序
-                if not priority_item:
-                    # 收集所有符合条件的候选项
-                    waiting_candidates = [
-                        candidate for candidate in task.download_queue
-                        if (candidate.status == DownloadStatus.WAITING 
-                            and not candidate.is_manually_paused
-                            and candidate.id not in self._item_to_worker.get(task.id, {}))
-                    ]
-                    # 按 message_id 升序排序，选择最小的
-                    if waiting_candidates:
-                        waiting_candidates.sort(key=lambda x: x.message_id)
-                        priority_item = waiting_candidates[0]
-                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P2] 执行等待中的任务 (msg#{priority_item.message_id}): {priority_item.file_name}")
-                
-                # 注意: 程序自动暂停的任务(如限速触发)在限制解除前不会被自动恢复
-                # 需要等待限速冷却结束或用户手动恢复
+                # [Task Selection] 优先级：P1 (手动恢复) > P4 (主队列)
+                # 策略说明：
+                # 1. 如果有用户手动恢复的项，优先处理
+                # 2. 否则从 FIFO 队列中获取（队列已按 message_id 升序预排列）
+                # 3. 移除了扫描式 P2 策略，以绝死循环和乱序 Bug
+
+                # [Task Selection] 优先级：P1 (手动恢复) > P4 (主队列)
+                # 移除了 P2 (扫描器)，因为它会导致乱序和重复下载
                 
                 if priority_item:
-                    # 找到了优先任务（不是从队列获取）
+                    # 找到了优先任务（手动恢复）
                     item = priority_item
                     from_queue = False
                     
-                    # [BUG FIX] 立即注册到 _item_to_worker，防止其他 Worker 重复选取同一项目
+                    # 立即注册到 _item_to_worker
                     if task.id not in self._item_to_worker:
                         self._item_to_worker[task.id] = {}
                     self._item_to_worker[task.id][item.id] = asyncio.current_task()
@@ -1143,15 +1154,31 @@ class ExportManager:
                     item = await queue.get()
                     from_queue = True
                     
-                    # 如果收到 None 信号，说明队列已关闭，Worker 应该辞职了
+                    # 如果收到 None 信号，说明队列已关闭
                     if item is None:
                         queue.task_done()
                         break
                     
-                    # [BUG FIX] 从队列获取的项目也需要立即注册
+                    # [Duplicate Check] 检查该项是否已经在下载中，或者已经完成
+                    # (由于 adjust_concurrency 可能导致重复入队)
+                    active_map = self._item_to_worker.get(task.id, {})
+                    if item.id in active_map or item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
+                        logger.debug(f"任务 {task.id[:8]}: 队列项 {item.message_id} 已在执行或已完成，跳过。")
+                        queue.task_done()
+                        continue
+                    
+                    # 如果该项被手动暂停了，也跳过
+                    if item.is_manually_paused:
+                        logger.info(f"任务 {task.id[:8]}: 队列项 {item.message_id} 处于手动暂停状态，跳过。")
+                        queue.task_done()
+                        continue
+
+                    # 注册
                     if task.id not in self._item_to_worker:
                         self._item_to_worker[task.id] = {}
                     self._item_to_worker[task.id][item.id] = asyncio.current_task()
+                    logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P4] 从队列获取任务 (msg#{item.message_id})")
+
 
                 # 3. [Adaptive Concurrency] 检查当前并发槽位是否允许继续执行 (公平竞争)
                 waiting_logged = False
