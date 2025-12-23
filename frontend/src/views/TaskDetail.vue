@@ -40,40 +40,42 @@
         </div>
       </div>
       
-      <!-- 运行时并发控制 (v1.5.0) -->
-      <div class="concurrency-controls">
+      <!-- 运行时并发控制 (v1.6.7) -->
+      <div class="concurrency-management">
         <div class="control-group">
-          <label>并发数</label>
+          <label>最大并发</label>
           <div class="stepper">
             <button @click="adjustConcurrency('max', -1)" :disabled="concurrency.max <= 1">−</button>
             <span class="value">{{ concurrency.max }}</span>
             <button @click="adjustConcurrency('max', 1)" :disabled="concurrency.max >= 20">+</button>
           </div>
         </div>
-        <div class="control-group">
-          <label>分块数</label>
-          <div class="stepper">
-            <button @click="adjustConcurrency('chunk', -1)" :disabled="concurrency.chunk <= 1">−</button>
-            <span class="value">{{ concurrency.chunk }}</span>
-            <button @click="adjustConcurrency('chunk', 1)" :disabled="concurrency.chunk >= 8">+</button>
-          </div>
-        </div>
-        <div class="control-group">
-          <label>分块连接</label>
-          <div class="stepper">
-            <button @click="adjustConcurrency('chunk', -1)" :disabled="concurrency.chunk <= 1">−</button>
-            <span class="value">{{ concurrency.chunk }}</span>
-            <button @click="adjustConcurrency('chunk', 1)" :disabled="concurrency.chunk >= 8">+</button>
-          </div>
+        <div class="control-group toggle-group">
+          <label class="toggle-label">
+            <input type="checkbox" v-model="concurrency.enableParallel" @change="toggleParallel">
+            <span>⚡ 并行分块</span>
+          </label>
         </div>
       </div>
       
-      <div class="button-group">
-        <button v-if="['running', 'extracting'].includes(task.status)" @click="pauseTask" class="btn-premium warning sm">⏸ 暂停所有</button>
-        <button v-if="task.status === 'paused'" @click="resumeTask" class="btn-premium success sm">▶ 恢复所有</button>
-        <button @click="verifyIntegrity" class="btn-premium info sm">📊 批量校验</button>
-        <button @click="cancelTask" class="btn-premium danger sm">✖ 取消导出</button>
-        <button @click="deleteTask" class="btn-premium ghost-danger sm">🗑 删除任务</button>
+      <div class="button-group main-actions">
+        <button v-if="['running', 'extracting'].includes(task.status)" @click="pauseTask" class="btn-premium warning sm">⏸ 暂停任务</button>
+        <button v-if="task.status === 'paused'" @click="resumeTask" class="btn-premium success sm">▶ 恢复任务</button>
+        
+        <div class="action-dropdown">
+          <button class="btn-premium info sm dropdown-toggle">🔍 扫描消息</button>
+          <div class="dropdown-menu">
+            <button @click="scanMessages(false)">增量扫描 (推荐)</button>
+            <button @click="scanMessages(true)" class="danger-text">全量扫描 (耗时)</button>
+          </div>
+        </div>
+
+        <button @click="verifyIntegrity" class="btn-premium primary sm" :disabled="task.is_verifying">
+          {{ task.is_verifying ? '正在校验...' : '📊 校验文件' }}
+        </button>
+        
+        <button @click="cancelTask" class="btn-premium danger sm">✖ 取消</button>
+        <button @click="deleteTask" class="btn-premium ghost-danger sm">🗑 删除</button>
       </div>
     </div>
 
@@ -199,7 +201,7 @@ const stats = ref({
 const currentTab = ref('active')
 const viewAll = ref(false)
 const reversedOrder = ref(false)
-const concurrency = ref({ max: 10, threads: 10, chunk: 4 })  // 并发控制状态
+const concurrency = ref({ max: 10, enableParallel: false })  // 并发控制状态
 let refreshTimer = null
 
 function getAuthHeader() {
@@ -263,8 +265,7 @@ async function fetchConcurrency() {
   try {
     const res = await axios.get(`/api/export/${taskId}/concurrency`, { headers: getAuthHeader() })
     concurrency.value.max = res.data.current_max_concurrent_downloads || res.data.max_concurrent_downloads
-    concurrency.value.threads = res.data.download_threads || 10
-    concurrency.value.chunk = res.data.parallel_chunk_connections || 4
+    concurrency.value.enableParallel = res.data.enable_parallel_chunk || false
   } catch (err) {
     console.error('获取并发配置失败:', err)
   }
@@ -273,34 +274,29 @@ async function fetchConcurrency() {
 async function adjustConcurrency(type, delta) {
   let newValue
   if (type === 'max') newValue = concurrency.value.max + delta
-  else if (type === 'threads') newValue = concurrency.value.threads + delta
-  else newValue = concurrency.value.chunk + delta
   
-  // 边界检查
   if (type === 'max' && (newValue < 1 || newValue > 20)) return
-  if (type === 'threads' && (newValue < 1 || newValue > 20)) return
-  if (type === 'chunk' && (newValue < 1 || newValue > 8)) return
-  
-  // 乐观更新
-  if (type === 'max') concurrency.value.max = newValue
-  else if (type === 'threads') concurrency.value.threads = newValue
-  else concurrency.value.chunk = newValue
+  concurrency.value.max = newValue
   
   try {
-    let params
-    if (type === 'max') params = { max_concurrent_downloads: newValue }
-    else if (type === 'threads') params = { download_threads: newValue }
-    else params = { parallel_chunk_connections: newValue }
-    
     await axios.post(`/api/export/${taskId}/concurrency`, null, { 
-      params, 
+      params: { max_concurrent_downloads: newValue }, 
       headers: getAuthHeader() 
     })
   } catch (err) {
-    // 回滚
-    if (type === 'max') concurrency.value.max -= delta
-    else if (type === 'threads') concurrency.value.threads -= delta
-    else concurrency.value.chunk -= delta
+    concurrency.value.max -= delta
+    alert('调整失败: ' + (err.response?.data?.detail || err.message))
+  }
+}
+
+async function toggleParallel() {
+  try {
+    await axios.post(`/api/export/${taskId}/concurrency`, null, { 
+      params: { parallel_chunk_connections: concurrency.value.enableParallel ? 3 : 1 }, // 内部转换: 3表示开启, 1表示关闭
+      headers: getAuthHeader() 
+    })
+  } catch (err) {
+    concurrency.value.enableParallel = !concurrency.value.enableParallel
     alert('调整失败: ' + (err.response?.data?.detail || err.message))
   }
 }
@@ -340,6 +336,19 @@ async function pauseItem(itemId) { await axios.post(`/api/export/${taskId}/downl
 async function resumeItem(itemId) { await axios.post(`/api/export/${taskId}/download/${itemId}/resume`, {}, { headers: getAuthHeader() }); fetchData() }
 async function cancelItem(itemId) { if(confirm('确定跳过此文件下载？')) { await axios.post(`/api/export/${taskId}/download/${itemId}/cancel`, {}, { headers: getAuthHeader() }); fetchData() } }
 async function retryItem(itemId) { await axios.post(`/api/export/${taskId}/retry_file/${itemId}`, {}, { headers: getAuthHeader() }); fetchData() }
+async function scanMessages(full) {
+  try {
+    const res = await axios.post(`/api/export/${taskId}/scan`, null, { 
+      params: { full },
+      headers: getAuthHeader() 
+    })
+    alert(res.data.message)
+    fetchData()
+  } catch (err) {
+    alert('扫描启动失败: ' + (err.response?.data?.detail || err.message))
+  }
+}
+
 async function verifyIntegrity() {
   try {
     const res = await axios.post(`/api/export/${taskId}/verify`, {}, { headers: getAuthHeader() })
@@ -421,17 +430,86 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .p-bar-fill.completed { background: #22c55e; }
 .p-bar-fill.paused { background: #f59e0b; }
 
-.button-group { display: flex; gap: 12px; flex-shrink: 0; }
-
-/* 并发控制 (v1.5.0) */
-.concurrency-controls {
+/* 并发与操作管理 (v1.6.7) */
+.concurrency-management {
   display: flex;
-  gap: 20px;
-  padding: 12px 20px;
+  align-items: center;
+  gap: 24px;
   background: #f8fafc;
-  border-radius: 12px;
-  border: 1px solid #e2e8f0;
+  padding: 12px 24px;
+  border-radius: 16px;
+  border: 1.5px solid #e2e8f0;
 }
+
+.toggle-group {
+  border-left: 1.5px solid #e2e8f0;
+  padding-left: 20px;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #1e293b;
+}
+
+.toggle-label input { width: 16px; height: 16px; cursor: pointer; }
+
+.main-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+/* 下拉菜单 */
+.action-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.dropdown-menu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: white;
+  min-width: 160px;
+  box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);
+  border-radius: 12px;
+  padding: 8px;
+  z-index: 100;
+  border: 1px solid #e2e8f0;
+  margin-top: 8px;
+}
+
+.action-dropdown:hover .dropdown-menu {
+  display: block;
+}
+
+.dropdown-menu button {
+  width: 100%;
+  text-align: left;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #475569;
+  transition: all 0.2s;
+}
+
+.dropdown-menu button:hover {
+  background: #f1f5f9;
+  color: #3b82f6;
+}
+
+.danger-text { color: #ef4444 !important; }
 
 .control-group {
   display: flex;

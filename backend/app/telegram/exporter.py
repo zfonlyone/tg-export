@@ -491,75 +491,127 @@ class ExportManager:
             return True
         return False
         return False
-    async def verify_integrity(self, task_id: str) -> Dict[str, Any]:
-        """完整性校验 (异步触发接口) (v1.6.4)"""
+    async def scan_messages(self, task_id: str, full: bool = False) -> Dict[str, Any]:
+        """扫描消息接口 (v1.6.7)
+        
+        Args:
+            task_id: 任务 ID
+            full: 是否执行全量扫描 (True=从头扫描, False=增量扫描)
+        """
         task = self.tasks.get(task_id)
         if not task:
             return {"status": "error", "message": "任务不存在"}
         
-        if task.status == TaskStatus.RUNNING:
-             return {"status": "error", "message": "任务正在运行中，请先暂停后再校验"}
+        if task.is_extracting:
+            return {"status": "error", "message": "已有一个扫描任务在运行中"}
+        
+        # 启动后台扫描任务
+        task.is_extracting = True
+        task.status = TaskStatus.EXTRACTING
+        asyncio.create_task(self._scan_messages_worker(task_id, full))
+        
+        mode_str = "全量" if full else "增量"
+        logger.info(f"任务 {task_id[:8]} 触发异步{mode_str}扫描")
+        return {"status": "initiated", "message": f"{mode_str}扫描任务已在后台启动"}
+
+    async def _scan_messages_worker(self, task_id: str, full: bool = False):
+        """后台扫描消息协程 (v1.6.7)"""
+        task = self.tasks.get(task_id)
+        if not task: return
+        
+        try:
+            options = task.options
+            # 使用任务名称作为导出路径
+            export_path = self._get_export_path(task)
+            export_path.mkdir(parents=True, exist_ok=True)
+            
+            # 获取要导出的聊天列表
+            chats = await self._get_chats_to_export(options)
+            task.total_chats = len(chats)
+            task.processed_chats = 0
+            await self._notify_progress(task_id, task)
+            
+            all_new_messages = []
+            
+            for chat in chats:
+                if task.status in [TaskStatus.CANCELLED, TaskStatus.PAUSED]:
+                    break
+                
+                logger.info(f"正在{'全量' if full else '增量'}扫描聊天: {chat.title} ({chat.id})")
+                
+                # 执行扫描 (如果 full=True，内部逻辑应受 task._force_full_scan 控制)
+                # 暂时通过临时属性传递全量信号给 _export_chat
+                task._force_full_scan = full
+                chat_messages, highest_id = await self._export_chat(task, chat, export_path)
+                all_new_messages.extend(chat_messages)
+                
+                # 更新增量扫描 ID
+                if highest_id > task.last_scanned_ids.get(chat.id, 0):
+                    task.last_scanned_ids[chat.id] = highest_id
+                    task.last_scanned_id = max(task.last_scanned_id, highest_id)
+                
+                task.processed_chats += 1
+                await self._notify_progress(task_id, task)
+            
+            # 扫描完成，如果有新消息，生成/更新导出文件
+            if all_new_messages and task.status not in [TaskStatus.CANCELLED, TaskStatus.PAUSED]:
+                from ..exporters import json_exporter, html_exporter
+                logger.info(f"扫描完成，发现 {len(all_new_messages)} 条新消息，正在更新导出文件...")
+                
+                if options.export_format in [ExportFormat.JSON, ExportFormat.BOTH]:
+                    # 注意：这里需要考虑是否要合并旧消息，目前简单处理
+                    await json_exporter.export(task, chats, all_new_messages, export_path)
+                
+                if options.export_format in [ExportFormat.HTML, ExportFormat.BOTH]:
+                    await html_exporter.export(task, chats, all_new_messages, export_path)
+            
+            logger.info(f"任务 {task_id[:8]} 扫描完成")
+            
+        except Exception as e:
+            logger.error(f"扫描任务出错: {e}", exc_info=True)
+            task.error = f"扫描出错: {str(e)}"
+        finally:
+            task.is_extracting = False
+            task._force_full_scan = False
+            # 如果扫描完还有媒体没下载，切换回 RUNNING 状态，否则设为 PAUSED/COMPLETED
+            if task.total_media > task.downloaded_media:
+                task.status = TaskStatus.RUNNING
+            else:
+                task.status = TaskStatus.COMPLETED
+                task.completed_at = datetime.now()
+            
+            self._save_tasks()
+            await self._notify_progress(task_id, task)
+
+    async def verify_integrity(self, task_id: str) -> Dict[str, Any]:
+        """纯本地完整性校验 (v1.6.7) - 不连网络"""
+        task = self.tasks.get(task_id)
+        if not task:
+            return {"status": "error", "message": "任务不存在"}
         
         if task.is_verifying:
             return {"status": "error", "message": "后台校验任务已在运行中"}
 
         # 标记正在校验并启动后台协程
         task.is_verifying = True
-        task.last_verify_result = "正在校验中..."
+        task.last_verify_result = "正在执行本地文件校验..."
         asyncio.create_task(self._verify_integrity_worker(task_id))
         
-        logger.info(f"任务 {task_id[:8]} 触发异步完整性校验")
-        return {"status": "initiated", "message": "校验任务已在后台启动，请留意进度更新"}
+        logger.info(f"任务 {task_id[:8]} 触发异步本地完整性校验")
+        return {"status": "initiated", "message": "本地校验任务已启动"}
 
     async def _verify_integrity_worker(self, task_id: str):
-        """后台校验协程逻辑 (v1.6.4)"""
+        """本地文件校验协程 (v1.6.7) - 移除了扫描逻辑"""
         task = self.tasks.get(task_id)
         if not task: return
         
-        logger.info(f"开始执行后台完整性校验 (Task: {task_id[:8]})")
-        
-        # 记录原始状态以便恢复
-        old_status = task.status
+        logger.info(f"开始执行纯本地完整性校验 (Task: {task_id[:8]})")
         
         try:
             options = task.options
             export_path = Path(options.export_path).expanduser()
             
-            # 1. 扫描阶段: 触发全量消息提取
-            task.status = TaskStatus.EXTRACTING
-            task.is_extracting = True
-            task._force_full_scan = True 
-            await self._notify_progress(task_id, task)
-            
-            # 获取要导出的聊天列表
-            chats = await self._get_chats_to_export(options)
-            task.total_chats = len(chats)
-            task.processed_chats = 0
-            
-            # 执行全量提取
-            for chat in chats:
-                if task.status in [TaskStatus.CANCELLED, TaskStatus.PAUSED]: 
-                    logger.info(f"校验任务被取消或暂停 (Task: {task_id[:8]})")
-                    break
-                
-                logger.debug(f"校验扫描 - 正在扫描聊天: {chat.title} ({chat.id})")
-                _, highest_id = await self._export_chat(task, chat, export_path)
-                
-                # 更新增量扫描 ID
-                if highest_id > task.last_scanned_ids.get(chat.id, 0):
-                    task.last_scanned_ids[chat.id] = highest_id
-                    
-                task.processed_chats += 1
-                await self._notify_progress(task_id, task)
-
-            task.is_extracting = False
-            task._force_full_scan = False
-            
-            if task.status == TaskStatus.CANCELLED:
-                task.is_verifying = False
-                return
-
-            # 2. 物理检查与文件名发现阶段
+            # 1. 物理检查与文件名发现阶段 (直接开始，不再进行 _export_chat 扫描)
             logger.info(f"扫描阶段完成，开始物理文件检查 (Task: {task_id[:8]})")
             
             # 统计

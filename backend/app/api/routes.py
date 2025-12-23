@@ -268,12 +268,30 @@ async def retry_all_failed(
     raise HTTPException(status_code=400, detail="没有失败的文件")
 
 
+@router.post("/export/{task_id}/scan")
+async def scan_messages(
+    task_id: str,
+    full: bool = False,
+    current_user: User = Depends(get_current_user)
+):
+    """扫描消息 (v1.6.7)
+    
+    Args:
+        task_id: 任务 ID
+        full: 是否全量扫描
+    """
+    result = await export_manager.scan_messages(task_id, full=full)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("message"))
+    return result
+
+
 @router.post("/export/{task_id}/verify")
 async def verify_integrity(
     task_id: str,
     current_user: User = Depends(get_current_user)
 ):
-    """批量完整性校验：对已完成的下载项执行文件大小验证 (异步触发)"""
+    """批量完整性校验：仅执行纯本地文件扫描 (v1.6.7)"""
     result = await export_manager.verify_integrity(task_id)
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("message"))

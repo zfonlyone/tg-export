@@ -222,24 +222,22 @@
         </p>
       </div>
       
-      <!-- 下载设置 -->
       <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border);">
         <h3 style="margin-bottom: 10px;">下载设置</h3>
-        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px;">
-          <div class="form-group">
-            <label class="form-label">并发下载数</label>
-            <input v-model.number="options.max_concurrent_downloads" type="number" class="form-input" min="1" max="10">
-            <p style="color: #666; font-size: 12px; margin-top: 4px;">Telegram 免费用户限制 10</p>
+        <div style="display: grid; grid-template-columns: 2fr 1.5fr; gap: 20px; align-items: flex-end;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+              <input type="checkbox" v-model="options.enable_parallel_chunk" style="width: 18px; height: 18px;">
+              <span style="font-weight: 600;">⚡ 启用并行分块下载 (实验性)</span>
+            </label>
+            <p style="color: #666; font-size: 12px; margin-top: 4px; margin-left: 26px;">
+              通过多连接极速下载大文件。注意：可能会增加被 Telegram 暂时限制的风险。
+            </p>
           </div>
-          <div class="form-group">
-            <label class="form-label">单文件分块数</label>
-            <input v-model.number="options.parallel_chunk_connections" type="number" class="form-input" min="1" max="8">
-            <p style="color: #666; font-size: 12px; margin-top: 4px;">推荐 4-8</p>
-          </div>
-          <div class="form-group">
-            <label class="form-label">速度限制 (KB/s)</label>
-            <input v-model.number="options.download_speed_limit" type="number" class="form-input" min="0" placeholder="0 = 无限制">
-            <p style="color: #666; font-size: 12px; margin-top: 4px;">0 = 不限速</p>
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label">最大并发下载数</label>
+            <input v-model.number="options.max_concurrent_downloads" type="number" class="form-input" min="1" max="20">
+            <p style="color: #666; font-size: 12px; margin-top: 4px;">建议范围: 5 - 10</p>
           </div>
         </div>
       </div>
@@ -375,7 +373,8 @@ const options = reactive({
   
   // 下载设置
   max_concurrent_downloads: 10,
-  parallel_chunk_connections: 4,
+  parallel_chunk_connections: 3,
+  enable_parallel_chunk: false,
   download_speed_limit: 0,
   
   // 消息过滤
