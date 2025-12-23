@@ -322,7 +322,7 @@ class ParallelChunkDownloader:
         """
         try:
             # 请求起始的 4KB 数据
-            await self.client.invoke(
+            await self.client.send(
                 raw.functions.upload.GetFile(
                     location=location,
                     offset=0,
@@ -356,7 +356,7 @@ class ParallelChunkDownloader:
         for attempt in range(retries):
             try:
                 # 调用 raw API，如果已知 DC 则显式指定 (v1.6.3)
-                result = await self.client.invoke(
+                result = await self.client.send(
                     raw.functions.upload.GetFile(
                         location=location,
                         offset=offset,

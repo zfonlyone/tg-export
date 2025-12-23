@@ -624,14 +624,18 @@ class ExportManager:
             
             # 2.1 遍历目录扫描未在 queue 中的文件 (自动发现)
             # 格式: {msg_id}-{chat_id}-{name}
+            # 兼容深度子目录 (chats/chat_xxx/photos/...)
             pattern = re.compile(r"^(\d+)-(\d+)-(.*)$")
-            task.current_scanning_chat = "正在磁盘扫描..."
+            task.current_scanning_chat = "正在深度扫描磁盘..."
             
-            # 预处理 queue 中的路径以避免重复检查
-            queued_paths = {item.file_path for item in task.download_queue if item.file_path}
+            # 记录所有已找到的文件相对路径，用于后续 queue 检查
+            found_relative_paths = set()
             
             file_check_count = 0
             for root, dirs, files in os.walk(export_path):
+                # 跳过 temp 目录，只扫正式目录
+                if "temp" in root: continue
+                
                 for file_name in files:
                     file_check_count += 1
                     match = pattern.match(file_name)
@@ -640,84 +644,83 @@ class ExportManager:
                     msg_id = int(match.group(1))
                     chat_id_abs = int(match.group(2))
                     
-                    # [v1.6.4] 更新发现进度
+                    # 更新发现进度
                     task.current_scanning_msg_id = msg_id
-                    if file_check_count % 50 == 0:
+                    if file_check_count % 100 == 0:
                         await self._notify_progress(task_id, task)
                         
-                    # 查找对应项
-                    target_item = None
-                    # Telegram 聊天 ID 通常是负数，尝试带负号的
+                    # 查找对应项 (尝试多种 chat_id 匹配方式)
                     target_item = task.get_download_item(msg_id, -chat_id_abs)
                     if not target_item:
-                        # 尝试正号 (部分私聊/特殊情况)
                         target_item = task.get_download_item(msg_id, chat_id_abs)
                         
                     if target_item:
                         full_path = Path(root) / file_name
                         relative_path = str(full_path.relative_to(export_path))
-                        
-                        # 如果已经在队列中且路径一致，由于是在 os.walk 中发现的，标记为已处理以防后续 queue 检查重复
-                        # (这里暂不标记，直接走逻辑)
+                        found_relative_paths.add(relative_path)
                         
                         try:
                             actual_size = full_path.stat().st_size
                         except: continue
                         
                         # 大小检查
-                        if target_item.file_size > 0 and actual_size != target_item.file_size:
-                            logger.warning(f"完整性校验: 发现文件大小不匹配: {file_name} (预期: {target_item.file_size}, 实际: {actual_size})")
-                            # 移动到 temp 以备 resume
-                            if await self._move_to_temp_for_resume(task, target_item, full_path):
-                                moved_for_resume += 1
-                            
-                            target_item.status = DownloadStatus.WAITING
-                            target_item.downloaded_size = 0
-                            target_item.progress = 0
-                            failed_count += 1
+                        if target_item.file_size > 0 and abs(actual_size - target_item.file_size) > 1024: # 允许 1KB 误差或不匹配
+                            if actual_size != target_item.file_size:
+                                logger.warning(f"校验不通过: {file_name} (预期: {target_item.file_size}, 实际: {actual_size})")
+                                if await self._move_to_temp_for_resume(task, target_item, full_path):
+                                    moved_for_resume += 1
+                                target_item.status = DownloadStatus.WAITING
+                                target_item.downloaded_size = 0
+                                target_item.progress = 0
+                                failed_count += 1
                         else:
-                            # 验证通过
+                            # 验证通过或文件一致
                             if target_item.status != DownloadStatus.COMPLETED:
-                                logger.info(f"完整性校验: 自动关联并恢复文件: {file_name}")
+                                logger.info(f"校验成功: 自动关联文件 {file_name}")
                                 target_item.status = DownloadStatus.COMPLETED
-                                target_item.downloaded_size = target_item.file_size
+                                target_item.downloaded_size = target_item.file_size if target_item.file_size > 0 else actual_size
                                 target_item.progress = 100.0
                                 target_item.file_path = relative_path
                                 discovered_count += 1
                             passed_count += 1
 
-            # 2.2 检查 Queue 中原有项的物理丢失情况 (针对刚才 walk 没扫到的路径)
+            # 2.2 检查 Queue 中原有项的物理丢失情况 (针对刚才 walk 没扫到的特定路径)
             for item in task.download_queue:
+                if not item.file_path: continue
+                
+                # 如果刚才 walk 已经扫到了这个路径，跳过
+                if item.file_path in found_relative_paths: continue
+                
                 full_path = export_path / item.file_path
                 if not full_path.exists():
                     if item.status == DownloadStatus.COMPLETED:
-                        logger.warning(f"完整性校验: 已完成文件物理丢失, 重置为等待: {item.file_name}")
+                        logger.warning(f"校验失败: 文件物理丢失 {item.file_name}")
                         item.status = DownloadStatus.WAITING
                         item.downloaded_size = 0
                         item.progress = 0
                         missing_count += 1
                 else:
-                    # 如果刚才 walk 没扫到(路径不服从正则)，但文件确实在，也补一下状态
-                    if item.status not in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
-                        try:
-                            actual_size = full_path.stat().st_size
-                            if item.file_size > 0 and actual_size == item.file_size:
+                    # 如果刚才 walk 没扫到 (可能文件名不符合正则)，但路径存在且大小一致，也补一下状态
+                    try:
+                        actual_size = full_path.stat().st_size
+                        if item.file_size > 0 and actual_size == item.file_size:
+                            if item.status != DownloadStatus.COMPLETED:
                                 item.status = DownloadStatus.COMPLETED
                                 item.downloaded_size = item.file_size
                                 item.progress = 100.0
                                 recovered_count += 1
-                            elif item.file_size > 0:
-                                # 之前可能没扫到正则，但路径在 queue 里，且大小不一致
-                                if await self._move_to_temp_for_resume(task, item, full_path):
-                                    moved_for_resume += 1
-                                item.status = DownloadStatus.WAITING
-                                item.downloaded_size = 0
-                                item.progress = 0
-                        except: pass
+                        elif item.file_size > 0:
+                            # 大小不一致
+                            if await self._move_to_temp_for_resume(task, item, full_path):
+                                moved_for_resume += 1
+                            item.status = DownloadStatus.WAITING
+                            item.downloaded_size = 0
+                            item.progress = 0
+                    except: pass
             
             # 更新统计
             self._update_task_stats(task)
-            task.last_verify_result = f"校验完成: 恢复/发现 {discovered_count + recovered_count} 个, 修复物理丢失 {missing_count} 个, 移动 {moved_for_resume} 个文件到缓存以备断点续传"
+            task.last_verify_result = f"校验完成: 关联 {discovered_count} 个, 物理恢复 {recovered_count} 个, 缺失/修复 {missing_count + failed_count} 个"
             logger.info(f"任务 {task_id[:8]} 校验完成: {task.last_verify_result}")
             
         except Exception as e:
