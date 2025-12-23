@@ -119,7 +119,7 @@ class ExportManager:
         """后台自动保存循环"""
         while True:
             try:
-                await asyncio.sleep(10)  # 每 10 秒检查一次
+                await asyncio.sleep(60)  # 每 60 秒检查一次 (v1.6.4 优化频率)
                 if self._needs_save:
                     await self._save_tasks_async()
             except Exception as e:
@@ -175,7 +175,6 @@ class ExportManager:
                 
                 await asyncio.get_event_loop().run_in_executor(None, save)
                 self._needs_save = False
-                logger.debug("任务列表已自动保存")
             except Exception as e:
                 logger.error(f"异步保存任务失败: {e}")
     
@@ -1902,6 +1901,27 @@ class ExportManager:
     def _update_download_progress(self, task: ExportTask, current: int):
         """更新下载进度"""
         task.downloaded_size = current
+
+    def _update_task_stats(self, task: ExportTask):
+        """更新任务统计信息 (下载数和大小) (v1.6.4)"""
+        downloaded_count = 0
+        downloaded_size = 0
+        total_media = 0
+        total_size = 0
+        
+        for item in task.download_queue:
+            total_media += 1
+            total_size += item.file_size
+            if item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
+                downloaded_count += 1
+                downloaded_size += item.file_size
+            elif item.status == DownloadStatus.DOWNLOADING:
+                downloaded_size += getattr(item, 'downloaded_size', 0)
+                
+        task.downloaded_media = downloaded_count
+        task.downloaded_size = downloaded_size
+        task.total_media = total_media
+        task.total_size = total_size
 
 
 # 全局导出管理器
