@@ -1111,16 +1111,20 @@ class ExportManager:
                     priority_item.resume_timestamp = 0  # 清除时间戳，避免重复选择
                     logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P1] 执行用户刚恢复的任务: {priority_item.file_name}")
                 
-                # P2: 查找所有 WAITING 状态的任务
+                # P2: 查找所有 WAITING 状态的任务，按 message_id 从小到大排序
                 if not priority_item:
-                    for candidate in task.download_queue:
-                        # [FIX] 额外检查 is_manually_paused，避免不一致状态
+                    # 收集所有符合条件的候选项
+                    waiting_candidates = [
+                        candidate for candidate in task.download_queue
                         if (candidate.status == DownloadStatus.WAITING 
                             and not candidate.is_manually_paused
-                            and candidate.id not in self._item_to_worker.get(task.id, {})):
-                            priority_item = candidate
-                            logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P2] 执行等待中的任务: {candidate.file_name}")
-                            break
+                            and candidate.id not in self._item_to_worker.get(task.id, {}))
+                    ]
+                    # 按 message_id 升序排序，选择最小的
+                    if waiting_candidates:
+                        waiting_candidates.sort(key=lambda x: x.message_id)
+                        priority_item = waiting_candidates[0]
+                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} [P2] 执行等待中的任务 (msg#{priority_item.message_id}): {priority_item.file_name}")
                 
                 # 注意: 程序自动暂停的任务(如限速触发)在限制解除前不会被自动恢复
                 # 需要等待限速冷却结束或用户手动恢复
@@ -1150,13 +1154,20 @@ class ExportManager:
                     self._item_to_worker[task.id][item.id] = asyncio.current_task()
 
                 # 3. [Adaptive Concurrency] 检查当前并发槽位是否允许继续执行 (公平竞争)
+                waiting_logged = False
                 while True:
                     # 统计当前正在下载的项 (通过映射表判断)
-                    # 注意：由于我们在选择项目后立即注册，所以 active_count 已经包含自己
-                    # 因此使用 <= 而不是 < 进行比较
                     active_count = len(self._item_to_worker.get(task.id, {}))
-                    if active_count <= (task.current_max_concurrent_downloads or 1):
+                    max_concurrent = task.current_max_concurrent_downloads or 1
+                    
+                    if active_count <= max_concurrent:
+                        if waiting_logged:
+                            logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 获得槽位 (当前活跃: {active_count}/{max_concurrent})")
                         break
+                    
+                    if not waiting_logged:
+                        logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 等待下载槽位... (当前活跃: {active_count}/{max_concurrent})")
+                        waiting_logged = True
                     
                     # 如果在等待期间任务被取消、全局暂停，或者项目被手动暂停，则跳过
                     if task.status == TaskStatus.CANCELLED:

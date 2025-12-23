@@ -25,7 +25,6 @@ class ChunkInfo:
     index: int
     offset: int
     limit: int
-    data: bytes = b""
     downloaded: bool = False
     error: Optional[str] = None
 
@@ -108,51 +107,77 @@ class ParallelChunkDownloader:
             chunks = self._calculate_chunks(file_size)
             logger.info(f"文件分割为 {len(chunks)} 个块")
             
-            # 3. 并发下载所有块
-            total_downloaded = [0]  # 使用列表实现闭包可变
-            start_time = time.time()
+            # 3. 准备目标文件 (预分配空间，确保非阻塞)
+            import aiofiles
+            file_path.parent.mkdir(parents=True, exist_ok=True)
             
-            async def download_chunk_with_progress(chunk: ChunkInfo):
-                """带进度追踪的分块下载"""
+            # 创建写锁，保护 seek/write 操作
+            write_lock = asyncio.Lock()
+            
+            # 4. 并发下载与流式写入
+            total_downloaded = [0]
+            start_time = time.time()
+            chunk_count = len(chunks)
+            last_log_percent = 0
+            
+            async def download_and_write_chunk(chunk: ChunkInfo, f_handle):
+                """下载分块并立即写入文件"""
                 try:
                     async with self._download_semaphore:
-                        # 检查是否需要取消
                         if cancel_check and cancel_check():
                             chunk.error = "已取消"
                             return
                         
-                        chunk.data = await self._download_chunk(location, chunk.offset, chunk.limit)
-                        chunk.downloaded = True
+                        # 下载数据
+                        data = await self._download_chunk(location, chunk.offset, chunk.limit)
                         
-                        # 更新总进度
-                        total_downloaded[0] += len(chunk.data)
+                        # 立即写入文件 (内存安全：写完即丢弃 data)
+                        async with write_lock:
+                            await f_handle.seek(chunk.offset)
+                            await f_handle.write(data)
+                        
+                        chunk.downloaded = True
+                        # 释放内存
+                        del data
+                        
+                        # 更新进度
+                        total_downloaded[0] += chunk.limit
+                        percent = (total_downloaded[0] / file_size) * 100
+                        
+                        # 每 20% 记录一次日志，避免日志刷屏
+                        nonlocal last_log_percent
+                        if percent >= last_log_percent + 20:
+                            logger.info(f"并行下载进度: {percent:.1f}% ({total_downloaded[0]}/{file_size})")
+                            last_log_percent = int(percent // 20) * 20
+
                         if progress_callback:
                             progress_callback(total_downloaded[0], file_size)
                             
                 except FloodWait as e:
-                    logger.warning(f"分块 #{chunk.index} 触发限速，等待 {e.value} 秒")
+                    logger.warning(f"分块 #{chunk.index} (offset={chunk.offset}) 触发限速，等待 {e.value} 秒")
                     chunk.error = f"FloodWait: {e.value}s"
                     raise
                 except Exception as e:
-                    logger.error(f"分块 #{chunk.index} 下载失败: {e}")
+                    logger.error(f"分块 #{chunk.index} (offset={chunk.offset}) 下载失败: {e}")
                     chunk.error = str(e)
                     raise
+
             
-            # 并发下载
-            tasks = [download_chunk_with_progress(chunk) for chunk in chunks]
-            await asyncio.gather(*tasks, return_exceptions=True)
+            # 使用 r+b 模式打开文件并行写入
+            # 先创建空文件并设置大小
+            async with aiofiles.open(file_path, 'wb') as f:
+                pass
             
-            # 4. 检查是否所有块都下载成功
+            async with aiofiles.open(file_path, 'r+b') as f:
+                # 并发任务
+                tasks = [download_and_write_chunk(chunk, f) for chunk in chunks]
+                await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 5. 检查结果
             failed_chunks = [c for c in chunks if not c.downloaded]
             if failed_chunks:
                 errors = [f"块{c.index}: {c.error}" for c in failed_chunks[:3]]
                 return False, f"部分分块下载失败: {'; '.join(errors)}"
-            
-            # 5. 合并写入磁盘
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(file_path, 'wb') as f:
-                for chunk in sorted(chunks, key=lambda c: c.index):
-                    f.write(chunk.data)
             
             elapsed = time.time() - start_time
             speed = file_size / elapsed / 1024 / 1024 if elapsed > 0 else 0
@@ -165,6 +190,7 @@ class ParallelChunkDownloader:
         except Exception as e:
             logger.exception(f"并行下载失败: {e}")
             return False, str(e)
+
     
     async def _get_file_location(self, message: Message) -> Optional[Any]:
         """
@@ -300,8 +326,13 @@ class ParallelChunkDownloader:
             logger.error(f"文件引用过期: {e}")
             raise
         except Exception as e:
-            logger.error(f"下载块失败 (offset={offset}, limit={limit}): {e}")
+            err_str = str(e)
+            if "FILE_MIGRATE_" in err_str:
+                logger.warning(f"检测到 DC 迁移错误: {err_str}。分块下载将触发重试或回退。")
+            else:
+                logger.error(f"下载块失败 (offset={offset}, limit={limit}): {e}")
             raise
+
 
 
 # 便捷函数：创建下载器并执行下载

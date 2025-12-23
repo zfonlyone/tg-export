@@ -4,7 +4,7 @@ TG Export - 数据模型
 from datetime import datetime
 from enum import Enum
 from typing import Optional, List
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 
 class ChatType(str, Enum):
@@ -142,6 +142,19 @@ class ExportOptions(BaseModel):
     # 消息过滤 (skip=跳过指定消息, specify=只下载指定消息)
     filter_mode: str = "none"            # none/skip/specify
     filter_messages: List[int] = Field(default_factory=list)  # 过滤的消息 ID 列表
+
+    @field_validator("export_path")
+    @classmethod
+    def validate_export_path(cls, v: str) -> str:
+        """验证导出路径安全性，防止路径遍历"""
+        if ".." in v:
+            raise ValueError("路径中不能包含 '..'")
+        if not v.startswith("/downloads"):
+            # 强制要求在 downloads 目录下
+            if v.startswith("/"):
+                return f"/downloads{v}"
+            return f"/downloads/{v}"
+        return v
 
 
 class ChatInfo(BaseModel):
