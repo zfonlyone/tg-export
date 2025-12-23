@@ -40,24 +40,6 @@
         </div>
       </div>
       
-      <!-- 运行时并发控制 (v1.6.7) -->
-      <div class="concurrency-management">
-        <div class="control-group">
-          <label>最大并发</label>
-          <div class="stepper">
-            <button @click="adjustConcurrency('max', -1)" :disabled="concurrency.max <= 1">−</button>
-            <span class="value">{{ concurrency.max }}</span>
-            <button @click="adjustConcurrency('max', 1)" :disabled="concurrency.max >= 20">+</button>
-          </div>
-        </div>
-        <div class="control-group toggle-group">
-          <label class="toggle-label">
-            <input type="checkbox" v-model="concurrency.enableParallel" @change="toggleParallel">
-            <span>⚡ 并行分块</span>
-          </label>
-        </div>
-      </div>
-      
       <div class="button-group main-actions">
         <button v-if="['running', 'extracting'].includes(task.status)" @click="pauseTask" class="btn-premium warning sm">⏸ 暂停任务</button>
         <button v-if="task.status === 'paused'" @click="resumeTask" class="btn-premium success sm">▶ 恢复任务</button>
@@ -103,12 +85,18 @@
           <div class="active-task-info" v-if="stats.current_concurrency">
              🚦 {{stats.current_concurrency}} 并发 / {{stats.active_threads}} 线程
           </div>
-          <button @click="batchDownloadWithTDL" class="btn-premium info sm" title="使用 TDL 批量下载失败的文件">🚀 TDL 下载</button>
+          
+          <!-- TDL 下载模式开关 -->
+          <label class="tdl-mode-toggle" :class="{ active: tdlMode }">
+            <input type="checkbox" v-model="tdlMode" @change="toggleTDLMode">
+            <span class="toggle-icon">🚀</span>
+            <span class="toggle-label-text">TDL</span>
+          </label>
+          
           <button @click="toggleSort" class="btn-premium ghost sm sort-btn" :title="reversedOrder ? '当前为倒序' : '当前为正序'">
             {{ reversedOrder ? '⇅ 倒序' : '⇅ 正序' }}
           </button>
-          <div class="v-divider"></div>
-          <button @click="toggleViewAll" class="btn-premium ghost sm">{{ viewAll ? '显示精简' : '查看全部' }}</button>
+          <button @click="toggleViewAll" class="btn-premium ghost sm">{{ viewAll ? '精简' : '全部' }}</button>
         </div>
       </div>
 
@@ -146,9 +134,6 @@
             <!-- 失败或已完成：重试 -->
             <button v-if="['failed', 'completed', 'skipped'].includes(item.status)" @click="retryItem(item.id)" class="action-btn-circle" title="重试/重新下载">🔄</button>
             
-            <!-- TDL 下载按钮 -->
-            <button @click="downloadWithTDL(item)" class="action-btn-circle tdl" title="使用 TDL 下载">🚀</button>
-            
             <!-- 通用：取消/跳过 -->
             <button @click="cancelItem(item.id)" class="action-btn-circle danger" title="取消/跳过">✖</button>
           </div>
@@ -184,6 +169,7 @@ const currentTab = ref('active')
 const viewAll = ref(false)
 const reversedOrder = ref(false)
 const concurrency = ref({ max: 10, enableParallel: false })  // 并发控制状态
+const tdlMode = ref(false)  // TDL 下载模式开关
 let refreshTimer = null
 
 function getAuthHeader() {
@@ -341,54 +327,102 @@ async function verifyIntegrity() {
   }
 }
 
-// TDL 下载功能
-async function downloadWithTDL(item) {
+// TDL 下载模式切换
+async function toggleTDLMode() {
   try {
-    const res = await axios.post('/api/tdl/download-by-message', null, {
-      params: {
-        chat_id: item.chat_id,
-        message_id: item.message_id,
-        output_dir: task.value.options?.export_path || '/downloads'
-      },
-      headers: getAuthHeader()
-    })
-    if (res.data.success) {
-      alert(`✅ TDL 下载已启动: ${item.file_name}`)
+    if (tdlMode.value) {
+      // 开启 TDL 模式 - 检查容器并启动下载
+      const statusRes = await axios.get('/api/tdl/status', { headers: getAuthHeader() })
+      if (!statusRes.data.container_running) {
+        alert('⚠️ TDL 容器未运行，请先启动 TDL 容器')
+        tdlMode.value = false
+        return
+      }
+      
+      // 启动 TDL 下载
+      const result = await axios.post(`/api/export/${taskId}/tdl-start`, null, {
+        headers: getAuthHeader()
+      })
+      
+      if (result.data.success) {
+        console.log('TDL 下载已启动:', result.data.message)
+        // 开始轮询 TDL 进度
+        startTDLProgressPolling()
+      } else {
+        alert(result.data.message || 'TDL 启动失败')
+        tdlMode.value = false
+      }
     } else {
-      alert('❌ TDL 下载失败: ' + res.data.error)
+      // 关闭 TDL 模式 - 取消 TDL 下载
+      await axios.post(`/api/export/${taskId}/tdl-cancel`, null, {
+        headers: getAuthHeader()
+      })
+      stopTDLProgressPolling()
     }
   } catch (err) {
-    alert('TDL 下载失败: ' + (err.response?.data?.detail || err.message))
+    console.error('TDL 模式切换失败:', err)
+    tdlMode.value = false
+    alert('TDL 操作失败: ' + (err.response?.data?.detail || err.message))
   }
 }
 
-async function batchDownloadWithTDL() {
-  // 获取失败的文件列表
-  const failedItems = queue.value.failed || []
-  if (failedItems.length === 0) {
-    alert('没有失败的文件需要下载')
-    return
-  }
+let tdlProgressTimer = null
+
+function startTDLProgressPolling() {
+  if (tdlProgressTimer) return
   
-  if (!confirm(`确定使用 TDL 下载 ${failedItems.length} 个失败的文件？`)) {
-    return
-  }
-  
-  try {
-    const itemIds = failedItems.map(item => item.id)
-    const res = await axios.post('/api/tdl/download-from-task', {
-      task_id: taskId,
-      item_ids: itemIds
-    }, { headers: getAuthHeader() })
-    
-    if (res.data.success) {
-      alert(`✅ TDL 批量下载已启动: ${res.data.found} 个文件`)
-    } else {
-      alert('❌ TDL 批量下载失败: ' + res.data.error)
+  tdlProgressTimer = setInterval(async () => {
+    try {
+      const res = await axios.get(`/api/export/${taskId}/tdl-progress`, { 
+        headers: getAuthHeader() 
+      })
+      
+      if (res.data && res.data.items) {
+        // 更新下载队列中的进度
+        for (const tdlItem of res.data.items) {
+          const queueItem = findQueueItem(tdlItem.id)
+          if (queueItem) {
+            queueItem.downloaded_size = tdlItem.downloaded_size
+            queueItem.progress = tdlItem.progress
+            // 同步状态
+            if (tdlItem.status === 'completed') {
+              queueItem.status = 'completed'
+            } else if (tdlItem.status === 'failed') {
+              queueItem.status = 'failed'
+            } else if (tdlItem.status === 'running') {
+              queueItem.status = 'downloading'
+            }
+          }
+        }
+        
+        // 检查是否全部完成
+        if (res.data.status === 'completed') {
+          stopTDLProgressPolling()
+          tdlMode.value = false
+          alert('✅ TDL 下载完成')
+        }
+      }
+    } catch (err) {
+      console.error('获取 TDL 进度失败:', err)
     }
-  } catch (err) {
-    alert('TDL 批量下载失败: ' + (err.response?.data?.detail || err.message))
+  }, 1500)
+}
+
+function stopTDLProgressPolling() {
+  if (tdlProgressTimer) {
+    clearInterval(tdlProgressTimer)
+    tdlProgressTimer = null
   }
+}
+
+function findQueueItem(itemId) {
+  const allItems = [
+    ...queue.value.downloading,
+    ...queue.value.waiting,
+    ...queue.value.failed,
+    ...queue.value.completed
+  ]
+  return allItems.find(item => item.id === itemId)
 }
 
 function formatSize(bytes) {
@@ -425,7 +459,10 @@ onMounted(() => {
   refreshTimer = setInterval(fetchData, 2000)
 })
 
-onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
+onUnmounted(() => { 
+  if (refreshTimer) clearInterval(refreshTimer)
+  stopTDLProgressPolling()
+})
 </script>
 
 <style scoped>
@@ -828,8 +865,29 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
 .action-btn-circle.warning:hover { border-color: #f59e0b; color: #f59e0b; background: #fffbeb; }
 .action-btn-circle.success:hover { border-color: #22c55e; color: #22c55e; background: #f0fdf4; }
 .action-btn-circle.danger:hover { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
-.action-btn-circle.tdl { border-color: #8b5cf6; color: #8b5cf6; }
-.action-btn-circle.tdl:hover { background: #f5f3ff; border-color: #7c3aed; color: #7c3aed; }
+
+/* TDL 模式开关 */
+.tdl-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: all 0.2s;
+  margin-right: 8px;
+}
+.tdl-mode-toggle input { display: none; }
+.tdl-mode-toggle .toggle-icon { font-size: 0.9rem; }
+.tdl-mode-toggle .toggle-label-text { font-size: 0.75rem; font-weight: 700; color: #64748b; }
+.tdl-mode-toggle:hover { background: #e2e8f0; }
+.tdl-mode-toggle.active {
+  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  border-color: #7c3aed;
+}
+.tdl-mode-toggle.active .toggle-label-text { color: white; }
 
 /* 扫描状态迷你条 (v1.6.4) */
 .scanning-status-mini {

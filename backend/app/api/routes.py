@@ -569,3 +569,97 @@ async def tdl_download_from_task(
         "output": result.get("output"),
         "error": result.get("error")
     }
+
+
+@router.post("/export/{task_id}/tdl-mode")
+async def set_tdl_mode(
+    task_id: str,
+    enabled: bool,
+    current_user: User = Depends(get_current_user)
+):
+    """设置任务的 TDL 下载模式
+    
+    开启后，该任务的所有下载将使用 TDL 进行
+    """
+    task = export_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    # 检查 TDL 是否可用
+    if enabled:
+        status = tdl_integration.get_status()
+        if not status.get("container_running"):
+            raise HTTPException(status_code=400, detail="TDL 容器未运行")
+    
+    # 保存 TDL 模式状态到任务 (可扩展到 ExportOptions)
+    # 目前仅作为前端状态使用
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "tdl_mode": enabled,
+        "message": f"TDL 模式已{'启用' if enabled else '禁用'}"
+    }
+
+
+@router.post("/export/{task_id}/tdl-start")
+async def start_tdl_download(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """启动 TDL 批量下载任务
+    
+    将任务中所有待下载的文件交给 TDL 处理
+    """
+    task = export_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    # 获取待下载的项
+    pending_items = [
+        {
+            "id": item.id,
+            "url": tdl_integration.generate_telegram_link(item.chat_id, item.message_id),
+            "file_name": item.file_name,
+            "file_size": item.file_size
+        }
+        for item in task.download_queue
+        if item.status.value in ["waiting", "failed"]
+    ]
+    
+    if not pending_items:
+        return {"success": False, "message": "没有待下载的文件"}
+    
+    # 从任务选项获取下载参数
+    result = await tdl_integration.start_batch_download(
+        task_id=task_id,
+        items=pending_items,
+        output_dir=task.options.export_path,
+        threads=task.options.download_threads,
+        limit=task.options.max_concurrent_downloads
+    )
+    
+    return result
+
+
+@router.get("/export/{task_id}/tdl-progress")
+async def get_tdl_progress(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """获取 TDL 下载进度"""
+    status = tdl_integration.get_batch_task_status(task_id)
+    if not status:
+        return {"success": False, "message": "未找到 TDL 任务"}
+    return status
+
+
+@router.post("/export/{task_id}/tdl-cancel")
+async def cancel_tdl_download(
+    task_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """取消 TDL 下载任务"""
+    success = await tdl_integration.cancel_batch_task(task_id)
+    if success:
+        return {"success": True, "message": "TDL 任务已取消"}
+    return {"success": False, "message": "未找到 TDL 任务或取消失败"}
