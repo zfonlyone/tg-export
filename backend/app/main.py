@@ -20,8 +20,12 @@ log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / "tg-export.log"
 
 # 配置根logger
+log_level = logging.INFO
+if hasattr(settings, "LOG_LEVEL"):
+    log_level = getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO)
+
 logging.basicConfig(
-    level=logging.INFO,
+    level=log_level,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         # 控制台输出

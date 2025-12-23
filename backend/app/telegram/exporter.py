@@ -3,10 +3,13 @@ TG Export - 导出器核心
 处理消息导出逻辑
 """
 import asyncio
+import os
 import json
 import uuid
 import time
 import logging
+import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Callable, Any, Tuple
@@ -483,145 +486,204 @@ class ExportManager:
         
         return False
     async def verify_integrity(self, task_id: str) -> Dict[str, Any]:
-        """完整性校验: [重要] v1.6.3 唯一触发全量扫描的地方"""
-        import os
-        import shutil
-        import time
-        from pathlib import Path
-        from ..config import settings
-        
+        """完整性校验 (异步触发接口) (v1.6.4)"""
         task = self.tasks.get(task_id)
         if not task:
             return {"status": "error", "message": "任务不存在"}
         
-        # 记录原始状态以便恢复
-        old_status = task.status
         if task.status == TaskStatus.RUNNING:
              return {"status": "error", "message": "任务正在运行中，请先暂停后再校验"}
+        
+        if task.is_verifying:
+            return {"status": "error", "message": "后台校验任务已在运行中"}
 
-        # 1. 扫描阶段: 触发全量消息提取
-        task.status = TaskStatus.EXTRACTING
-        task.is_extracting = True
-        # 强制全量扫描标记 (内部使用)
-        task._force_full_scan = True 
-        await self._notify_progress(task_id, task)
+        # 标记正在校验并启动后台协程
+        task.is_verifying = True
+        task.last_verify_result = "正在校验中..."
+        asyncio.create_task(self._verify_integrity_worker(task_id))
+        
+        logger.info(f"任务 {task_id[:8]} 触发异步完整性校验")
+        return {"status": "initiated", "message": "校验任务已在后台启动，请留意进度更新"}
+
+    async def _verify_integrity_worker(self, task_id: str):
+        """后台校验协程逻辑 (v1.6.4)"""
+        task = self.tasks.get(task_id)
+        if not task: return
+        
+        logger.info(f"开始执行后台完整性校验 (Task: {task_id[:8]})")
+        
+        # 记录原始状态以便恢复
+        old_status = task.status
         
         try:
             options = task.options
             export_path = Path(options.export_path).expanduser()
+            
+            # 1. 扫描阶段: 触发全量消息提取
+            task.status = TaskStatus.EXTRACTING
+            task.is_extracting = True
+            task._force_full_scan = True 
+            await self._notify_progress(task_id, task)
             
             # 获取要导出的聊天列表
             chats = await self._get_chats_to_export(options)
             task.total_chats = len(chats)
             task.processed_chats = 0
             
-            # 执行全量提取 (这会补全可能缺失的消息到 download_queue)
+            # 执行全量提取
             for chat in chats:
-                if task.status == TaskStatus.CANCELLED: break
-                # 显式执行扫描
+                if task.status in [TaskStatus.CANCELLED, TaskStatus.PAUSED]: 
+                    logger.info(f"校验任务被取消或暂停 (Task: {task_id[:8]})")
+                    break
+                
+                logger.debug(f"校验扫描 - 正在扫描聊天: {chat.title} ({chat.id})")
                 _, highest_id = await self._export_chat(task, chat, export_path)
-                # 同时更新下最新 ID
+                
+                # 更新增量扫描 ID
                 if highest_id > task.last_scanned_ids.get(chat.id, 0):
                     task.last_scanned_ids[chat.id] = highest_id
+                    
                 task.processed_chats += 1
                 await self._notify_progress(task_id, task)
-                
-        except Exception as e:
-            logger.error(f"完整性校验扫描阶段出错: {e}")
-            task._force_full_scan = False
-            task.status = old_status
-            return {"status": "error", "message": f"扫描失败: {e}"}
-        
-        task._force_full_scan = False
-        task.is_extracting = False
-        task.status = TaskStatus.RUNNING # 临时设为 RUNNING 进行物理检查
-        await self._notify_progress(task_id, task)
 
-        # 2. 物理检查阶段
-        temp_dir = settings.TEMP_DIR / "mismatched"
-        temp_dir.mkdir(parents=True, exist_ok=True)
-        
-        passed_count = 0
-        failed_count = 0 # 对应大小不匹配
-        missing_count = 0 # 对应物理丢失
-        recovered_count = 0 
-        
-        # 遍历队列中的所有项进行校验
-        for item in task.download_queue:
-            full_path = export_path / item.file_path
+            task.is_extracting = False
+            task._force_full_scan = False
             
-            # [CASE 1] 文件不存在
-            if not full_path.exists():
-                if item.status == DownloadStatus.COMPLETED:
-                    # [v1.6.2] 已完成但文件物理丢失 -> 设为等待，重新触发下载 (1.6.3 修正：既然是完整性校验，物理丢失应重下)
-                    logger.warning(f"完整性校验: 已完成文件物理丢失, 设为等待重下: {item.file_name}")
-                    item.status = DownloadStatus.WAITING
-                    item.downloaded_size = 0
-                    item.progress = 0
-                    missing_count += 1
-                elif item.status == DownloadStatus.SKIPPED:
-                    # 如果是跳过的，保持跳过
-                    pass
-                continue
+            if task.status == TaskStatus.CANCELLED:
+                task.is_verifying = False
+                return
+
+            # 2. 物理检查与文件名发现阶段
+            logger.info(f"扫描阶段完成，开始物理文件检查 (Task: {task_id[:8]})")
             
-            # [CASE 2] 文件存在
-            try:
-                actual_size = os.path.getsize(full_path)
-            except Exception as e:
-                logger.error(f"无法读取文件大小 {item.file_name}: {e}")
-                continue
+            # 统计
+            passed_count = 0
+            failed_count = 0 
+            missing_count = 0
+            recovered_count = 0
+            discovered_count = 0
+            moved_for_resume = 0
             
-            if item.file_size > 0 and actual_size != item.file_size:
-                # [v1.6.2] 大小不匹配 -> 移动到临时目录并重置为 WAITING
-                logger.error(f"完整性校验失败: {item.file_name} 预期: {item.file_size}, 实际: {actual_size}")
-                
-                # 移动到临时目录
-                timestamp = int(time.time())
-                item_temp_path = temp_dir / f"{timestamp}_{item.message_id}_{item.file_name}"
-                try:
-                    shutil.move(str(full_path), str(item_temp_path))
-                    logger.info(f"已将损坏文件移动到临时目录: {item_temp_path}")
-                except Exception as e:
-                    logger.error(f"移动文件失败: {e}")
-                    try: os.remove(full_path) 
-                    except: pass
+            # 2.1 遍历目录扫描未在 queue 中的文件 (自动发现)
+            # 格式: {msg_id}-{chat_id}-{name}
+            pattern = re.compile(r"^(\d+)-(\d+)-(.*)$")
+            
+            # 预处理 queue 中的路径以避免重复检查
+            queued_paths = {item.file_path for item in task.download_queue if item.file_path}
+            
+            for root, dirs, files in os.walk(export_path):
+                for file_name in files:
+                    match = pattern.match(file_name)
+                    if not match: continue
                     
-                # 重置为等待重新下载
-                item.status = DownloadStatus.WAITING
-                item.downloaded_size = 0
-                item.progress = 0
-                item.error = f"文件校验失败: 预期 {item.file_size}，实际 {actual_size} (已移动并重置)"
-                failed_count += 1
-            else:
-                # 大小匹配 -> 记录为完成
-                if item.status != DownloadStatus.COMPLETED and item.status != DownloadStatus.SKIPPED:
-                    recovered_count += 1
-                    logger.info(f"完整性校验: 自动恢复磁盘上已存在的文件: {item.file_name}")
-                
-                item.status = DownloadStatus.COMPLETED
-                item.downloaded_size = actual_size
-                item.progress = 100.0
-                passed_count += 1
-                
-        # 更新任务统计
-        self._update_task_stats(task)
-        task.status = TaskStatus.PAUSED # 校验完保持暂停
-        self._save_tasks()
-        
-        message = (f"校验完成: 通过 {passed_count}, 恢复 {recovered_count}, "
-                  f"重置(损坏/缺失) {failed_count + missing_count}")
-        logger.info(f"任务 {task_id[:8]}: {message}")
-        
-        await self._notify_progress(task_id, task)
-        
-        return {
-            "status": "success",
-            "message": message,
-            "passed": passed_count,
-            "recovered": recovered_count,
-            "failed": failed_count,
-            "missing": missing_count
-        }
+                    msg_id = int(match.group(1))
+                    chat_id_abs = int(match.group(2))
+                    
+                    # 查找对应项
+                    target_item = None
+                    # Telegram 聊天 ID 通常是负数，尝试带负号的
+                    target_item = task.get_download_item(msg_id, -chat_id_abs)
+                    if not target_item:
+                        # 尝试正号 (部分私聊/特殊情况)
+                        target_item = task.get_download_item(msg_id, chat_id_abs)
+                        
+                    if target_item:
+                        full_path = Path(root) / file_name
+                        relative_path = str(full_path.relative_to(export_path))
+                        
+                        # 如果已经在队列中且路径一致，由于是在 os.walk 中发现的，标记为已处理以防后续 queue 检查重复
+                        # (这里暂不标记，直接走逻辑)
+                        
+                        try:
+                            actual_size = full_path.stat().st_size
+                        except: continue
+                        
+                        # 大小检查
+                        if target_item.file_size > 0 and actual_size != target_item.file_size:
+                            logger.warning(f"完整性校验: 发现文件大小不匹配: {file_name} (预期: {target_item.file_size}, 实际: {actual_size})")
+                            # 移动到 temp 以备 resume
+                            if await self._move_to_temp_for_resume(task, target_item, full_path):
+                                moved_for_resume += 1
+                            
+                            target_item.status = DownloadStatus.WAITING
+                            target_item.downloaded_size = 0
+                            target_item.progress = 0
+                            failed_count += 1
+                        else:
+                            # 验证通过
+                            if target_item.status != DownloadStatus.COMPLETED:
+                                logger.info(f"完整性校验: 自动关联并恢复文件: {file_name}")
+                                target_item.status = DownloadStatus.COMPLETED
+                                target_item.downloaded_size = target_item.file_size
+                                target_item.progress = 100.0
+                                target_item.file_path = relative_path
+                                discovered_count += 1
+                            passed_count += 1
+
+            # 2.2 检查 Queue 中原有项的物理丢失情况 (针对刚才 walk 没扫到的路径)
+            for item in task.download_queue:
+                full_path = export_path / item.file_path
+                if not full_path.exists():
+                    if item.status == DownloadStatus.COMPLETED:
+                        logger.warning(f"完整性校验: 已完成文件物理丢失, 重置为等待: {item.file_name}")
+                        item.status = DownloadStatus.WAITING
+                        item.downloaded_size = 0
+                        item.progress = 0
+                        missing_count += 1
+                else:
+                    # 如果刚才 walk 没扫到(路径不服从正则)，但文件确实在，也补一下状态
+                    if item.status not in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
+                        try:
+                            actual_size = full_path.stat().st_size
+                            if item.file_size > 0 and actual_size == item.file_size:
+                                item.status = DownloadStatus.COMPLETED
+                                item.downloaded_size = item.file_size
+                                item.progress = 100.0
+                                recovered_count += 1
+                            elif item.file_size > 0:
+                                # 之前可能没扫到正则，但路径在 queue 里，且大小不一致
+                                if await self._move_to_temp_for_resume(task, item, full_path):
+                                    moved_for_resume += 1
+                                item.status = DownloadStatus.WAITING
+                                item.downloaded_size = 0
+                                item.progress = 0
+                        except: pass
+            
+            # 更新统计
+            self._update_task_stats(task)
+            task.last_verify_result = f"校验完成: 恢复/发现 {discovered_count + recovered_count} 个, 修复物理丢失 {missing_count} 个, 移动 {moved_for_resume} 个文件到缓存以备断点续传"
+            logger.info(f"任务 {task_id[:8]} 校验完成: {task.last_verify_result}")
+            
+        except Exception as e:
+            logger.error(f"完整性校验后台任务出错 (Task: {task_id[:8]}): {e}", exc_info=True)
+            task.last_verify_result = f"校验过程中出错: {str(e)}"
+        finally:
+            task.is_verifying = False
+            task.status = TaskStatus.PAUSED
+            self._save_tasks()
+            await self._notify_progress(task_id, task)
+
+    async def _move_to_temp_for_resume(self, task: ExportTask, item: DownloadItem, full_path: Path) -> bool:
+        """将不完整文件移动到 temp 目录以便后续断点续传 (v1.6.4)"""
+        try:
+            # 使用配置中的临时目录
+            temp_dir = settings.DATA_DIR / "temp"
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 遵循 _download_item_worker 的命名规则: {item.id}_{full_path.name}
+            temp_file_name = f"{item.id}_{full_path.name}"
+            temp_file_path = temp_dir / temp_file_name
+            
+            if full_path.exists():
+                logger.debug(f"正在移动不完整文件到缓存以备断点续传: {full_path.name} -> {temp_file_name}")
+                # 如果目标已存在，删除之以覆盖 (可能是旧的残余)
+                if temp_file_path.exists():
+                    os.remove(temp_file_path)
+                shutil.move(str(full_path), str(temp_file_path))
+                return True
+        except Exception as e:
+            logger.error(f"移动文件到缓存失败: {e}")
+        return False
     
     async def cancel_download_item(self, task_id: str, item_id: str) -> bool:
         """取消 (跳过) 单个下载项"""

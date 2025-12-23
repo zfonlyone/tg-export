@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     APP_NAME: str = "TG Export"
     APP_VERSION: str = "1.5.0"  # 并行分块下载版本
     DEBUG: bool = False
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")
     WEB_PORT: int = int(os.getenv("WEB_PORT", 9528))
     

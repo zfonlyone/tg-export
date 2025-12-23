@@ -273,10 +273,10 @@ async def verify_integrity(
     task_id: str,
     current_user: User = Depends(get_current_user)
 ):
-    """批量完整性校验：对已完成的下载项执行文件大小验证"""
+    """批量完整性校验：对已完成的下载项执行文件大小验证 (异步触发)"""
     result = await export_manager.verify_integrity(task_id)
     if result.get("status") == "error":
-        raise HTTPException(status_code=404, detail=result.get("message"))
+        raise HTTPException(status_code=400, detail=result.get("message"))
     return result
 
 

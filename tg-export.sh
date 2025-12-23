@@ -122,6 +122,9 @@ SSL_PROVIDER="${SSL_PROVIDER:-1}" # 1=HTTP, 2=CF, 3=阿里, 4=DNSPod
 # ===== 下载目录 =====
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-/storage/downloads}"
 
+# ===== 日志级别 =====
+LOG_LEVEL="${LOG_LEVEL:-DEBUG}"
+
 # ===== Docker 镜像 =====
 DOCKER_IMAGE="${DOCKER_IMAGE:-zfonlyone/tg-export:latest}"
 EOF
@@ -141,6 +144,7 @@ show_config() {
     echo -e "  Nginx: ${GREEN}${ENABLE_NGINX:-n}${PLAIN}"
     echo -e "  SSL: ${GREEN}${ENABLE_SSL:-n}${PLAIN}"
     echo -e "  下载目录: ${GREEN}${DOWNLOAD_DIR:-/storage/downloads}${PLAIN}"
+    echo -e "  日志级别: ${GREEN}${LOG_LEVEL:-DEBUG}${PLAIN}"
 }
 
 # ===== UFW 防火墙管理 =====
@@ -756,6 +760,7 @@ BOT_TOKEN=$BOT_TOKEN
 ADMIN_PASSWORD=$ADMIN_PASSWORD
 SECRET_KEY=$(openssl rand -hex 32)
 WEB_PORT=${WEB_PORT:-9528}
+LOG_LEVEL=${LOG_LEVEL:-DEBUG}
 EOF
     
     # 使用配置的镜像
@@ -779,6 +784,7 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - WEB_PORT=$WEB_PORT
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
       - DATA_DIR=/app/data
       - EXPORT_DIR=/downloads
       - TEMP_DIR=/app/data/temp
