@@ -73,6 +73,8 @@ class ParallelChunkDownloader:
         self.client = client
         self.parallel_connections = parallel_connections
         self.chunk_size = chunk_size
+        # 当前连接的 DC (v1.6.3 修复 FILE_MIGRATE 错误)
+        self.current_dc = None 
         # 如果外部提供了全局信号量，则优先使用全局限额
         self._download_semaphore = task_semaphore or asyncio.Semaphore(parallel_connections)
 
@@ -317,7 +319,7 @@ class ParallelChunkDownloader:
         """
         for attempt in range(retries):
             try:
-                # 调用 raw API
+                # 调用 raw API，如果已知 DC 则显式指定 (v1.6.3)
                 result = await self.client.invoke(
                     raw.functions.upload.GetFile(
                         location=location,
@@ -325,12 +327,11 @@ class ParallelChunkDownloader:
                         limit=limit,
                         precise=True,
                         cdn_supported=False
-                    )
+                    ),
+                    dc_id=self.current_dc
                 )
                 
                 if isinstance(result, raw.types.upload.File):
-                    # 如果请求的是最后一块且 limit 被我们人工放大了，这里需要截断到实际需要的长度
-                    # 但通常 upload.File 的 bytes 已经是实际内容了
                     return result.bytes
                 else:
                     logger.warning(f"收到非预期的响应类型: {type(result)}")
@@ -344,22 +345,18 @@ class ParallelChunkDownloader:
                 err_str = str(e)
                 # 处理 DC 迁移: [303 FILE_MIGRATE_X]
                 if "FILE_MIGRATE_" in err_str:
-                    logger.warning(f"检测到 DC 迁移 ({err_str}), 尝试强制迁移 (Attempt {attempt+1}/{retries})")
-                    # 通过执行一个极小的成功请求来强制 Pyrogram 内部处理迁移
-                    try:
-                        # 解析 DC ID 并让 client 建立连接
-                        import re
-                        match = re.search(r"FILE_MIGRATE_(\d+)", err_str)
-                        if match:
-                            target_dc = int(match.group(1))
-                            logger.info(f"强制迁移到 DC {target_dc}...")
-                            # 注意：Pyrogram 内部会自动处理 invoke 时的 DC 迁移，
-                            # 但对于 GetFile 这种容易卡在旧 DC 的，重试通常有效
-                    except:
-                        pass
+                    import re
+                    match = re.search(r"FILE_MIGRATE_(\d+)", err_str)
+                    if match:
+                        target_dc = int(match.group(1))
+                        if self.current_dc != target_dc:
+                            logger.warning(f"检测到 DC 迁移 ({err_str}), 切换当前下载器到 DC {target_dc} (Attempt {attempt+1}/{retries})")
+                            self.current_dc = target_dc
+                        else:
+                            logger.warning(f"DC 迁移到 {target_dc} 仍未生效, 正在重试... (Attempt {attempt+1}/{retries})")
                     
                     if attempt < retries - 1:
-                        await asyncio.sleep(1) # 稍等让连接稳定
+                        await asyncio.sleep(1) 
                         continue
                     raise
                 

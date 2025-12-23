@@ -223,7 +223,8 @@ class ExportTask(BaseModel):
     current_max_concurrent_downloads: Optional[int] = None # 当前动态并发数 (用于自适应限速)
     consecutive_success_count: int = 0    # 连续成功下载数 (用于并发恢复)
     last_flood_wait_time: Optional[datetime] = None # 最近一次触发限速墙的时间
-    last_scanned_id: int = 0              # 上次扫描到的最后消息 ID (用于增量扫描) (v1.6.0)
+    last_scanned_id: int = 0              # 上次扫描到的最后消息 ID (用于增量扫描) (已废弃，建议使用 last_scanned_ids)
+    last_scanned_ids: Dict[int, int] = Field(default_factory=dict) # 按 chat_id 记录的最后扫描 ID (v1.6.3)
     
     # 错误信息
     error: Optional[str] = None

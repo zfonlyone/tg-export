@@ -483,7 +483,7 @@ class ExportManager:
         
         return False
     async def verify_integrity(self, task_id: str) -> Dict[str, Any]:
-        """完整性校验: 检查物理文件并同步状态 v1.6.2"""
+        """完整性校验: [重要] v1.6.3 唯一触发全量扫描的地方"""
         import os
         import shutil
         import time
@@ -494,7 +494,50 @@ class ExportManager:
         if not task:
             return {"status": "error", "message": "任务不存在"}
         
-        export_path = Path(task.options.export_path).expanduser()
+        # 记录原始状态以便恢复
+        old_status = task.status
+        if task.status == TaskStatus.RUNNING:
+             return {"status": "error", "message": "任务正在运行中，请先暂停后再校验"}
+
+        # 1. 扫描阶段: 触发全量消息提取
+        task.status = TaskStatus.EXTRACTING
+        task.is_extracting = True
+        # 强制全量扫描标记 (内部使用)
+        task._force_full_scan = True 
+        await self._notify_progress(task_id, task)
+        
+        try:
+            options = task.options
+            export_path = Path(options.export_path).expanduser()
+            
+            # 获取要导出的聊天列表
+            chats = await self._get_chats_to_export(options)
+            task.total_chats = len(chats)
+            task.processed_chats = 0
+            
+            # 执行全量提取 (这会补全可能缺失的消息到 download_queue)
+            for chat in chats:
+                if task.status == TaskStatus.CANCELLED: break
+                # 显式执行扫描
+                _, highest_id = await self._export_chat(task, chat, export_path)
+                # 同时更新下最新 ID
+                if highest_id > task.last_scanned_ids.get(chat.id, 0):
+                    task.last_scanned_ids[chat.id] = highest_id
+                task.processed_chats += 1
+                await self._notify_progress(task_id, task)
+                
+        except Exception as e:
+            logger.error(f"完整性校验扫描阶段出错: {e}")
+            task._force_full_scan = False
+            task.status = old_status
+            return {"status": "error", "message": f"扫描失败: {e}"}
+        
+        task._force_full_scan = False
+        task.is_extracting = False
+        task.status = TaskStatus.RUNNING # 临时设为 RUNNING 进行物理检查
+        await self._notify_progress(task_id, task)
+
+        # 2. 物理检查阶段
         temp_dir = settings.TEMP_DIR / "mismatched"
         temp_dir.mkdir(parents=True, exist_ok=True)
         
@@ -503,22 +546,22 @@ class ExportManager:
         missing_count = 0 # 对应物理丢失
         recovered_count = 0 
         
-        # 1. 遍历队列中的所有项进行校验
+        # 遍历队列中的所有项进行校验
         for item in task.download_queue:
             full_path = export_path / item.file_path
             
             # [CASE 1] 文件不存在
             if not full_path.exists():
                 if item.status == DownloadStatus.COMPLETED:
-                    # [v1.6.2] 已完成但文件物理丢失 -> 设为跳过，不重新下载
-                    logger.warning(f"完整性校验: 已完成文件物理丢失, 设为跳过: {item.file_name}")
-                    item.status = DownloadStatus.SKIPPED
+                    # [v1.6.2] 已完成但文件物理丢失 -> 设为等待，重新触发下载 (1.6.3 修正：既然是完整性校验，物理丢失应重下)
+                    logger.warning(f"完整性校验: 已完成文件物理丢失, 设为等待重下: {item.file_name}")
+                    item.status = DownloadStatus.WAITING
                     item.downloaded_size = 0
-                    item.progress = 100.0
+                    item.progress = 0
                     missing_count += 1
-                else:
-                    # [v1.6.2] 未下载或下载中的文件不存在 -> 正常现状，不处理
-                    logger.debug(f"完整性校验: 等待下载文件尚不存在: {item.file_name}")
+                elif item.status == DownloadStatus.SKIPPED:
+                    # 如果是跳过的，保持跳过
+                    pass
                 continue
             
             # [CASE 2] 文件存在
@@ -551,7 +594,7 @@ class ExportManager:
                 failed_count += 1
             else:
                 # 大小匹配 -> 记录为完成
-                if item.status != DownloadStatus.COMPLETED:
+                if item.status != DownloadStatus.COMPLETED and item.status != DownloadStatus.SKIPPED:
                     recovered_count += 1
                     logger.info(f"完整性校验: 自动恢复磁盘上已存在的文件: {item.file_name}")
                 
@@ -562,10 +605,11 @@ class ExportManager:
                 
         # 更新任务统计
         self._update_task_stats(task)
+        task.status = TaskStatus.PAUSED # 校验完保持暂停
         self._save_tasks()
         
         message = (f"校验完成: 通过 {passed_count}, 恢复 {recovered_count}, "
-                  f"重置(损坏) {failed_count}, 缺失(跳过) {missing_count}")
+                  f"重置(损坏/缺失) {failed_count + missing_count}")
         logger.info(f"任务 {task_id[:8]}: {message}")
         
         await self._notify_progress(task_id, task)
@@ -689,8 +733,16 @@ class ExportManager:
                 if task.status == TaskStatus.CANCELLED:
                     break
                 
-                chat_messages = await self._export_chat(task, chat, export_path)
+                chat_messages, highest_id = await self._export_chat(task, chat, export_path)
                 all_messages.extend(chat_messages)
+                
+                # [v1.6.3] 更新扫描进度
+                if highest_id > task.last_scanned_ids.get(chat.id, 0):
+                    task.last_scanned_ids[chat.id] = highest_id
+                    # 兼容旧字段
+                    task.last_scanned_id = max(task.last_scanned_id, highest_id)
+                    logger.info(f"聊天 {chat.id} 扫描完成, 更新进度: {highest_id}")
+                    
                 task.processed_chats += 1
                 await self._notify_progress(task.id, task)
             
@@ -743,10 +795,27 @@ class ExportManager:
             
             logger.info(f"恢复下载队列: {task.name} ({len(task.download_queue)} 个文件)")
             
-            if task.total_media > task.downloaded_media:
-                task.status = TaskStatus.RUNNING
+            # [v1.6.3] 恢复时先进行一次增量扫描，发现可能的新消息
+            if options.incremental_scan_enabled:
+                logger.info(f"任务 {task.id[:8]} 恢复中: 执行增量扫描以获取新消息...")
+                task.is_extracting = True
                 await self._notify_progress(task.id, task)
-                await self._process_download_queue(task, export_path)
+                
+                chats = await self._get_chats_to_export(options)
+                for chat in chats:
+                    if task.status == TaskStatus.CANCELLED: break
+                    # 增量扫描 [v1.6.3]
+                    _, highest_id = await self._export_chat(task, chat, export_path)
+                    if highest_id > task.last_scanned_ids.get(chat.id, 0):
+                        task.last_scanned_ids[chat.id] = highest_id
+                        task.last_scanned_id = max(task.last_scanned_id, highest_id)
+                    
+                task.is_extracting = False
+                await self._notify_progress(task.id, task)
+
+            task.status = TaskStatus.RUNNING
+            await self._notify_progress(task.id, task)
+            await self._process_download_queue(task, export_path)
             
 
             if task.status not in [TaskStatus.CANCELLED, TaskStatus.PAUSED]:
@@ -1465,18 +1534,17 @@ class ExportManager:
         task: ExportTask, 
         chat: ChatInfo, 
         export_path: Path
-    ) -> List[MessageInfo]:
-        """导出单个聊天"""
+    ) -> Tuple[List[MessageInfo], int]:
+        """导出单个聊天, 返回 (消息列表, 本次最高消息ID)"""
         options = task.options
         messages: List[MessageInfo] = []
         
         # 创建 Telegram Desktop 风格的目录结构
-        # export_path/chats/chat_ID/
         chats_dir = export_path / "chats"
         chat_dir = chats_dir / f"chat_{abs(chat.id)}"
         chat_dir.mkdir(parents=True, exist_ok=True)
         
-        # 创建媒体目录 - 匹配 Telegram Desktop 命名
+        # 创建媒体目录
         media_dirs = {
             MediaType.PHOTO: chat_dir / "photos",
             MediaType.VIDEO: chat_dir / "video_files",
@@ -1495,10 +1563,12 @@ class ExportManager:
         progress_file = chat_dir / ".export_progress.json"
         downloaded_ids = set()
         if options.resume_download and progress_file.exists():
-            import json
-            with open(progress_file, "r") as f:
-                progress_data = json.load(f)
-                downloaded_ids = set(progress_data.get("downloaded_message_ids", []))
+            try:
+                import json
+                with open(progress_file, "r") as f:
+                    progress_data = json.load(f)
+                    downloaded_ids = set(progress_data.get("downloaded_message_ids", []))
+            except: pass
         
         # 获取消息范围
         msg_from = options.message_from
@@ -1507,10 +1577,13 @@ class ExportManager:
         # 获取消息
         me_id = None
         if options.only_my_messages:
-            me = await telegram_client.get_me()
-            me_id = me.get("id")
+            try:
+                me = await telegram_client.get_me()
+                me_id = me.get("id")
+            except: pass
 
         highest_id_this_scan = 0
+        last_scanned_id = task.last_scanned_ids.get(chat.id, 0)
         
         # [v1.6.0] 慢速扫描策略
         scan_delay = 0.2  # 基础延迟
@@ -1523,37 +1596,33 @@ class ExportManager:
             if highest_id_this_scan == 0:
                 highest_id_this_scan = msg.id
                 
-            # [v1.6.0] 增量扫描逻辑: 如果到达上次扫描的 ID，则停止 (除非是全局扫描)
-            if options.incremental_scan_enabled and task.last_scanned_id > 0 and msg.id <= task.last_scanned_id:
-                logger.info(f"增量扫描: 已到达上次扫描位置 {task.last_scanned_id}, 停止扫描")
+            # [v1.6.3] 增量扫描逻辑
+            # 只有开启增量扫描 且 不是强制全量扫描 且 已经有扫描记录时 才触发断开
+            force_full = getattr(task, '_force_full_scan', False)
+            if options.incremental_scan_enabled and not force_full and last_scanned_id > 0 and msg.id <= last_scanned_id:
+                logger.info(f"聊天 {chat.id}: 增量扫描到达上次位置 {last_scanned_id}, 停止扫描")
                 break
 
-            # 限制请求速率 (用户需求: 慢速扫描防止封号)
+            # 限制请求速率
             import random
             await asyncio.sleep(scan_delay + random.uniform(0.05, 0.15))
             
             # 等待暂停状态结束
             while task.status == TaskStatus.PAUSED:
                 await asyncio.sleep(1)
-                if task.status == TaskStatus.CANCELLED:
-                    break
+                if task.status == TaskStatus.CANCELLED: break
             
-            # 消息ID范围筛选 (1-0 表示全部, 1-100 表示1到100)
-            if msg_to > 0 and msg.id > msg_to:
-                continue  # 跳过比结束ID更新的消息
-            if msg.id < msg_from:
-                break  # 早于起始ID的消息，停止迭代
+            # 消息ID范围筛选
+            if msg_to > 0 and msg.id > msg_to: continue
+            if msg.id < msg_from: break
             
             # 时间范围筛选
-            if options.date_from and msg.date < options.date_from:
-                continue
-            if options.date_to and msg.date > options.date_to:
-                continue
+            if options.date_from and msg.date < options.date_from: continue
+            if options.date_to and msg.date > options.date_to: continue
             
             # 只导出我的消息
-            if options.only_my_messages:
-                if msg.from_user and msg.from_user.id != me_id:
-                    continue
+            if options.only_my_messages and msg.from_user and msg.from_user.id != me_id:
+                continue
             
             # 断点续传 - 跳过已处理的消息
             if options.skip_existing and msg.id in downloaded_ids:
@@ -1561,14 +1630,8 @@ class ExportManager:
                 continue
             
             # 消息过滤
-            if options.filter_mode == "skip":
-                # 跳过模式: 跳过指定的消息
-                if msg.id in options.filter_messages:
-                    continue
-            elif options.filter_mode == "specify":
-                # 指定模式: 只处理指定的消息
-                if msg.id not in options.filter_messages:
-                    continue
+            if options.filter_mode == "skip" and msg.id in options.filter_messages: continue
+            if options.filter_mode == "specify" and msg.id not in options.filter_messages: continue
             
             task.total_messages += 1
             
@@ -1583,34 +1646,43 @@ class ExportManager:
                 should_download = self._should_download_media(media_type, options)
                 
                 if should_download:
-                    # 准备下载目录
-                    media_dir = media_dirs.get(media_type, chat_dir / "other")
-                    media_dir.mkdir(parents=True, exist_ok=True)
-                    
-                    file_name = self._get_media_filename(msg, media_type)
-                    file_path = media_dir / file_name
-                    
-                    # 创建下载项并加入队列
-                    item_id = f"{chat.id}_{msg.id}"
-                    download_item = DownloadItem(
-                        id=item_id,
-                        message_id=msg.id,
-                        chat_id=chat.id,
-                        file_name=file_name,
-                        file_size=self._get_file_size(msg) or 0,
-                        media_type=media_type,
-                        file_path=str(file_path.relative_to(export_path))
-                    )
-                    
-                    # 检查是否已经存在
-                    if options.skip_existing and file_path.exists():
-                        download_item.status = DownloadStatus.SKIPPED
-                        download_item.downloaded_size = download_item.file_size
-                        download_item.progress = 100.0
-                        media_path = download_item.file_path
-                        task.downloaded_media += 1
-                    
-                    task.download_queue.append(download_item)
+                    # 检查是否已经在队列中
+                    download_item = task.get_download_item(msg.id, chat.id)
+                    if not download_item:
+                        # 准备下载目录
+                        media_dir = media_dirs.get(media_type, chat_dir / "other")
+                        media_dir.mkdir(parents=True, exist_ok=True)
+                        
+                        file_name = self._get_media_filename(msg, media_type)
+                        file_path = media_dir / file_name
+                        
+                        item_id = f"{chat.id}_{msg.id}"
+                        download_item = DownloadItem(
+                            id=item_id,
+                            message_id=msg.id,
+                            chat_id=chat.id,
+                            file_name=file_name,
+                            file_size=self._get_file_size(msg) or 0,
+                            media_type=media_type,
+                            file_path=str(file_path.relative_to(export_path))
+                        )
+                        
+                        # 检查是否已经存在
+                        if options.skip_existing and file_path.exists():
+                            # 简单检查大小是否匹配 (快速跳过)
+                            if file_path.stat().st_size == download_item.file_size:
+                                download_item.status = DownloadStatus.SKIPPED
+                                download_item.downloaded_size = download_item.file_size
+                                download_item.progress = 100.0
+                                media_path = download_item.file_path
+                                task.downloaded_media += 1
+                        
+                        if download_item.status != DownloadStatus.SKIPPED:
+                            task.download_queue.append(download_item)
+                    else:
+                        # 如果已经在队列中且已完成，则记录路径
+                        if download_item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
+                            media_path = download_item.file_path
             
             # 构建消息信息
             msg_info = MessageInfo(
@@ -1630,30 +1702,28 @@ class ExportManager:
             messages.append(msg_info)
             task.processed_messages += 1
             
-            # 记录已下载的消息ID
+            # 记录已处理的消息ID
             downloaded_ids.add(msg.id)
             
-            # 定期更新进度和保存断点
+            # 定期更新进度
             if task.processed_messages % 50 == 0:
                 await self._notify_progress(task.id, task)
-                # 保存断点进度
                 if options.resume_download:
-                    import json
-                    with open(progress_file, "w") as f:
-                        json.dump({"downloaded_message_ids": list(downloaded_ids)}, f)
-        
-        # [v1.6.0] 更新最后扫描 ID
-        if highest_id_this_scan > task.last_scanned_id:
-            task.last_scanned_id = highest_id_this_scan
-            logger.info(f"聊天 {chat.title} 扫描完成, 更新 last_scanned_id 为 {task.last_scanned_id}")
+                    try:
+                        import json
+                        with open(progress_file, "w") as f:
+                            json.dump({"downloaded_message_ids": list(downloaded_ids)}, f)
+                    except: pass
         
         # 保存最终进度
         if options.resume_download:
-            import json
-            with open(progress_file, "w") as f:
-                json.dump({"downloaded_message_ids": list(downloaded_ids)}, f)
+            try:
+                import json
+                with open(progress_file, "w") as f:
+                    json.dump({"downloaded_message_ids": list(downloaded_ids)}, f)
+            except: pass
         
-        return messages
+        return messages, highest_id_this_scan
     
     def _should_download_media(self, media_type: MediaType, options: ExportOptions) -> bool:
         """检查是否应该下载该媒体类型"""
