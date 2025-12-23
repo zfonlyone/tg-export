@@ -136,7 +136,7 @@ class ExportOptions(BaseModel):
     auto_retry_failed: bool = True       # 自动重试失败的下载
     
     # 并行分块下载设置 (单文件多连接并发) [v1.5.0]
-    parallel_chunk_connections: int = 4  # 单文件并行连接数 (免费账号建议 3-4)
+    parallel_chunk_connections: int = 2  # [v1.6.6] 默认从 4 下调至 2，对免费账号更友好
     enable_parallel_chunk: bool = True   # 是否启用分块并行下载 (大文件自动启用)
     incremental_scan_enabled: bool = True # 是否启用增量扫描 (v1.6.0)
     

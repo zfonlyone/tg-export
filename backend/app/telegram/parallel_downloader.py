@@ -25,6 +25,7 @@ class ChunkInfo:
     index: int
     offset: int
     limit: int
+    real_size: int = 0             # [v1.6.6] 实际写入的大小
     downloaded: bool = False
     error: Optional[str] = None
 
@@ -45,8 +46,8 @@ class ParallelChunkDownloader:
     """
     
     # MTProto 标准块大小 (必须是 4KB 的倍数，最大 1MB)
-    # 本地实测 512KB 在多 DC 切换时更稳定
-    CHUNK_SIZE = 512 * 1024  # 512KB
+    # [v1.6.6] 增加默认大小到 1MB 以减少请求密度
+    CHUNK_SIZE = 1024 * 1024  # 1024KB (1MB)
     
     # 强制块对齐大小 (1KB 或 4KB)
     BLOCK_ALIGN = 4096 
@@ -113,10 +114,12 @@ class ParallelChunkDownloader:
         logger.info(f"启动并行分块下载: {file_path.name} ({file_size / 1024 / 1024:.1f}MB, {self.parallel_connections} 连接)")
         
         try:
-            # 1. 解析文件位置信息
             location = await self._get_file_location(message)
             if not location:
                 return False, "无法解析文件位置"
+            
+            # [v1.6.6] 下载前先探测 DC，避免并发时由于 FILE_MIGRATE 导致的连接风暴
+            await self._probe_dc(location)
             
             # 2. 计算分块策略
             chunks = self._calculate_chunks(file_size)
@@ -143,11 +146,15 @@ class ParallelChunkDownloader:
                             chunk.error = "已取消"
                             return
                         
-                        # [v1.6.0] 启动每个分块请求前增加错峰延迟，防止短时间突发大量请求
+                        # [v1.6.6] 增强阶梯式错峰启动：根据 index 增加随机阶梯延迟
+                        # 避免所有连接同时瞬间发送握手/请求
                         import random
-                        delay = random.uniform(0.1, 0.4)
-                        if chunk.index > 0: # 第一个块不需要额外延迟
+                        # 延迟公式：(0.1 ~ 0.3s) * (当前槽位索引)
+                        delay = random.uniform(0.1, 0.3) * (chunk.index % self.parallel_connections)
+                        if chunk.index >= self.parallel_connections:
                             await asyncio.sleep(delay)
+                        elif chunk.index > 0:
+                            await asyncio.sleep(0.1)
 
                         # 下载数据
                         data = await self._download_chunk(location, chunk.offset, chunk.limit)
@@ -155,7 +162,8 @@ class ParallelChunkDownloader:
                         # 立即写入文件 (内存安全：写完即丢弃 data)
                         async with write_lock:
                             await f_handle.seek(chunk.offset)
-                            await f_handle.write(data)
+                            # [v1.6.6] 仅写入 real_size 大小，防止文件尾部对齐填充导致文件变大
+                            await f_handle.write(data[:chunk.real_size])
                         
                         chunk.downloaded = True
                         # 释放内存
@@ -184,10 +192,10 @@ class ParallelChunkDownloader:
                     raise
 
             
-            # 使用 r+b 模式打开文件并行写入
-            # 先创建空文件并设置大小
-            async with aiofiles.open(file_path, 'wb') as f:
-                pass
+            # [FIX v1.6.6] 断点续传逻辑修复：不再使用 'wb' 模式打开文件（即不再每次都抹除文件）
+            # 改为以 'r+b' 模式打开并行写入。如果文件不存在则先创建。
+            async with aiofiles.open(file_path, 'a') as f:
+                pass # 确保文件存在
             
             async with aiofiles.open(file_path, 'r+b') as f:
                 # 并发任务
@@ -272,41 +280,69 @@ class ParallelChunkDownloader:
     
     def _calculate_chunks(self, file_size: int) -> List[ChunkInfo]:
         """
-        计算分块策略
+        计算分块策略 (v1.6.6 严格优化)
         
-        Telegram 要求 offset 和 limit 必须是 4KB(4096) 的倍数 (或者至少是 1KB)
-        最后一个块除外，但最后一个块的 limit 如果不是倍数，某些 DC 会报 LIMIT_INVALID。
-        稳妥做法：所有块都对齐，最后一个块请求略大一点没关系，会自动截断或者我们手动截断。
+        Telegram 要求 offset 和 limit 必须是 4KB(4096) 的倍数。
+        最后一个块的 limit 如果不是倍数，某些 DC 会报 LIMIT_INVALID 或触发 FloodWait。
+        
+        策略：
+        1. 保持所有请求 limit 对齐 4KB。
+        2. 最后一个块可能请求略大一点，但在写入磁盘时按 real_size 截断。
         """
         chunks = []
         offset = 0
         index = 0
+        standard_limit = self.chunk_size
         
         while offset < file_size:
-            # 计算当前块的大小
             remaining = file_size - offset
             
-            # 基础策略：按照 CHUNK_SIZE 分块
-            limit = min(self.chunk_size, remaining)
-            
-            # [CRITICAL] 对齐校验：除了最后一块，limit 必须是 4KB 的倍数
-            # 如果不是最后一块，且 limit 不对齐，向上取整 (实际上 CHUNK_SIZE 已经对齐了)
-            # 如果是最后一块，且 limit 不对齐，Telegram 可能会报错 LIMIT_INVALID。
-            # 解决方法：即使是最后一块，也请求一个对齐的 limit，系统会自动返回实际字节。
-            if limit % self.BLOCK_ALIGN != 0:
-                limit = ((limit // self.BLOCK_ALIGN) + 1) * self.BLOCK_ALIGN
+            # [v1.6.6] 确保 limit 必须对齐 4KB，哪怕超过了文件末尾 (Telegram 内部会自动截断)
+            # 这可以有效防止部分 DC 返回 LIMIT_INVALID
+            request_limit = min(standard_limit, ((remaining + self.BLOCK_ALIGN - 1) // self.BLOCK_ALIGN) * self.BLOCK_ALIGN)
             
             chunks.append(ChunkInfo(
                 index=index,
                 offset=offset,
-                limit=limit
+                limit=request_limit,
+                real_size=min(request_limit, remaining) # 记录磁盘写入上限
             ))
             
-            offset += limit # 注意：这里 offset 增加的是请求的 limit，如果是最后一块，下一次循环会退出
+            offset += request_limit 
             index += 1
         
         return chunks
     
+    async def _probe_dc(self, location: Any):
+        """
+        通过一个小请求探测该文件所属的 DC (v1.6.6)
+        
+        捕获 FILE_MIGRATE 异常并预设 self.current_dc，
+        防止后续几十个并发分块请求同时触发重定向造成网络风暴。
+        """
+        try:
+            # 请求起始的 4KB 数据
+            await self.client.invoke(
+                raw.functions.upload.GetFile(
+                    location=location,
+                    offset=0,
+                    limit=4096,
+                    precise=True
+                ),
+                dc_id=self.current_dc
+            )
+        except Exception as e:
+            err_str = str(e)
+            if "FILE_MIGRATE_" in err_str:
+                import re
+                match = re.search(r"FILE_MIGRATE_(\d+)", err_str)
+                if match:
+                    target_dc = int(match.group(1))
+                    logger.info(f"探测到文件所在 DC 为 {target_dc}，已预热连接。")
+                    self.current_dc = target_dc
+            # 探测阶段捕获所有错误但不抛出，由后续实际下载逻辑接手
+            pass
+
     async def _download_chunk(
         self,
         location: Any,

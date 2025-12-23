@@ -96,9 +96,11 @@ class DownloadRetryManager:
         """计算重试延迟时间"""
         # FloodWait 有特殊等待时间
         if isinstance(error, FloodWait):
-            # [v1.6.0] 增加随机抖动 (5-15秒)，更稳健地避开限速墙
+            # [v1.6.6] Telegram 要求等 N 秒，建议等 N + 2 秒以确保服务器端计数器完全重置
+            # 增加 2 秒的安全冗余
             import random
-            return min(error.value + random.uniform(5.0, 15.0), self.max_delay * 10) # 允许超过基础 max_delay
+            wait_time = error.value + 2.0
+            return min(wait_time + random.uniform(1.0, 5.0), self.max_delay * 10) 
         
         # 指数退避
         delay = self.initial_delay * (self.backoff_factor ** attempt)

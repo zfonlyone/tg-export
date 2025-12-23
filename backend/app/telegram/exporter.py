@@ -469,10 +469,10 @@ class ExportManager:
             logger.info(f"任务 {task_id[:8]} 并发设置已更新: {', '.join(changes)}")
             
             # [FIX] 重新初始化全局并行连接信号量
-            # 规则：允许总连接数 = max_concurrent * parallel_connections，合理上限 40
-            # 提高默认下限为 10，防止单文件下载时信号量过窄
-            new_limit = max(10, task.options.max_concurrent_downloads * task.options.parallel_chunk_connections)
-            new_limit = min(40, new_limit) # 封顶 40，防止 session 级别 FloodWait
+            # 规则：允许总连接数 = max_concurrent * parallel_connections
+            # [v1.6.6] 收紧上限，封顶 20 (原为40)，降低触发 Telegram 安全策略的风险
+            new_limit = max(8, task.options.max_concurrent_downloads * task.options.parallel_chunk_connections)
+            new_limit = min(20, new_limit) 
             self._parallel_semaphores[task.id] = asyncio.Semaphore(new_limit)
             logger.info(f"任务 {task_id[:8]}: 全局并行连接限额动态调整为 {new_limit}")
             # 唤醒队列 (如果并发数增加，且队列中有任务)
@@ -1298,9 +1298,9 @@ class ExportManager:
             
         # [Adaptive Concurrency] 初始化全局任务信号量，限制总连接数
         # [FIX] 更加科学的连接限额计算：并发文件数 * 每个文件的分块连接数
-        # 允许一定冗余但封顶，防止 10 workers * 4 chunks = 40 连接导致 session 被 Telegram 锁死
-        sem_limit = max(10, options.max_concurrent_downloads * options.parallel_chunk_connections)
-        sem_limit = min(40, sem_limit)
+        # [v1.6.6] 收紧上限，封顶 20，防止 session 被 Telegram 锁死
+        sem_limit = max(8, options.max_concurrent_downloads * options.parallel_chunk_connections)
+        sem_limit = min(20, sem_limit)
         self._parallel_semaphores[task.id] = asyncio.Semaphore(sem_limit)
         logger.info(f"任务 {task.id[:8]}: 全局并行连接限额设置为 {sem_limit}")
             
