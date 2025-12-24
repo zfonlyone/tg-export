@@ -115,10 +115,17 @@ class AsyncDockerClient:
                 
                 # 解析 JSON body
                 try:
-                    result = json.loads(body_data.decode()) if body_data.strip() else {}
+                    # 使用 errors='replace' 以防止 UnicodeDecodeError
+                    decoded_body = body_data.decode(errors='replace')
+                    result = json.loads(decoded_body) if decoded_body.strip() else {}
                 except json.JSONDecodeError as e:
                     logger.debug(f"[TDL] JSON 解析失败: {e}, 前50字节: {body_data[:50]}")
-                    result = {"raw": body_data.decode()[:500]}
+                    try:
+                        # 尝试安全解码前 500 字节作为 raw 输出
+                        result = {"raw": body_data.decode(errors='replace')[:500]}
+                    except Exception as de:
+                        logger.error(f"[TDL] 原始数据记录失败: {de}")
+                        result = {"error": "解码与解析均失败"}
                 
                 return {"status_code": status_code, "data": result}
             
