@@ -579,7 +579,7 @@ async def set_tdl_mode(
     
     # 保存 TDL 模式状态到任务
     task.tdl_mode = enabled
-    export_manager.save_tasks()
+    export_manager._save_tasks()
     
     return {
         "status": "ok",

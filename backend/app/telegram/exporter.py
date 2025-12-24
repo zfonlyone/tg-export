@@ -349,10 +349,7 @@ class ExportManager:
         safe_name = re.sub(r'[<>:"/\\|?*]', '_', task.name)
         safe_name = safe_name.strip()[:100]  # 限制长度并去除首尾空格
         
-        # [FIX] 增加 ID 后缀，防止同名任务覆盖同一个文件夹
-        # 使用 ID 的前 5 位作为后缀
-        suffix = f"_{task.id[:5]}"
-        export_dir_name = f"{safe_name}{suffix}"
+        export_dir_name = safe_name
         
         export_path = settings.EXPORT_DIR / export_dir_name
         return export_path
@@ -1053,12 +1050,24 @@ class ExportManager:
                 
                 # 生成 Telegram 消息链接
                 url = tdl_integration.generate_telegram_link(item.chat_id, item.message_id)
-                logger.info(f"任务 {task.id[:8]}: [TDL模式] 使用 TDL 下载 {item.file_name}")
                 
-                # 调用 TDL 下载
+                # [FIX] 计算文件所在的完整目标子目录 (v1.6.8)
+                # item.file_path 是相对于 export_path 的路径，如 "chats/chat_123/files/filename.mp4"
+                from pathlib import Path
+                full_item_path = export_path / item.file_path
+                target_sub_dir = full_item_path.parent
+                
+                # 确保子目录存在
+                target_sub_dir.mkdir(parents=True, exist_ok=True)
+                try: os.chmod(target_sub_dir, 0o777)
+                except: pass
+
+                logger.info(f"任务 {task.id[:8]}: [TDL模式] 下载到子目录: {target_sub_dir}")
+                
+                # 调用 TDL 下载，传递具体的子目录而不是根目录
                 result = await tdl_integration.download(
                     url=url,
-                    output_dir=str(export_path),
+                    output_dir=str(target_sub_dir),
                     threads=options.download_threads,
                     limit=options.max_concurrent_downloads
                 )
