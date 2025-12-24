@@ -565,7 +565,7 @@ async def set_tdl_mode(
 ):
     """设置任务的 TDL 下载模式
     
-    开启后，该任务的所有下载将使用 TDL 进行
+    开启后，该任务的所有下载将使用 TDL 进行（完全接管，禁用 Pyrogram）
     """
     task = export_manager.get_task(task_id)
     if not task:
@@ -573,17 +573,19 @@ async def set_tdl_mode(
     
     # 检查 TDL 是否可用
     if enabled:
-        status = tdl_integration.get_status()
+        status = await tdl_integration.get_status()
         if not status.get("container_running"):
-            raise HTTPException(status_code=400, detail="TDL 容器未运行")
+            raise HTTPException(status_code=400, detail=f"TDL 容器未运行: {status.get('container_error')}")
     
-    # 保存 TDL 模式状态到任务 (可扩展到 ExportOptions)
-    # 目前仅作为前端状态使用
+    # 保存 TDL 模式状态到任务
+    task.tdl_mode = enabled
+    export_manager.save_tasks()
+    
     return {
         "status": "ok",
         "task_id": task_id,
         "tdl_mode": enabled,
-        "message": f"TDL 模式已{'启用' if enabled else '禁用'}"
+        "message": f"TDL 模式已{'启用 (接管下载)' if enabled else '禁用 (使用 Pyrogram)'}"
     }
 
 

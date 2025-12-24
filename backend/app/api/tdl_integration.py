@@ -251,9 +251,18 @@ class TDLDownloader:
         url: str,
         output_dir: str = "/downloads",
         threads: int = 4,
-        limit: int = 2
+        limit: int = 2,
+        file_template: str = None
     ) -> Dict[str, Any]:
-        """使用 TDL 下载单个文件（异步）"""
+        """使用 TDL 下载单个文件（异步）
+        
+        Args:
+            url: Telegram 消息链接
+            output_dir: 下载目录
+            threads: 线程数
+            limit: 并发数
+            file_template: 文件名模板，如 "{{.MessageID}}-100{{.ChatID}}-{{.FileName}}"
+        """
         logger.info(f"[TDL] 下载: url={url}, dir={output_dir}")
         
         # 检查容器状态
@@ -271,6 +280,14 @@ class TDLDownloader:
             "-l", str(limit),
             "--skip-same"
         ]
+        
+        # 使用 tg-export 格式的文件名模板
+        if file_template:
+            cmd.extend(["--template", file_template])
+        else:
+            # 默认模板: {message_id}-100{chat_id}-{filename}
+            cmd.extend(["--template", "{{.MessageID}}-100{{.ChatID}}-{{.FileName}}"])
+        
         logger.info(f"[TDL] 命令: {' '.join(cmd)}")
         
         # 执行命令

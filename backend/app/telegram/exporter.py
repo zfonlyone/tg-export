@@ -1047,6 +1047,40 @@ class ExportManager:
             item.status = DownloadStatus.DOWNLOADING
             await self._notify_progress(task.id, task)
 
+            # ===== TDL 模式：完全使用 TDL 下载，跳过 Pyrogram =====
+            if task.tdl_mode:
+                from ..api.tdl_integration import tdl_integration
+                
+                # 生成 Telegram 消息链接
+                url = tdl_integration.generate_telegram_link(item.chat_id, item.message_id)
+                logger.info(f"任务 {task.id[:8]}: [TDL模式] 使用 TDL 下载 {item.file_name}")
+                
+                # 调用 TDL 下载
+                result = await tdl_integration.download(
+                    url=url,
+                    output_dir=str(export_path),
+                    threads=options.download_threads,
+                    limit=options.max_concurrent_downloads
+                )
+                
+                if result.get("success"):
+                    # TDL 下载成功
+                    item.status = DownloadStatus.COMPLETED
+                    item.progress = 100.0
+                    item.speed = 0
+                    task.downloaded_media += 1
+                    logger.info(f"任务 {task.id[:8]}: [TDL] 下载成功: {item.file_name}")
+                else:
+                    # TDL 下载失败
+                    item.status = DownloadStatus.FAILED
+                    item.error = result.get("error", "TDL 下载失败")
+                    item.speed = 0
+                    logger.error(f"任务 {task.id[:8]}: [TDL] 下载失败: {item.file_name} - {item.error}")
+                
+                await self._notify_progress(task.id, task)
+                return  # TDL 模式结束，不执行后面的 Pyrogram 下载逻辑
+            # ===== TDL 模式结束 =====
+
             # [FIX] 简化延迟方案：移除过长的 1s/0.3s 等待，改为极小的 0.1s 以维持异步切换
             await asyncio.sleep(0.1)
 

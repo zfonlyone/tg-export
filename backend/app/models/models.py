@@ -238,6 +238,9 @@ class ExportTask(BaseModel):
     retry_downloads: int = 0              # 重试成功的数量
     download_speed: float = 0.0           # 总下载速度 (字节/秒)
     
+    # TDL 模式
+    tdl_mode: bool = False                # 是否使用 TDL 下载器 (完全接管)
+    
     @computed_field
     @property
     def progress(self) -> float:

@@ -97,6 +97,34 @@
         </div>
       </div>
 
+      <!-- 队列选择 Tab -->
+      <div class="queue-tabs">
+        <button 
+          :class="{ active: currentTab === 'active' }" 
+          @click="currentTab = 'active'"
+        >
+          活动中 ({{ stats.active }})
+        </button>
+        <button 
+          :class="{ active: currentTab === 'waiting' }" 
+          @click="currentTab = 'waiting'"
+        >
+          等待中 ({{ stats.waiting }})
+        </button>
+        <button 
+          :class="{ active: currentTab === 'failed' }" 
+          @click="currentTab = 'failed'"
+        >
+          失败 ({{ stats.failed }})
+        </button>
+        <button 
+          :class="{ active: currentTab === 'completed' }" 
+          @click="currentTab = 'completed'"
+        >
+          已完成 ({{ stats.completed }})
+        </button>
+      </div>
+
       <div class="queue-list" style="max-height: 60vh;">
         <div v-for="item in filteredList" :key="item.id" class="queue-item" :class="item.status">
           <div class="item-main">
@@ -197,6 +225,10 @@ async function fetchData() {
     ])
     
     task.value = taskRes.data
+    // 同步 TDL 模式状态
+    if (task.value.tdl_mode !== undefined) {
+      tdlMode.value = task.value.tdl_mode
+    }
     const newData = queueRes.data
     
     queue.value.downloading = newData.downloading
@@ -324,46 +356,28 @@ async function verifyIntegrity() {
   }
 }
 
-// TDL 下载模式切换
+// TDL 下载模式切换 (完全接管模式)
 async function toggleTDLMode() {
   try {
-    if (tdlMode.value) {
-      // 开启 TDL 模式 - 检查容器并启动下载
-      const statusRes = await axios.get('/api/tdl/status', { headers: getAuthHeader() })
-      const status = statusRes.data
-      
-      if (!status.docker_available) {
-        alert(`⚠️ Docker 不可用\n\n${status.container_error || '请检查 Docker socket 是否已挂载'}`)
-        tdlMode.value = false
-        return
-      }
-      
-      if (!status.container_running) {
-        alert(`⚠️ TDL 容器未运行\n\n容器名: ${status.container_name}\n错误: ${status.container_error || '未知'}`)
-        tdlMode.value = false
-        return
-      }
-      
-      // 启动 TDL 下载
-      const result = await axios.post(`/api/export/${taskId}/tdl-start`, null, {
-        headers: getAuthHeader()
-      })
-      
-      if (result.data.success) {
-        console.log('TDL 下载已启动:', result.data.message)
-        startTDLProgressPolling()
-      } else {
-        alert(result.data.message || 'TDL 启动失败')
-        tdlMode.value = false
+    // 调用后端 API 保存 TDL 模式状态
+    const res = await axios.post(`/api/export/${taskId}/tdl-mode`, null, {
+      params: { enabled: tdlMode.value },
+      headers: getAuthHeader()
+    })
+    
+    if (res.data.status === 'ok') {
+      console.log('TDL 模式:', res.data.message)
+      // 提示用户
+      if (tdlMode.value) {
+        alert(`✅ TDL 模式已开启\n\n现在点击"恢复任务"将使用 TDL 下载器。`)
       }
     } else {
-      // 关闭 TDL 模式
-      await axios.post(`/api/export/${taskId}/tdl-cancel`, null, { headers: getAuthHeader() })
-      stopTDLProgressPolling()
+      alert(res.data.message || 'TDL 模式设置失败')
+      tdlMode.value = !tdlMode.value  // 恢复原状态
     }
   } catch (err) {
     console.error('TDL 模式切换失败:', err)
-    tdlMode.value = false
+    tdlMode.value = !tdlMode.value  // 恢复原状态
     alert('TDL 操作失败: ' + (err.response?.data?.detail || err.message))
   }
 }
@@ -948,9 +962,42 @@ onUnmounted(() => {
 }
 .tdl-mode-toggle.active .toggle-label-text { color: white; }
 
+/* 队列选择 Tab */
+.queue-tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.queue-tabs button {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: white;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.queue-tabs button:hover {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+}
+
+.queue-tabs button.active {
+  background: #3b82f6;
+  border-color: #2563eb;
+  color: white;
+  box-shadow: 0 2px 4px rgba(59, 130, 246, 0.2);
+}
+
 /* 扫描状态迷你条 (v1.6.4) */
 .scanning-status-mini {
-  margin-top: 12px;
+  margin: 12px;
   background: #f0f9ff;
   border: 1px solid #bae6fd;
   border-radius: 12px;
