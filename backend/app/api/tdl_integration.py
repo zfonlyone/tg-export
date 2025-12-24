@@ -48,14 +48,24 @@ class AsyncDockerClient:
             writer.write(request)
             await writer.drain()
             
-            # 读取响应 (限制大小防止内存溢出)
-            response = await asyncio.wait_for(
-                reader.read(65536),
-                timeout=timeout
-            )
+            # 循环读取完整响应直到 EOF
+            chunks = []
+            try:
+                while True:
+                    chunk = await asyncio.wait_for(reader.read(8192), timeout=timeout)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            except asyncio.TimeoutError:
+                pass  # 读取超时，使用已读取的数据
+            
+            response = b"".join(chunks)
             
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except:
+                pass
             
             # 解析响应
             if b"\r\n\r\n" in response:
@@ -71,8 +81,9 @@ class AsyncDockerClient:
                 # 解析 JSON body
                 try:
                     result = json.loads(body_data.decode()) if body_data.strip() else {}
-                except json.JSONDecodeError:
-                    result = {"raw": body_data.decode()}
+                except json.JSONDecodeError as e:
+                    logger.debug(f"[TDL] JSON 解析失败: {e}, 数据长度: {len(body_data)}")
+                    result = {"raw": body_data.decode()[:500]}
                 
                 return {"status_code": status_code, "data": result}
             
@@ -101,17 +112,29 @@ class AsyncDockerClient:
         """检查容器是否运行"""
         result = await self._make_request("GET", f"/containers/{container_name}/json", timeout=5.0)
         
-        if result.get("status_code") == 404:
+        status_code = result.get("status_code", 0)
+        logger.debug(f"[TDL] 容器检查响应: status_code={status_code}")
+        
+        if status_code == 404:
             return False, f"容器 '{container_name}' 不存在"
         
-        if result.get("status_code") == 200:
+        if status_code == 200:
             data = result.get("data", {})
-            state = data.get("State", {})
-            if state.get("Running"):
+            # 调试: 打印 data 类型和部分内容
+            logger.debug(f"[TDL] 响应数据类型: {type(data)}, 键: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
+            
+            state = data.get("State", {}) if isinstance(data, dict) else {}
+            running = state.get("Running", False)
+            status = state.get("Status", "unknown")
+            
+            logger.debug(f"[TDL] State: Running={running}, Status={status}")
+            
+            if running:
                 return True, None
-            return False, f"容器状态: {state.get('Status', 'unknown')}"
+            return False, f"容器状态: {status}"
         
-        return False, result.get("error", "检查失败")
+        return False, result.get("error", f"检查失败 (status={status_code})")
+
     
     async def exec_command(self, container_name: str, cmd: list, timeout: float = 300.0) -> dict:
         """在容器中执行命令"""
