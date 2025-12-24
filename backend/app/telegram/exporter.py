@@ -1133,8 +1133,18 @@ class ExportManager:
                 try: os.chmod(target_sub_dir, 0o777)
                 except: pass
 
-                # [v1.6.9] 使用批处理聚合器提交任务，自动处理链接聚合
-                result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir))
+                # [v2.2.0] 如果最大并发为 1，则不使用批量聚合器，直接触发下载
+                if options.max_concurrent_downloads == 1:
+                    from ..api.tdl_integration import tdl_integration
+                    result = await tdl_integration.download(
+                        url=url,
+                        output_dir=str(target_sub_dir),
+                        threads=options.download_threads,
+                        limit=1
+                    )
+                else:
+                    # 使用批处理聚合器提交任务，自动处理链接聚合
+                    result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir))
                 
                 if result.get("success"):
                     # TDL 下载成功

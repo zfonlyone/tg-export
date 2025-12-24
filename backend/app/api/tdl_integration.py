@@ -309,8 +309,8 @@ class TDLDownloader:
         self,
         url: Union[str, List[str]],
         output_dir: str = "/downloads",
-        threads: int = 4,
-        limit: int = 2,
+        threads: int = 8,
+        limit: int = 1,
         file_template: str = None
     ) -> Dict[str, Any]:
         """使用 TDL 下载文件 (支持单链接或列表批量下载)
@@ -323,7 +323,7 @@ class TDLDownloader:
             file_template: 文件名模板
         """
         urls = [url] if isinstance(url, str) else url
-        logger.info(f"[TDL] 下载任务启动: count={len(urls)}, limit={limit}, dir={output_dir}")
+        logger.info(f"[TDL] 下载任务启动: count={len(urls)}, threads={threads}, limit={limit}, dir={output_dir}")
         
         # 检查容器状态
         running, error = await self.docker.is_container_running(self.container_name)
@@ -346,12 +346,12 @@ class TDLDownloader:
             "--skip-same"
         ])
         
-        # 使用文件名模板 (v2.1.2)
+        # 使用文件名模板 (v2.2.0 Fix)
         if file_template:
             cmd.extend(["--template", file_template])
         else:
-            # 兼容逻辑: {MessageID}-{abs(ChatID)}-{FileName} -> 匹配项目标准 (剥离负号)
-            cmd.extend(["--template", '{{.MessageID}}-{{replace .ChatID "-" ""}}-{{.FileName}}'])
+            # 兼容逻辑: {ID}-{abs(PeerID)}-{FileName} -> 匹配项目标准 (剥离负号)
+            cmd.extend(["--template", '{{.ID}}-{{replace .PeerID "-" ""}}-{{.FileName}}'])
         
         logger.info(f"[TDL] 正在执行批量命令 (url数量: {len(urls)})")
         
