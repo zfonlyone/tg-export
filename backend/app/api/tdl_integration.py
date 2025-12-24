@@ -20,6 +20,37 @@ class AsyncDockerClient:
     def __init__(self, socket_path: str = DOCKER_SOCKET):
         self.socket_path = socket_path
     
+    def _decode_chunked(self, data: bytes) -> bytes:
+        """解码 chunked transfer encoding"""
+        result = []
+        pos = 0
+        while pos < len(data):
+            # 查找 chunk size 行结束
+            line_end = data.find(b"\r\n", pos)
+            if line_end == -1:
+                break
+            
+            # 解析 chunk size (16进制)
+            try:
+                chunk_size = int(data[pos:line_end].decode().strip(), 16)
+            except ValueError:
+                break
+            
+            if chunk_size == 0:
+                break  # 最后一个 chunk
+            
+            # 提取 chunk 数据
+            chunk_start = line_end + 2
+            chunk_end = chunk_start + chunk_size
+            if chunk_end > len(data):
+                result.append(data[chunk_start:])
+                break
+            
+            result.append(data[chunk_start:chunk_end])
+            pos = chunk_end + 2  # 跳过 \r\n
+        
+        return b"".join(result)
+    
     async def _make_request(self, method: str, path: str, body: dict = None, timeout: float = 10.0) -> dict:
         """异步发送 HTTP 请求到 Docker daemon"""
         try:
@@ -78,11 +109,15 @@ class AsyncDockerClient:
                 parts = status_line.split()
                 status_code = int(parts[1]) if len(parts) >= 2 else 0
                 
+                # 检查是否是 chunked 编码
+                if "transfer-encoding: chunked" in header.lower():
+                    body_data = self._decode_chunked(body_data)
+                
                 # 解析 JSON body
                 try:
                     result = json.loads(body_data.decode()) if body_data.strip() else {}
                 except json.JSONDecodeError as e:
-                    logger.debug(f"[TDL] JSON 解析失败: {e}, 数据长度: {len(body_data)}")
+                    logger.debug(f"[TDL] JSON 解析失败: {e}, 前50字节: {body_data[:50]}")
                     result = {"raw": body_data.decode()[:500]}
                 
                 return {"status_code": status_code, "data": result}
