@@ -1,12 +1,11 @@
 """
-TDL Integration Module - 简化版
-TDL 仅作为单文件下载器，下载选择由 tg-export 控制
-使用 Docker HTTP API 通过 Unix socket 通信
+TDL Integration Module - 异步版本
+TDL 仅作为单文件下载器，使用异步 Docker API 通信
 """
 import os
 import json
+import asyncio
 import logging
-import socket
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -15,143 +14,160 @@ logger = logging.getLogger(__name__)
 DOCKER_SOCKET = "/var/run/docker.sock"
 
 
-class DockerAPIClient:
-    """Docker HTTP API 客户端 (通过 Unix socket)"""
+class AsyncDockerClient:
+    """异步 Docker API 客户端 (通过 Unix socket)"""
     
     def __init__(self, socket_path: str = DOCKER_SOCKET):
         self.socket_path = socket_path
     
-    def _make_request(self, method: str, path: str, body: dict = None) -> dict:
-        """发送 HTTP 请求到 Docker daemon"""
+    async def _make_request(self, method: str, path: str, body: dict = None, timeout: float = 10.0) -> dict:
+        """异步发送 HTTP 请求到 Docker daemon"""
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.settimeout(30)
-            sock.connect(self.socket_path)
+            # 检查 socket 是否存在
+            if not os.path.exists(self.socket_path):
+                return {"status_code": 0, "error": f"Docker socket 不存在: {self.socket_path}"}
             
+            # 异步连接 Unix socket
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(self.socket_path),
+                timeout=timeout
+            )
+            
+            # 构建 HTTP 请求
             body_bytes = json.dumps(body).encode() if body else b""
-            headers = [
-                f"{method} {path} HTTP/1.1",
-                "Host: localhost",
-                "Content-Type: application/json",
-                f"Content-Length: {len(body_bytes)}",
-                "",
-                ""
-            ]
-            request = "\r\n".join(headers).encode() + body_bytes
-            sock.sendall(request)
+            request = (
+                f"{method} {path} HTTP/1.1\r\n"
+                f"Host: localhost\r\n"
+                f"Content-Type: application/json\r\n"
+                f"Content-Length: {len(body_bytes)}\r\n"
+                f"Connection: close\r\n"
+                f"\r\n"
+            ).encode() + body_bytes
             
-            response = b""
-            while True:
-                chunk = sock.recv(4096)
-                if not chunk:
-                    break
-                response += chunk
-                if b"\r\n\r\n" in response:
-                    header_end = response.find(b"\r\n\r\n")
-                    header = response[:header_end].decode()
-                    if "Content-Length:" in header:
-                        for line in header.split("\r\n"):
-                            if line.startswith("Content-Length:"):
-                                content_len = int(line.split(":")[1].strip())
-                                body_start = header_end + 4
-                                if len(response) >= body_start + content_len:
-                                    break
-                    elif "Transfer-Encoding: chunked" not in header:
-                        break
+            # 发送请求
+            writer.write(request)
+            await writer.drain()
             
-            sock.close()
+            # 读取响应 (限制大小防止内存溢出)
+            response = await asyncio.wait_for(
+                reader.read(65536),
+                timeout=timeout
+            )
             
+            writer.close()
+            await writer.wait_closed()
+            
+            # 解析响应
             if b"\r\n\r\n" in response:
                 header_end = response.find(b"\r\n\r\n")
                 header = response[:header_end].decode()
-                body = response[header_end + 4:]
-                status_line = header.split("\r\n")[0]
-                status_code = int(status_line.split()[1])
+                body_data = response[header_end + 4:]
                 
+                # 获取状态码
+                status_line = header.split("\r\n")[0]
+                parts = status_line.split()
+                status_code = int(parts[1]) if len(parts) >= 2 else 0
+                
+                # 解析 JSON body
                 try:
-                    result = json.loads(body.decode()) if body else {}
-                except:
-                    result = {"raw": body.decode()}
+                    result = json.loads(body_data.decode()) if body_data.strip() else {}
+                except json.JSONDecodeError:
+                    result = {"raw": body_data.decode()}
                 
                 return {"status_code": status_code, "data": result}
             
-            return {"status_code": 500, "error": "Invalid response"}
+            return {"status_code": 500, "error": "无效响应"}
             
+        except asyncio.TimeoutError:
+            return {"status_code": 0, "error": "连接超时"}
         except FileNotFoundError:
             return {"status_code": 0, "error": f"Docker socket 不存在: {self.socket_path}"}
-        except socket.error as e:
-            return {"status_code": 0, "error": f"Socket 错误: {e}"}
+        except ConnectionRefusedError:
+            return {"status_code": 0, "error": "Docker daemon 拒绝连接"}
         except Exception as e:
             return {"status_code": 0, "error": str(e)}
     
-    def is_available(self) -> tuple:
+    async def is_available(self) -> tuple:
         """检查 Docker 是否可用"""
         if not os.path.exists(self.socket_path):
             return False, f"Docker socket 不存在: {self.socket_path}"
         
-        result = self._make_request("GET", "/version")
+        result = await self._make_request("GET", "/version", timeout=5.0)
         if result.get("status_code") == 200:
             return True, None
         return False, result.get("error", "无法连接 Docker")
     
-    def get_container_info(self, container_name: str) -> dict:
-        """获取容器信息"""
-        result = self._make_request("GET", f"/containers/{container_name}/json")
-        if result.get("status_code") == 200:
-            return result["data"]
-        return None
-    
-    def is_container_running(self, container_name: str) -> tuple:
+    async def is_container_running(self, container_name: str) -> tuple:
         """检查容器是否运行"""
-        info = self.get_container_info(container_name)
-        if info is None:
+        result = await self._make_request("GET", f"/containers/{container_name}/json", timeout=5.0)
+        
+        if result.get("status_code") == 404:
             return False, f"容器 '{container_name}' 不存在"
         
-        state = info.get("State", {})
-        if state.get("Running"):
-            return True, None
-        return False, f"容器状态: {state.get('Status', 'unknown')}"
+        if result.get("status_code") == 200:
+            data = result.get("data", {})
+            state = data.get("State", {})
+            if state.get("Running"):
+                return True, None
+            return False, f"容器状态: {state.get('Status', 'unknown')}"
+        
+        return False, result.get("error", "检查失败")
     
-    def create_exec(self, container_name: str, cmd: list) -> str:
-        """创建 exec 实例"""
-        result = self._make_request("POST", f"/containers/{container_name}/exec", {
-            "AttachStdin": False,
-            "AttachStdout": True,
-            "AttachStderr": True,
-            "Tty": False,
-            "Cmd": cmd
-        })
-        if result.get("status_code") == 201:
-            return result["data"].get("Id")
-        logger.error(f"[TDL] 创建 exec 失败: {result}")
-        return None
-    
-    def start_exec(self, exec_id: str) -> dict:
-        """启动 exec"""
-        result = self._make_request("POST", f"/exec/{exec_id}/start", {
-            "Detach": False,
-            "Tty": False
-        })
-        return result
+    async def exec_command(self, container_name: str, cmd: list, timeout: float = 300.0) -> dict:
+        """在容器中执行命令"""
+        # 创建 exec
+        create_result = await self._make_request(
+            "POST", 
+            f"/containers/{container_name}/exec",
+            {
+                "AttachStdin": False,
+                "AttachStdout": True,
+                "AttachStderr": True,
+                "Tty": False,
+                "Cmd": cmd
+            },
+            timeout=10.0
+        )
+        
+        if create_result.get("status_code") != 201:
+            return {"success": False, "error": f"创建 exec 失败: {create_result.get('error')}"}
+        
+        exec_id = create_result.get("data", {}).get("Id")
+        if not exec_id:
+            return {"success": False, "error": "未获取到 exec ID"}
+        
+        # 启动 exec
+        start_result = await self._make_request(
+            "POST",
+            f"/exec/{exec_id}/start",
+            {"Detach": False, "Tty": False},
+            timeout=timeout
+        )
+        
+        if start_result.get("status_code") == 200:
+            output = start_result.get("data", {}).get("raw", "")
+            return {"success": True, "output": output}
+        
+        return {"success": False, "error": start_result.get("error", "执行失败")}
 
 
 class TDLDownloader:
-    """TDL 下载器 - 简化版，仅提供单文件下载"""
+    """TDL 下载器 - 异步版本"""
     
     def __init__(self):
         self.container_name = os.environ.get("TDL_CONTAINER_NAME", "tdl")
-        self.docker = DockerAPIClient()
+        self.docker = AsyncDockerClient()
         logger.info(f"[TDL] 下载器初始化: container={self.container_name}, socket={DOCKER_SOCKET}")
     
-    def get_status(self) -> Dict[str, Any]:
-        """获取 TDL 状态"""
-        docker_available, docker_error = self.docker.is_available()
+    async def get_status(self) -> Dict[str, Any]:
+        """获取 TDL 状态（异步）"""
+        docker_available, docker_error = await self.docker.is_available()
         
         container_running = False
         container_error = docker_error
         
         if docker_available:
-            container_running, container_error = self.docker.is_container_running(self.container_name)
+            container_running, container_error = await self.docker.is_container_running(self.container_name)
         
         status = {
             "docker_available": docker_available,
@@ -179,53 +195,35 @@ class TDLDownloader:
         threads: int = 4,
         limit: int = 2
     ) -> Dict[str, Any]:
-        """
-        使用 TDL 下载单个文件
-        
-        Args:
-            url: Telegram 消息链接
-            output_dir: 下载目录
-            threads: 每任务线程数 (-t)
-            limit: 并发任务数 (-l)
-        
-        Returns:
-            {"success": bool, "output": str, "error": str}
-        """
+        """使用 TDL 下载单个文件（异步）"""
         logger.info(f"[TDL] 下载: url={url}, dir={output_dir}")
         
         # 检查容器状态
-        running, error = self.docker.is_container_running(self.container_name)
+        running, error = await self.docker.is_container_running(self.container_name)
         if not running:
             logger.error(f"[TDL] 容器未运行: {error}")
             return {"success": False, "error": error or "TDL 容器未运行"}
         
-        # 构建命令: tdl dl -u URL -d DIR -t THREADS -l LIMIT --skip-same
+        # 构建命令
         cmd = [
             "tdl", "dl",
             "-u", url,
             "-d", output_dir,
             "-t", str(threads),
             "-l", str(limit),
-            "--skip-same"  # 跳过已存在的相同文件
+            "--skip-same"
         ]
         logger.info(f"[TDL] 命令: {' '.join(cmd)}")
         
-        # 创建并执行
-        exec_id = self.docker.create_exec(self.container_name, cmd)
-        if not exec_id:
-            return {"success": False, "error": "创建执行失败"}
+        # 执行命令
+        result = await self.docker.exec_command(self.container_name, cmd, timeout=600.0)
         
-        result = self.docker.start_exec(exec_id)
-        status_code = result.get("status_code", 0)
+        if result.get("success"):
+            logger.info(f"[TDL] 下载完成: {result.get('output', '')[:200]}")
+        else:
+            logger.error(f"[TDL] 下载失败: {result.get('error')}")
         
-        if status_code == 200:
-            output = result.get("data", {}).get("raw", "")
-            logger.info(f"[TDL] 执行完成: {output[:200] if output else '(无输出)'}")
-            return {"success": True, "output": output}
-        
-        error_msg = result.get("error", f"执行失败 (status={status_code})")
-        logger.error(f"[TDL] 执行失败: {error_msg}")
-        return {"success": False, "error": error_msg}
+        return result
     
     async def download_by_message(
         self,
@@ -235,14 +233,7 @@ class TDLDownloader:
         threads: int = 4,
         limit: int = 2
     ) -> Dict[str, Any]:
-        """
-        通过消息 ID 下载
-        
-        Args:
-            chat_id: 频道/群组 ID
-            message_id: 消息 ID
-            output_dir: 下载目录
-        """
+        """通过消息 ID 下载（异步）"""
         url = self.generate_telegram_link(chat_id, message_id)
         logger.info(f"[TDL] 消息下载: chat={chat_id}, msg={message_id} -> {url}")
         return await self.download(url, output_dir, threads, limit)

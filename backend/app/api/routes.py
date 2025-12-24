@@ -487,7 +487,7 @@ async def save_bot_token(
 @router.get("/tdl/status")
 async def get_tdl_status(current_user: User = Depends(get_current_user)):
     """获取 TDL 状态"""
-    return tdl_integration.get_status()
+    return await tdl_integration.get_status()
 
 
 @router.post("/tdl/download")
@@ -519,21 +519,7 @@ async def tdl_download_by_message(
     return result
 
 
-@router.post("/tdl/batch-download")
-async def tdl_batch_download(
-    urls: List[str],
-    output_dir: str = "/downloads",
-    threads: int = 4,
-    limit: int = 2,
-    current_user: User = Depends(get_current_user)
-):
-    """使用 TDL 批量下载"""
-    if not urls:
-        raise HTTPException(status_code=400, detail="URL 列表不能为空")
-    result = await tdl_integration.batch_download(urls, output_dir, threads, limit)
-    if not result.get("success"):
-        raise HTTPException(status_code=400, detail=result.get("error", "批量下载失败"))
-    return result
+
 
 
 @router.post("/tdl/download-from-task")
