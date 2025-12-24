@@ -16,7 +16,7 @@ PLAIN='\033[0m'
 
 # ===== 统一配置 =====
 APP_NAME="TG Export"
-APP_VERSION="1.6.5"
+APP_VERSION="1.6.9"
 APP_DIR="/opt/tg-export"
 CONFIG_FILE=".tge_config"
 DOCKER_IMAGE="zfonlyone/tg-export:latest"

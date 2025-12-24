@@ -209,11 +209,37 @@ class AsyncDockerClient:
             timeout=timeout
         )
         
-        if start_result.get("status_code") == 200:
-            output = start_result.get("data", {}).get("raw", "")
-            return {"success": True, "output": output}
+        if start_result.get("status_code") != 200:
+            return {"success": False, "error": start_result.get("error", "执行失败")}
+            
+        # [FIX] 增加 ExitCode 检查，确保命令真正成功运行 (v1.6.8)
+        inspect_result = await self._make_request(
+            "GET",
+            f"/exec/{exec_id}/json",
+            timeout=10.0
+        )
         
-        return {"success": False, "error": start_result.get("error", "执行失败")}
+        output = start_result.get("data", {}).get("raw", "")
+        
+        if inspect_result.get("status_code") == 200:
+            exec_info = inspect_result.get("data", {})
+            exit_code = exec_info.get("ExitCode", -1)
+            running = exec_info.get("Running", False)
+            
+            logger.debug(f"[TDL] Exec 状态检查: ExitCode={exit_code}, Running={running}")
+            
+            if exit_code == 0:
+                return {"success": True, "output": output}
+            else:
+                return {
+                    "success": False, 
+                    "error": f"命令执行失败 (ExitCode={exit_code})", 
+                    "output": output
+                }
+        
+        # 如果无法获取 ExitCode，由于启动成功，暂时返回 True 但记录警告
+        logger.warning(f"[TDL] 无法获取命令退出码 ({inspect_result.get('error')})，假设执行成功")
+        return {"success": True, "output": output}
 
 
 class TDLDownloader:
@@ -222,6 +248,8 @@ class TDLDownloader:
     def __init__(self):
         self.container_name = os.environ.get("TDL_CONTAINER_NAME", "tdl")
         self.docker = AsyncDockerClient()
+        # [FIX] TDL 全局信号量，防止同一个 Session 并发导致崩溃 (v1.6.8)
+        self._semaphore = asyncio.Semaphore(1)
         logger.info(f"[TDL] 下载器初始化: container={self.container_name}, socket={DOCKER_SOCKET}")
     
     async def get_status(self) -> Dict[str, Any]:
@@ -255,22 +283,23 @@ class TDLDownloader:
     
     async def download(
         self,
-        url: str,
+        url: Union[str, List[str]],
         output_dir: str = "/downloads",
         threads: int = 4,
         limit: int = 2,
         file_template: str = None
     ) -> Dict[str, Any]:
-        """使用 TDL 下载单个文件（异步）
+        """使用 TDL 下载文件 (支持单链接或列表批量下载)
         
         Args:
-            url: Telegram 消息链接
+            url: Telegram 消息链接或链接列表
             output_dir: 下载目录
-            threads: 线程数
-            limit: 并发数
-            file_template: 文件名模板，如 "{{.MessageID}}-100{{.ChatID}}-{{.FileName}}"
+            threads: 每个文件下载的并行线程数 (-t)
+            limit: 同时下载的文件数 (-l)
+            file_template: 文件名模板
         """
-        logger.info(f"[TDL] 下载: url={url}, dir={output_dir}")
+        urls = [url] if isinstance(url, str) else url
+        logger.info(f"[TDL] 下载任务启动: count={len(urls)}, limit={limit}, dir={output_dir}")
         
         # 检查容器状态
         running, error = await self.docker.is_container_running(self.container_name)
@@ -278,32 +307,38 @@ class TDLDownloader:
             logger.error(f"[TDL] 容器未运行: {error}")
             return {"success": False, "error": error or "TDL 容器未运行"}
         
-        # 构建命令
-        cmd = [
-            "tdl", "dl",
-            "-u", url,
+        # 构建基础命令
+        cmd = ["tdl", "dl"]
+        
+        # 批量添加链接
+        for u in urls:
+            cmd.extend(["-u", u])
+            
+        # 添加其他参数
+        cmd.extend([
             "-d", output_dir,
             "-t", str(threads),
             "-l", str(limit),
             "--skip-same"
-        ]
+        ])
         
-        # 使用 tg-export 格式的文件名模板
+        # 使用文件名模板
         if file_template:
             cmd.extend(["--template", file_template])
         else:
-            # 默认模板: {message_id}-100{chat_id}-{filename}
             cmd.extend(["--template", "{{.MessageID}}-100{{.ChatID}}-{{.FileName}}"])
         
-        logger.info(f"[TDL] 命令: {' '.join(cmd)}")
+        logger.info(f"[TDL] 正在执行批量命令 (url数量: {len(urls)})")
         
-        # 执行命令
-        result = await self.docker.exec_command(self.container_name, cmd, timeout=600.0)
+        # 执行命令 (使用信号量保护)
+        async with self._semaphore:
+            result = await self.docker.exec_command(self.container_name, cmd, timeout=600.0)
         
         if result.get("success"):
             logger.info(f"[TDL] 下载完成: {result.get('output', '')[:200]}")
         else:
             logger.error(f"[TDL] 下载失败: {result.get('error')}")
+            # 如果下载失败，返回包含错误信息的详情
         
         return result
     

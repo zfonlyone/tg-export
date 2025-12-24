@@ -28,6 +28,75 @@ from .retry_manager import DownloadRetryManager
 logger = logging.getLogger(__name__)
 
 
+class TDLBatcher:
+    """TDL 批量请求聚合器 (v1.6.9)
+    
+    用于将多个 Worker 的 TDL 下载请求按目录聚合，
+    从而利用 TDL 的多连接并发能力，同时规避 Session 冲突。
+    """
+    def __init__(self):
+        self._queue = asyncio.Queue()
+        # key: (task_id, target_sub_dir) -> List[Tuple[DownloadItem, asyncio.Future]]
+        self._active_batches = {}
+        self._loop_task = None
+        
+    async def add_item(self, task: ExportTask, item: DownloadItem, target_sub_dir: str):
+        """提交一个下载项到批量器"""
+        if not self._loop_task or self._loop_task.done():
+            self._loop_task = asyncio.create_task(self._batch_loop())
+            
+        future = asyncio.Future()
+        await self._queue.put((task, item, target_sub_dir, future))
+        return await future
+
+    async def _batch_loop(self):
+        """批量聚合循环"""
+        try:
+            while True:
+                # 等待第一个项进入
+                task, item, target_sub_dir, future = await self._queue.get()
+                batch_key = (task.id, target_sub_dir)
+                
+                if batch_key not in self._active_batches:
+                    self._active_batches[batch_key] = []
+                    # 启动定时刷新
+                    asyncio.create_task(self._trigger_batch_after_delay(batch_key, task.options))
+                
+                self._active_batches[batch_key].append((item, future))
+        except asyncio.CancelledError:
+            pass
+
+    async def _trigger_batch_after_delay(self, batch_key, options: ExportOptions):
+        """等到一小段时间后执行批量下载"""
+        # 动态聚合延迟：如果任务量大，可以稍微等久一点点
+        await asyncio.sleep(0.3) 
+        
+        batch = self._active_batches.pop(batch_key, [])
+        if not batch: return
+        
+        from ..api.tdl_integration import tdl_integration
+        task_id, target_sub_dir = batch_key
+        
+        # 提取 URL 列表
+        urls = [tdl_integration.generate_telegram_link(it.chat_id, it.message_id) for it, fut in batch]
+        
+        if len(urls) > 1:
+            logger.info(f"任务 {task_id[:8]}: [TDLBatcher] 聚合了 {len(urls)} 个下载项到目录: {target_sub_dir}")
+        
+        # 调用集成的批量下载方法 (threads 是单文件连接数，limit 是批量任务内部并发数)
+        result = await tdl_integration.download(
+            url=urls,
+            output_dir=target_sub_dir,
+            threads=options.download_threads,
+            limit=len(urls) 
+        )
+        
+        # 分发结果给所有等待的 Worker
+        for it, fut in batch:
+            if not fut.done():
+                fut.set_result(result)
+
+
 class ExportManager:
     """导出管理器"""
     
@@ -55,6 +124,8 @@ class ExportManager:
         asyncio.create_task(self._auto_save_loop())
         # [NEW] 每5分钟自动恢复机制
         asyncio.create_task(self._auto_resume_loop())
+        # [NEW] TDL 批量下载聚合器 (v1.6.9)
+        self.tdl_batcher = TDLBatcher()
     
     def _set_777_recursive(self, path: Path):
         """递归设置 777 权限"""
@@ -1062,15 +1133,8 @@ class ExportManager:
                 try: os.chmod(target_sub_dir, 0o777)
                 except: pass
 
-                logger.info(f"任务 {task.id[:8]}: [TDL模式] 下载到子目录: {target_sub_dir}")
-                
-                # 调用 TDL 下载，传递具体的子目录而不是根目录
-                result = await tdl_integration.download(
-                    url=url,
-                    output_dir=str(target_sub_dir),
-                    threads=options.download_threads,
-                    limit=options.max_concurrent_downloads
-                )
+                # [v1.6.9] 使用批处理聚合器提交任务，自动处理链接聚合
+                result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir))
                 
                 if result.get("success"):
                     # TDL 下载成功
