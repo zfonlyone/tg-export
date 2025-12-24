@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     
     # 基础配置
     APP_NAME: str = "TG Export"
-    APP_VERSION: str = "1.6.9"  # TDL 批量下载优化版本
+    APP_VERSION: str = "2.1.0"  # TDL 极速批量下载版
     DEBUG: bool = False
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")
