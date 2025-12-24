@@ -119,13 +119,12 @@ class AsyncDockerClient:
                     decoded_body = body_data.decode(errors='replace')
                     result = json.loads(decoded_body) if decoded_body.strip() else {}
                 except json.JSONDecodeError as e:
-                    logger.debug(f"[TDL] JSON 解析失败: {e}, 前50字节: {body_data[:50]}")
-                    try:
-                        # 尝试安全解码前 500 字节作为 raw 输出
-                        result = {"raw": body_data.decode(errors='replace')[:500]}
-                    except Exception as de:
-                        logger.error(f"[TDL] 原始数据记录失败: {de}")
-                        result = {"error": "解码与解析均失败"}
+                    logger.debug(f"[TDL] JSON 解析失败 (可能为流响应): {e}")
+                    # 记录原始字节用于流式处理
+                    result = {
+                        "raw": body_data.decode(errors='replace')[:1000],
+                        "raw_bytes": body_data
+                    }
                 
                 return {"status_code": status_code, "data": result}
             
@@ -139,6 +138,29 @@ class AsyncDockerClient:
             return {"status_code": 0, "error": "Docker daemon 拒绝连接"}
         except Exception as e:
             return {"status_code": 0, "error": str(e)}
+
+    def _decode_docker_stream(self, data: bytes) -> str:
+        """解析 Docker 多路复用流 (Header: 8 bytes) (v2.1.1)"""
+        if not data: return ""
+        if len(data) < 8 or data[0] not in [1, 2]:
+            return data.decode(errors='replace')
+        
+        result = []
+        offset = 0
+        while offset + 8 <= len(data):
+            try:
+                import struct
+                size = struct.unpack(">I", data[offset+4:offset+8])[0]
+                offset += 8
+                if offset + size <= len(data):
+                    result.append(data[offset:offset+size].decode(errors='replace'))
+                    offset += size
+                else:
+                    result.append(data[offset:].decode(errors='replace'))
+                    break
+            except:
+                return data.decode(errors='replace')
+        return "".join(result)
     
     async def is_available(self) -> tuple:
         """检查 Docker 是否可用"""
@@ -219,7 +241,9 @@ class AsyncDockerClient:
             timeout=10.0
         )
         
-        output = start_result.get("data", {}).get("raw", "")
+        # [FIX] 解析 Docker 多路复用流，获取纯净输出 (v2.1.1)
+        raw_data = start_result.get("data", {}).get("raw_bytes", b"")
+        output = self._decode_docker_stream(raw_data)
         
         if inspect_result.get("status_code") == 200:
             exec_info = inspect_result.get("data", {})
@@ -322,11 +346,12 @@ class TDLDownloader:
             "--skip-same"
         ])
         
-        # 使用文件名模板
+        # 使用文件名模板 (v2.1.2)
         if file_template:
             cmd.extend(["--template", file_template])
         else:
-            cmd.extend(["--template", "{{.MessageID}}-100{{.ChatID}}-{{.FileName}}"])
+            # 兼容逻辑: {MessageID}-{abs(ChatID)}-{FileName} -> 匹配项目标准 (剥离负号)
+            cmd.extend(["--template", '{{.MessageID}}-{{replace .ChatID "-" ""}}-{{.FileName}}'])
         
         logger.info(f"[TDL] 正在执行批量命令 (url数量: {len(urls)})")
         

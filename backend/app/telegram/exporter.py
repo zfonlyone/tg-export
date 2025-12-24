@@ -1142,13 +1142,25 @@ class ExportManager:
                     item.progress = 100.0
                     item.speed = 0
                     task.downloaded_media += 1
+                    
+                    # [v2.1.2] 更新任务内的媒体分类统计，确保状态显示正确
+                    if item.media_type:
+                        media_key = str(item.media_type).split('.')[-1].lower() + "s"
+                        # 兼容处理特殊的目录转换逻辑
+                        dir_map = {"videos": "video_files", "voices": "voice_messages", "animations": "gifs", "documents": "files"}
+                        media_key = dir_map.get(media_key, media_key)
+                        if hasattr(task, 'media_stats') and media_key in task.media_stats:
+                            task.media_stats[media_key] += 1
+                            
                     logger.info(f"任务 {task.id[:8]}: [TDL] 下载成功: {item.file_name}")
                 else:
                     # TDL 下载失败
                     item.status = DownloadStatus.FAILED
                     item.error = result.get("error", "TDL 下载失败")
                     item.speed = 0
-                    logger.error(f"任务 {task.id[:8]}: [TDL] 下载失败: {item.file_name} - {item.error}")
+                    # [v2.1.1] 记录详细的 TDL 输出，方便定位 ExitCode=1 的原因
+                    tdl_output = result.get("output", "")
+                    logger.error(f"任务 {task.id[:8]}: [TDL] 下载失败: {item.file_name} - {item.error}\n[TDL Output]: {tdl_output}")
                 
                 await self._notify_progress(task.id, task)
                 return  # TDL 模式结束，不执行后面的 Pyrogram 下载逻辑
