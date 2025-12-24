@@ -346,12 +346,12 @@ class TDLDownloader:
             "--skip-same"
         ])
         
-        # 使用文件名模板 (v2.2.0 Fix)
+        # 使用文件名模板 (v2.1.6 Fix)
         if file_template:
             cmd.extend(["--template", file_template])
         else:
-            # 兼容逻辑: {ID}-{abs(PeerID)}-{FileName} -> 匹配项目标准 (剥离负号)
-            cmd.extend(["--template", '{{.ID}}-{{replace .PeerID "-" ""}}-{{.FileName}}'])
+            # 兼容逻辑: {MessageID}-{abs(DialogID)}-{FileName} -> 匹配项目标准 (剥离负号)
+            cmd.extend(["--template", '{{.MessageID}}-{{replace .DialogID "-" ""}}-{{.FileName}}'])
         
         logger.info(f"[TDL] 正在执行批量命令 (url数量: {len(urls)})")
         
