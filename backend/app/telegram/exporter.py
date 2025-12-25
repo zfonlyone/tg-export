@@ -84,11 +84,22 @@ class TDLBatcher:
             logger.info(f"任务 {task_id[:8]}: [TDLBatcher] 聚合了 {len(urls)} 个下载项到目录: {target_sub_dir}")
         
         # 调用集成的批量下载方法 (threads 是单文件连接数，limit 是批量任务内部并发数)
+        # 获取代理设置 - 需要从任务管理器获取任务对象
+        proxy_url = None
+        try:
+            from . import export_manager
+            task_obj = export_manager.get_task(task_id)
+            if task_obj and task_obj.proxy_enabled and task_obj.proxy_url:
+                proxy_url = task_obj.proxy_url
+        except:
+            pass
+        
         result = await tdl_integration.download(
             url=urls,
             output_dir=target_sub_dir,
             threads=options.download_threads,
-            limit=len(urls) 
+            limit=len(urls),
+            proxy=proxy_url
         )
         
         # 分发结果给所有等待的 Worker
@@ -1136,11 +1147,14 @@ class ExportManager:
                 # [v2.2.0] 如果最大并发为 1，则不使用批量聚合器，直接触发下载
                 if options.max_concurrent_downloads == 1:
                     from ..api.tdl_integration import tdl_integration
+                    # 获取代理设置
+                    proxy_url = task.proxy_url if task.proxy_enabled else None
                     result = await tdl_integration.download(
                         url=url,
                         output_dir=str(target_sub_dir),
                         threads=options.download_threads,
-                        limit=1
+                        limit=1,
+                        proxy=proxy_url
                     )
                 else:
                     # 使用批处理聚合器提交任务，自动处理链接聚合

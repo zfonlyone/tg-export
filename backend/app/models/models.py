@@ -143,6 +143,9 @@ class ExportOptions(BaseModel):
     # 消息过滤 (skip=跳过指定消息, specify=只下载指定消息)
     filter_mode: str = "none"            # none/skip/specify
     filter_messages: List[int] = Field(default_factory=list)  # 过滤的消息 ID 列表
+    
+    # 代理设置 (用于 TDL 下载)
+    proxy: str = ""  # 格式: protocol://host:port
 
     @field_validator("export_path")
     @classmethod
@@ -240,6 +243,10 @@ class ExportTask(BaseModel):
     
     # TDL 模式
     tdl_mode: bool = False                # 是否使用 TDL 下载器 (完全接管)
+    
+    # 代理设置 (运行时可修改)
+    proxy_enabled: bool = False           # 是否启用代理
+    proxy_url: str = ""                   # 当前代理地址 (格式: protocol://host:port)
     
     @computed_field
     @property

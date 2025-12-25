@@ -1,10 +1,9 @@
 #!/bin/bash
 
 # TG Export 一键部署脚本
-# 功能: 安装/卸载 TG Export + Nginx + SSL证书管理 + UFW端口
-# 新增: 下载重试机制 + 暂停/恢复 + 失败记录 + AList 风格 UI + 速率限制
-# 更新: 目录覆盖 + 并发优化 (3s/5s) + 事件循环修复 (RuntimeError) + 空包检测优化
-# ==========================================================
+# 功能: 安装/卸载 TG Export + Nginx 反向代理
+# 证书管理: 使用 nginx-acme 模块自动管理
+# ========================================================
 
 # 颜色定义
 RED='\033[0;31m'
@@ -16,17 +15,18 @@ PLAIN='\033[0m'
 
 # ===== 统一配置 =====
 APP_NAME="TG Export"
-APP_VERSION="2.1.8"
+APP_VERSION="2.2.0"
 APP_DIR="/opt/tg-export"
-CONFIG_FILE=".tge_config"
+CONFIG_DIR="$APP_DIR/config"           # 配置目录
+CONFIG_FILE="$CONFIG_DIR/config.yml"   # 配置文件 (YAML 格式)
 DOCKER_IMAGE="zfonlyone/tg-export:latest"
-WEB_PORT=9528
-HTTP_PORT=8443      # Nginx HTTP 监听端口
-HTTPS_PORT=9443     # Nginx HTTPS 监听端口
-UNIFIED_CERT_DIR="/etc/ssl/wildcard"
-NGINX_CONF="/etc/nginx/conf.d/tg-export.conf"
-CRON_FILE="/etc/cron.d/wildcard-cert-renewal"
-ACME_SH="$HOME/.acme.sh/acme.sh"
+WEB_PORT=9528                  # Docker 服务端口
+NGINX_HTTPS_PORT=443           # Nginx HTTPS 监听端口
+NGINX_CONF="/etc/nginx/sites-available/tg-export"
+
+# 旧配置文件路径 (用于迁移)
+OLD_CONFIG_FILE="$APP_DIR/.tge_config"
+OLD_ENV_FILE="$APP_DIR/.env"
 
 # 日志函数
 log() { echo -e "${GREEN}[✓]${PLAIN} $1"; }
@@ -54,7 +54,7 @@ docker_compose() {
 # ===== 显示菜单 =====
 show_menu() {
     echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
-    echo -e "${CYAN}${BOLD}      TG Export - Telegram 全功能导出工具${APP_VERSION}${PLAIN}"
+    echo -e "${CYAN}${BOLD}      TG Export - Telegram 全功能导出工具 ${APP_VERSION}${PLAIN}"
     echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
     echo -e " ${GREEN}1.${PLAIN} 安装 TG Export"
     echo -e " ${GREEN}2.${PLAIN} 卸载 TG Export"
@@ -62,8 +62,6 @@ show_menu() {
     echo -e " ${GREEN}4.${PLAIN} 查看状态"
     echo -e " ${GREEN}5.${PLAIN} 查看日志"
     echo -e " ${GREEN}6.${PLAIN} 配置 Nginx 反代"
-    echo -e " ${GREEN}7.${PLAIN} 管理 SSL 证书"
-    echo -e " ${GREEN}8.${PLAIN} 管理防火墙 (UFW)"
     echo -e " ${GREEN}0.${PLAIN} 退出"
     echo -e "${CYAN}---------------------------------------------${PLAIN}"
 }
@@ -83,53 +81,92 @@ check_disk() {
     fi
 }
 
-# ===== 读取配置 =====
+# ===== 迁移并删除旧配置 =====
+migrate_config() {
+    local need_save=false
+    
+    # 迁移旧 .tge_config
+    if [ -f "$OLD_CONFIG_FILE" ]; then
+        log "检测到旧配置文件: $OLD_CONFIG_FILE"
+        source "$OLD_CONFIG_FILE"
+        rm -f "$OLD_CONFIG_FILE"
+        log "已读取并删除旧配置"
+        need_save=true
+    fi
+    
+    # 迁移旧 .env
+    if [ -f "$OLD_ENV_FILE" ]; then
+        log "检测到旧环境变量文件: $OLD_ENV_FILE"
+        rm -f "$OLD_ENV_FILE"
+        log "已删除旧 .env"
+        need_save=true
+    fi
+    
+    # 如果有迁移，保存为新格式
+    if $need_save && [ ! -f "$CONFIG_FILE" ]; then
+        save_config
+        log "配置已迁移到新格式: $CONFIG_FILE"
+    fi
+}
+
+# ===== 读取配置 (YAML 格式) =====
 load_config() {
-    if [ -f "$APP_DIR/$CONFIG_FILE" ]; then
-        # 防止变量污染，局部读取
-        source "$APP_DIR/$CONFIG_FILE"
+    migrate_config
+    
+    if [ -f "$CONFIG_FILE" ]; then
+        # 简单解析 YAML
+        API_ID=$(grep -E "^\s*api_id:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
+        API_HASH=$(grep -E "^\s*api_hash:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
+        BOT_TOKEN=$(grep -E "^\s*bot_token:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
+        ADMIN_PASSWORD=$(grep -E "^\s*password:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
+        WEB_PORT=$(grep -E "^\s*web_port:" "$CONFIG_FILE" | awk '{print $2}' | head -1)
+        NGINX_HTTPS_PORT=$(grep -E "^\s*nginx_https_port:" "$CONFIG_FILE" | awk '{print $2}' | head -1)
+        DOMAIN=$(grep -E "^\s*domain:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
+        DOWNLOAD_DIR=$(grep -E "^\s*download_dir:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
+        LOG_LEVEL=$(grep -E "^\s*level:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
+        DOCKER_IMAGE=$(grep -E "^\s*image:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
         return 0
     fi
     return 1
 }
 
-# ===== 保存配置 =====
+# ===== 保存配置 (YAML 格式) =====
 save_config() {
-    mkdir -p "$APP_DIR"
-    cat > "$APP_DIR/$CONFIG_FILE" <<EOF
-# TG Export 配置文件 - 自动生成
-# 修改后重新运行安装即可生效
+    mkdir -p "$CONFIG_DIR"
+    cat > "$CONFIG_FILE" <<EOF
+# TG Export 配置文件 (由 tg-export.sh 自动生成)
+# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
 
-# ===== Telegram API =====
-API_ID="$API_ID"
-API_HASH="$API_HASH"
-BOT_TOKEN="$BOT_TOKEN"
+# Telegram API 配置
+telegram:
+  api_id: "${API_ID}"
+  api_hash: "${API_HASH}"
+  bot_token: "${BOT_TOKEN}"
 
-# ===== Web 面板 =====
-ADMIN_PASSWORD="$ADMIN_PASSWORD"
-WEB_PORT="${WEB_PORT:-9528}"
+# 服务配置
+server:
+  web_port: ${WEB_PORT:-9528}
+  nginx_https_port: ${NGINX_HTTPS_PORT:-443}
+  domain: "${DOMAIN}"
 
-# ===== 域名配置 =====
-DOMAIN="$DOMAIN"
-MAIN_DOMAIN="$MAIN_DOMAIN"
+# 管理员配置
+admin:
+  password: "${ADMIN_PASSWORD}"
 
-# ===== 可选组件 =====
-ENABLE_NGINX="${ENABLE_NGINX:-n}"
-NGINX_TYPE="${NGINX_TYPE:-3}"     # 1=HTTP, 2=HTTPS, 3=HTTPS+跳转
-ENABLE_SSL="${ENABLE_SSL:-n}"
-SSL_PROVIDER="${SSL_PROVIDER:-1}" # 1=HTTP, 2=CF, 3=阿里, 4=DNSPod
+# 存储配置
+storage:
+  download_dir: "${DOWNLOAD_DIR:-/storage/downloads}"
 
-# ===== 下载目录 =====
-DOWNLOAD_DIR="${DOWNLOAD_DIR:-/storage/downloads}"
+# Docker 配置
+docker:
+  image: "${DOCKER_IMAGE:-zfonlyone/tg-export:latest}"
 
-# ===== 日志级别 =====
-LOG_LEVEL="${LOG_LEVEL:-DEBUG}"
-
-# ===== Docker 镜像 =====
-DOCKER_IMAGE="${DOCKER_IMAGE:-zfonlyone/tg-export:latest}"
+# 日志配置
+logging:
+  level: ${LOG_LEVEL:-DEBUG}
 EOF
-    chmod 600 "$APP_DIR/$CONFIG_FILE"
-    log "配置已保存到 $APP_DIR/$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+    log "配置已保存到 $CONFIG_FILE"
 }
 
 # ===== 显示当前配置 =====
@@ -139,445 +176,112 @@ show_config() {
     echo -e "  API_HASH: ${GREEN}${API_HASH:+已设置}${API_HASH:-未设置}${PLAIN}"
     echo -e "  Bot Token: ${GREEN}${BOT_TOKEN:+已设置}${BOT_TOKEN:-未设置}${PLAIN}"
     echo -e "  管理员密码: ${GREEN}${ADMIN_PASSWORD:+已设置}${ADMIN_PASSWORD:-未设置}${PLAIN}"
-    echo -e "  Web 端口: ${GREEN}${WEB_PORT:-9528}${PLAIN}"
+    echo -e "  Docker 服务端口: ${GREEN}${WEB_PORT:-9528}${PLAIN}"
+    echo -e "  Nginx HTTPS 端口: ${GREEN}${NGINX_HTTPS_PORT:-443}${PLAIN}"
     echo -e "  域名: ${GREEN}${DOMAIN:-未设置}${PLAIN}"
     echo -e "  Nginx: ${GREEN}${ENABLE_NGINX:-n}${PLAIN}"
-    echo -e "  SSL: ${GREEN}${ENABLE_SSL:-n}${PLAIN}"
     echo -e "  下载目录: ${GREEN}${DOWNLOAD_DIR:-/storage/downloads}${PLAIN}"
     echo -e "  日志级别: ${GREEN}${LOG_LEVEL:-DEBUG}${PLAIN}"
 }
 
-# ===== UFW 防火墙管理 =====
-check_ufw_status() {
-    if command -v ufw &> /dev/null; then
-        UFW_STATUS=$(ufw status 2>/dev/null | head -n 1)
-        if [[ "$UFW_STATUS" == *"active"* ]]; then
-            return 0  # UFW 已启用
-        fi
-    fi
-    return 1  # UFW 未安装或未启用
-}
-
-check_port_open() {
-    local PORT=$1
-    if check_ufw_status; then
-        if ufw status | grep -q "$PORT"; then
-            return 0  # 端口已开放
-        fi
-        return 1  # 端口未开放
-    fi
-    return 0  # UFW 未启用，视为端口已开放
-}
-
-open_ufw_port() {
-    local PORT=$1
-    if check_ufw_status; then
-        if ! check_port_open $PORT; then
-            log "正在开放端口 $PORT..."
-            ufw allow $PORT/tcp
-            ufw reload
-            log "端口 $PORT 已开放"
-        else
-            log "端口 $PORT 已开放"
-        fi
-    else
-        warn "UFW 未启用，跳过端口配置"
-    fi
-}
-
-manage_ufw() {
-    echo -e "${CYAN}${BOLD}===== 防火墙 (UFW) 管理 =====${PLAIN}"
-    echo
-    
-    if ! command -v ufw &> /dev/null; then
-        warn "UFW 未安装"
-        read -p "是否安装 UFW? [y/N]: " INSTALL_UFW
-        if [[ "$INSTALL_UFW" =~ ^[Yy]$ ]]; then
-            apt-get update && apt-get install -y ufw
-        else
-            return
-        fi
-    fi
-    
-    echo -e "UFW 状态: $(ufw status | head -n 1)"
-    echo
-    echo -e "TG Export 需要的端口:"
-    echo -e "  - ${CYAN}$WEB_PORT${PLAIN} (Web 面板)"
-    echo -e "  - ${CYAN}80${PLAIN} (HTTP 验证/重定向)"
-    echo -e "  - ${CYAN}443${PLAIN} (HTTPS)"
-    echo
-    
-    if check_port_open $WEB_PORT; then
-        echo -e "  ${GREEN}✓${PLAIN} 端口 $WEB_PORT 已开放"
-    else
-        echo -e "  ${RED}✗${PLAIN} 端口 $WEB_PORT 未开放"
-    fi
-    
-    if check_port_open 80; then
-        echo -e "  ${GREEN}✓${PLAIN} 端口 80 已开放"
-    else
-        echo -e "  ${RED}✗${PLAIN} 端口 80 未开放"
-    fi
-    
-    if check_port_open 443; then
-        echo -e "  ${GREEN}✓${PLAIN} 端口 443 已开放"
-    else
-        echo -e "  ${RED}✗${PLAIN} 端口 443 未开放"
-    fi
-    
-    echo
-    echo "1. 开放所有必需端口"
-    echo "2. 查看 UFW 规则"
-    echo "3. 启用 UFW"
-    echo "4. 禁用 UFW"
-    echo "0. 返回"
-    read -p "请选择: " UFW_CHOICE
-    
-    case $UFW_CHOICE in
-        1)
-            open_ufw_port $WEB_PORT
-            open_ufw_port 80
-            open_ufw_port 443
-            ;;
-        2)
-            ufw status numbered
-            ;;
-        3)
-            ufw --force enable
-            log "UFW 已启用"
-            ;;
-        4)
-            ufw disable
-            log "UFW 已禁用"
-            ;;
-    esac
-}
-
-# ===== 安装 acme.sh =====
-install_acme() {
-    if [ ! -f "$ACME_SH" ]; then
-        log "正在安装 acme.sh..."
-        curl https://get.acme.sh | sh -s email=admin@example.com
-        source ~/.bashrc 2>/dev/null || true
-        "$ACME_SH" --set-default-ca --server letsencrypt 2>/dev/null || true
-    fi
-}
-
-# ===== 设置证书自动续期 =====
-setup_cert_cron() {
-    local domain=$1
-    
-    log "正在设置证书自动续期..."
-    
-    mkdir -p "$UNIFIED_CERT_DIR"
-    cat > "$UNIFIED_CERT_DIR/renew.sh" <<'SCRIPT'
-#!/bin/bash
-ACME_SH="$HOME/.acme.sh/acme.sh"
-if [ -f "$ACME_SH" ]; then
-    "$ACME_SH" --cron --home "$HOME/.acme.sh" > /var/log/acme-renew.log 2>&1
-    nginx -s reload 2>/dev/null || true
-fi
-SCRIPT
-    chmod +x "$UNIFIED_CERT_DIR/renew.sh"
-    
-    cat > "$CRON_FILE" <<CRON
-# TG Export 证书自动续期
-SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-0 3 1,15 * * root $UNIFIED_CERT_DIR/renew.sh
-CRON
-    
-    log "证书自动续期已配置 (每月 1 号和 15 号凌晨 3 点)"
-}
-
-# ===== 申请证书 =====
-issue_certificate() {
-    local MAIN_DOMAIN=$1
-    local SUBDOMAIN="tge.$MAIN_DOMAIN"
-    
-    mkdir -p "$UNIFIED_CERT_DIR"
-    
-    # 检查现有证书
-    if [ -f "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt" ] && [ -f "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.key" ]; then
-        if openssl x509 -checkend 86400 -noout -in "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt" 2>/dev/null; then
-            CERT_CN=$(openssl x509 -noout -subject -in "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt" 2>/dev/null | grep -oP 'CN\s*=\s*\K[^,]+')
-            if [[ "$CERT_CN" == "*.$MAIN_DOMAIN" ]] || [[ "$CERT_CN" == "$MAIN_DOMAIN" ]]; then
-                log "已存在有效证书 (CN=$CERT_CN)"
-                return 0
-            fi
-        fi
-    fi
-    
-    # 检查 v2ray-agent 证书
-    if [ -f "/etc/v2ray-agent/tls/$MAIN_DOMAIN.crt" ]; then
-        log "发现 v2ray-agent 证书，创建软链接..."
-        ln -sf "/etc/v2ray-agent/tls/$MAIN_DOMAIN.crt" "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt"
-        ln -sf "/etc/v2ray-agent/tls/$MAIN_DOMAIN.key" "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.key"
-        setup_cert_cron "$MAIN_DOMAIN"
-        return 0
-    fi
-    
-    # 申请新证书
-    install_acme
-    
-    echo -e "${CYAN}请选择证书申请方式:${PLAIN}"
-    echo -e "  ${GREEN}1)${PLAIN} HTTP 验证 (推荐)"
-    echo -e "  ${GREEN}2)${PLAIN} 通配符证书 - Cloudflare DNS"
-    echo -e "  ${GREEN}3)${PLAIN} 通配符证书 - 阿里云 DNS"
-    echo -e "  ${GREEN}4)${PLAIN} 通配符证书 - DNSPod DNS"
-    echo -e "  ${GREEN}5)${PLAIN} 跳过"
-    read -p "请选择 [1-5]: " DNS_PROVIDER
-    
-    case $DNS_PROVIDER in
-        1)
-            echo -e "${YELLOW}使用 HTTP 验证...${PLAIN}"
-            systemctl stop nginx 2>/dev/null || true
-            "$ACME_SH" --issue -d "$SUBDOMAIN" --standalone --force --server letsencrypt
-            if [ $? -eq 0 ]; then
-                "$ACME_SH" --install-cert -d "$SUBDOMAIN" \
-                    --key-file "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.key" \
-                    --fullchain-file "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt" \
-                    --reloadcmd "nginx -s reload 2>/dev/null || true"
-                log "证书申请成功！"
-                setup_cert_cron "$MAIN_DOMAIN"
-                systemctl start nginx 2>/dev/null || true
-                return 0
-            else
-                error "证书申请失败"
-                systemctl start nginx 2>/dev/null || true
-                return 1
-            fi
-            ;;
-        2)
-            read -p "请输入 Cloudflare API Token: " CF_Token
-            export CF_Token
-            "$ACME_SH" --issue -d "$MAIN_DOMAIN" -d "*.$MAIN_DOMAIN" --dns dns_cf --server letsencrypt
-            ;;
-        3)
-            read -p "请输入阿里云 AccessKey ID: " Ali_Key
-            read -p "请输入阿里云 AccessKey Secret: " Ali_Secret
-            export Ali_Key Ali_Secret
-            "$ACME_SH" --issue -d "$MAIN_DOMAIN" -d "*.$MAIN_DOMAIN" --dns dns_ali --server letsencrypt
-            ;;
-        4)
-            read -p "请输入 DNSPod ID: " DP_Id
-            read -p "请输入 DNSPod Key: " DP_Key
-            export DP_Id DP_Key
-            "$ACME_SH" --issue -d "$MAIN_DOMAIN" -d "*.$MAIN_DOMAIN" --dns dns_dp --server letsencrypt
-            ;;
-        5)
-            warn "跳过证书申请"
-            return 1
-            ;;
-    esac
-    
-    if [ $? -eq 0 ]; then
-        "$ACME_SH" --install-cert -d "$MAIN_DOMAIN" \
-            --key-file "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.key" \
-            --fullchain-file "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt" \
-            --reloadcmd "nginx -s reload 2>/dev/null || true"
-        log "通配符证书申请成功！"
-        setup_cert_cron "$MAIN_DOMAIN"
-        return 0
-    fi
-    
-    error "证书申请失败"
-    return 1
-}
-
-# ===== 证书管理菜单 =====
-manage_certs() {
-    echo -e "${CYAN}${BOLD}===== SSL 证书管理 =====${PLAIN}"
-    echo -e "统一证书目录: ${CYAN}$UNIFIED_CERT_DIR${PLAIN}"
-    echo
-    
-    if ls "$UNIFIED_CERT_DIR"/*.crt 1>/dev/null 2>&1; then
-        for cert in "$UNIFIED_CERT_DIR"/*.crt; do
-            CERT_NAME=$(basename "$cert" .crt)
-            CERT_CN=$(openssl x509 -noout -subject -in "$cert" 2>/dev/null | grep -oP 'CN\s*=\s*\K[^,]+')
-            EXPIRY=$(openssl x509 -enddate -noout -in "$cert" 2>/dev/null | cut -d= -f2)
-            
-            if [[ "$CERT_CN" == "*.$CERT_NAME" ]]; then
-                echo -e "${GREEN}✓ $CERT_NAME${PLAIN}: CN=$CERT_CN (通配符)"
-            else
-                echo -e "${YELLOW}○ $CERT_NAME${PLAIN}: CN=$CERT_CN"
-            fi
-            echo -e "  过期: $EXPIRY"
-            
-            if [ -L "$cert" ]; then
-                echo -e "  ${YELLOW}-> $(readlink -f "$cert")${PLAIN}"
-            fi
-        done
-    else
-        warn "无证书"
-    fi
-    
-    echo
-    echo "1. 申请/更新证书"
-    echo "2. 查看证书详情"
-    echo "3. 删除证书"
-    echo "4. 手动续期"
-    echo "0. 返回"
-    read -p "请选择: " CERT_CHOICE
-    
-    case $CERT_CHOICE in
-        1)
-            read -p "请输入主域名 (例如 example.com): " NEW_DOMAIN
-            if [ -n "$NEW_DOMAIN" ]; then
-                issue_certificate "$NEW_DOMAIN"
-            fi
-            ;;
-        2)
-            for cert in "$UNIFIED_CERT_DIR"/*.crt; do
-                [ -f "$cert" ] && openssl x509 -noout -text -in "$cert" | head -30
-            done
-            ;;
-        3)
-            read -p "确认删除所有证书? (yes/N): " CONFIRM_DEL
-            if [[ "$CONFIRM_DEL" == "yes" ]]; then
-                rm -f "$UNIFIED_CERT_DIR"/*.crt "$UNIFIED_CERT_DIR"/*.key
-                log "证书已删除"
-            fi
-            ;;
-        4)
-            if [ -f "$ACME_SH" ]; then
-                "$ACME_SH" --cron --home "$HOME/.acme.sh"
-                nginx -s reload 2>/dev/null || true
-                log "续期检查完成"
-            else
-                error "acme.sh 未安装"
-            fi
-            ;;
-    esac
-}
-
-# ===== 配置 Nginx =====
+# ===== 配置 Nginx (使用 nginx-acme 模块) =====
 setup_nginx() {
     echo -e "${CYAN}${BOLD}===== 配置 Nginx 反向代理 =====${PLAIN}"
     
-    # 安装 Nginx
-    if ! command -v nginx &> /dev/null; then
-        log "正在安装 Nginx..."
-        apt-get update && apt-get install -y nginx
-        systemctl enable nginx
-        systemctl start nginx
+    # 检查 nginx-acme 模块
+    if ! nginx -V 2>&1 | grep -q "nginx-acme"; then
+        warn "未检测到 nginx-acme 模块"
+        echo -e "${YELLOW}请先运行 nginx-acme.sh 安装带 ACME 模块的 Nginx${PLAIN}"
+        return 1
     fi
     
     load_config
     
+    # 域名配置
     if [ -z "$DOMAIN" ]; then
-        read -p "请输入域名 (例如 tge.example.com): " DOMAIN
+        read -p "请输入域名 (例如 tg-export.example.com): " DOMAIN
+    else
+        info "使用已配置的域名: $DOMAIN"
     fi
     
-    MAIN_DOMAIN=$(echo "$DOMAIN" | sed 's/^[^.]*\.//')
+    # Nginx HTTPS 端口配置
+    if [ -z "$NGINX_HTTPS_PORT" ] || [ "$NGINX_HTTPS_PORT" == "443" ]; then
+        read -p "请输入 Nginx HTTPS 端口 [默认 443]: " INPUT_HTTPS_PORT
+        NGINX_HTTPS_PORT=${INPUT_HTTPS_PORT:-443}
+    else
+        info "使用已配置的 HTTPS 端口: $NGINX_HTTPS_PORT"
+    fi
     
-    echo -e "${CYAN}请选择配置类型:${PLAIN}"
-    echo -e "  ${GREEN}1)${PLAIN} 仅 HTTP (端口 $HTTP_PORT)"
-    echo -e "  ${GREEN}2)${PLAIN} HTTPS (端口 $HTTPS_PORT)"
-    echo -e "  ${GREEN}3)${PLAIN} HTTPS + HTTP 自动跳转"
-    read -p "请选择 [1-3]: " NGINX_TYPE
+    # Docker 服务端口配置
+    if [ -z "$WEB_PORT" ]; then
+        read -p "请输入 Docker 服务端口 [默认 9528]: " INPUT_WEB_PORT
+        WEB_PORT=${INPUT_WEB_PORT:-9528}
+    else
+        info "使用已配置的服务端口: $WEB_PORT"
+    fi
     
-    case $NGINX_TYPE in
-        1)
-            cat > "$NGINX_CONF" <<NGINX
-# TG Export - HTTP
-server {
-    listen $HTTP_PORT;
-    server_name $DOMAIN;
-    
-    location / {
-        proxy_pass http://127.0.0.1:$WEB_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-NGINX
-            ;;
-        2|3)
-            # 检查/申请证书
-            if [ ! -f "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt" ]; then
-                issue_certificate "$MAIN_DOMAIN"
-            fi
-            
-            # 确定证书路径
-            if [ -f "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt" ]; then
-                CERT_PATH="$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt"
-                KEY_PATH="$UNIFIED_CERT_DIR/$MAIN_DOMAIN.key"
-            else
-                error "未找到证书"
-                return 1
-            fi
-            
-            if [[ "$NGINX_TYPE" == "3" ]]; then
-                # HTTPS + HTTP 跳转
-                cat > "$NGINX_CONF" <<NGINX
-# TG Export - HTTPS with HTTP redirect
-server {
-    listen $HTTP_PORT;
-    server_name $DOMAIN;
-    return 301 https://\$host:$HTTPS_PORT\$request_uri;
+    # 生成 Nginx 配置 (使用 nginx-acme 自动证书)
+    cat > "$NGINX_CONF" <<NGINX
+# TG Export - HTTPS with nginx-acme
+# Docker 服务端口: ${WEB_PORT}
+# Nginx HTTPS 端口: ${NGINX_HTTPS_PORT}
+
+# ===== WebSocket 判断 =====
+map \$http_upgrade \$connection_upgrade {
+    default upgrade;
+    '' close;
 }
 
+# ===== HTTP → HTTPS =====
 server {
-    listen $HTTPS_PORT ssl http2;
-    server_name $DOMAIN;
+    listen 80;
+    listen [::]:80;
     
-    ssl_certificate $CERT_PATH;
-    ssl_certificate_key $KEY_PATH;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
-    ssl_prefer_server_ciphers on;
+    server_name ${DOMAIN};
+    
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+    location / {
+        return 301 https://\$host:${NGINX_HTTPS_PORT}\$request_uri;
+    }
+}
+
+# ===== HTTPS ${NGINX_HTTPS_PORT} =====
+server {
+    listen ${NGINX_HTTPS_PORT} ssl;
+    listen [::]:${NGINX_HTTPS_PORT} ssl;
+    http2 on;
+    
+    server_name ${DOMAIN};
+    
+    access_log /var/log/nginx/${DOMAIN}-access.log main buffer=64k flush=10s;
+    error_log /var/log/nginx/${DOMAIN}-error.log warn;
+    
+    acme_certificate letsencrypt;
+    ssl_certificate \$acme_certificate;
+    ssl_certificate_key \$acme_certificate_key;
+    ssl_certificate_cache max=2;
     
     location / {
-        proxy_pass http://127.0.0.1:$WEB_PORT;
         proxy_http_version 1.1;
+        
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection \$connection_upgrade;
+        
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-    
-    # WebSocket 支持
-    location /ws {
-        proxy_pass http://127.0.0.1:$WEB_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header X-Forwarded-Port \$server_port;
+        
+        proxy_pass http://127.0.0.1:${WEB_PORT};
     }
 }
 NGINX
-            else
-                # 仅 HTTPS
-                cat > "$NGINX_CONF" <<NGINX
-# TG Export - HTTPS
-server {
-    listen $HTTPS_PORT ssl http2;
-    server_name $DOMAIN;
     
-    ssl_certificate $CERT_PATH;
-    ssl_certificate_key $KEY_PATH;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    
-    location / {
-        proxy_pass http://127.0.0.1:$WEB_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-}
-NGINX
-            fi
-            ;;
-    esac
+    # 启用站点
+    ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
     
     # 测试并重载 Nginx
     nginx -t
@@ -585,11 +289,20 @@ NGINX
         nginx -s reload
         log "Nginx 配置成功！"
         
-        # 开放端口
-        open_ufw_port $HTTP_PORT
-        open_ufw_port $HTTPS_PORT
+        # 显示端口开放命令
+        echo
+        echo -e "${YELLOW}请确保防火墙已开放以下端口:${PLAIN}"
+        echo -e "  ufw allow 80/tcp && ufw allow ${NGINX_HTTPS_PORT}/tcp"
+        echo
         
-        echo -e "访问地址: ${CYAN}https://$DOMAIN${PLAIN}"
+        if [ "$NGINX_HTTPS_PORT" == "443" ]; then
+            echo -e "访问地址: ${CYAN}https://${DOMAIN}${PLAIN}"
+        else
+            echo -e "访问地址: ${CYAN}https://${DOMAIN}:${NGINX_HTTPS_PORT}${PLAIN}"
+        fi
+        
+        # 保存配置
+        save_config
     else
         error "Nginx 配置有误"
     fi
@@ -807,9 +520,6 @@ YAML
         return 1
     fi
     
-    # 开放端口
-    open_ufw_port $WEB_PORT
-    
     # 安装快捷命令
     install_shortcut
     
@@ -856,120 +566,71 @@ YAML
     echo
 }
 
-# ===== 自动配置 Nginx (使用保存的配置) =====
+# ===== 自动配置 Nginx (使用 nginx-acme) =====
 setup_nginx_auto() {
-    # 安装 Nginx
-    if ! command -v nginx &> /dev/null; then
-        log "正在安装 Nginx..."
-        apt-get update && apt-get install -y nginx
-        systemctl enable nginx
-        systemctl start nginx
+    # 检查 nginx-acme 模块
+    if ! nginx -V 2>&1 | grep -q "nginx-acme"; then
+        warn "未检测到 nginx-acme 模块，跳过 Nginx 配置"
+        echo -e "${YELLOW}请先运行 nginx-acme.sh 安装带 ACME 模块的 Nginx${PLAIN}"
+        return 1
     fi
     
-    MAIN_DOMAIN=${MAIN_DOMAIN:-$(echo "$DOMAIN" | sed 's/^[^.]*\.//')}
     WEB_PORT=${WEB_PORT:-9528}
     
-    case $NGINX_TYPE in
-        1)
-            # 仅 HTTP
-            cat > "$NGINX_CONF" <<NGINX
-# TG Export - HTTP
-server {
-    listen $HTTP_PORT;
-    server_name $DOMAIN;
-    
-    location / {
-        proxy_pass http://127.0.0.1:$WEB_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-    }
-}
-NGINX
-            ;;
-        2|3)
-            # 检查/申请证书
-            if [ ! -f "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt" ]; then
-                issue_certificate "$MAIN_DOMAIN"
-            fi
-            
-            if [ -f "$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt" ]; then
-                CERT_PATH="$UNIFIED_CERT_DIR/$MAIN_DOMAIN.crt"
-                KEY_PATH="$UNIFIED_CERT_DIR/$MAIN_DOMAIN.key"
-            else
-                warn "未找到证书，使用 HTTP 模式"
-                NGINX_TYPE=1
-                setup_nginx_auto
-                return
-            fi
-            
-            if [[ "$NGINX_TYPE" == "3" ]]; then
-                # HTTPS + 跳转
-                cat > "$NGINX_CONF" <<NGINX
-# TG Export - HTTPS with redirect
-server {
-    listen $HTTP_PORT;
-    server_name $DOMAIN;
-    return 301 https://\$host:$HTTPS_PORT\$request_uri;
+    # 生成 Nginx 配置 (使用 nginx-acme 自动证书)
+    cat > "$NGINX_CONF" <<NGINX
+# TG Export - HTTPS with nginx-acme
+map \$http_upgrade \$connection_upgrade {
+    default upgrade;
+    '' close;
 }
 
 server {
-    listen $HTTPS_PORT ssl http2;
-    server_name $DOMAIN;
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
     
-    ssl_certificate $CERT_PATH;
-    ssl_certificate_key $KEY_PATH;
-    ssl_protocols TLSv1.2 TLSv1.3;
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+    location / {
+        return 301 https://\$host\$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name ${DOMAIN};
+    
+    access_log /var/log/nginx/${DOMAIN}-access.log main buffer=64k flush=10s;
+    error_log /var/log/nginx/${DOMAIN}-error.log warn;
+    
+    acme_certificate letsencrypt;
+    ssl_certificate \$acme_certificate;
+    ssl_certificate_key \$acme_certificate_key;
+    ssl_certificate_cache max=2;
     
     location / {
-        proxy_pass http://127.0.0.1:$WEB_PORT;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection \$connection_upgrade;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
-    }
-    
-    location /ws {
-        proxy_pass http://127.0.0.1:$WEB_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_pass http://127.0.0.1:${WEB_PORT};
     }
 }
 NGINX
-            else
-                # 仅 HTTPS
-                cat > "$NGINX_CONF" <<NGINX
-# TG Export - HTTPS
-server {
-    listen $HTTPS_PORT ssl http2;
-    server_name $DOMAIN;
     
-    ssl_certificate $CERT_PATH;
-    ssl_certificate_key $KEY_PATH;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    
-    location / {
-        proxy_pass http://127.0.0.1:$WEB_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-    }
-}
-NGINX
-            fi
-            ;;
-    esac
+    # 启用站点
+    ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
     
     nginx -t && nginx -s reload
     if [ $? -eq 0 ]; then
         log "Nginx 配置成功！"
-        open_ufw_port $HTTP_PORT
-        open_ufw_port $HTTPS_PORT
     else
         error "Nginx 配置有误"
     fi
@@ -988,10 +649,9 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
-APP_VERSION="1.3.2"
+APP_VERSION="2.2.0"
 
 APP_DIR="/opt/tg-export"
-UNIFIED_CERT_DIR="/etc/ssl/wildcard"
 
 # Docker Compose 封装 (含目录切换)
 function docker_compose() {
@@ -1005,20 +665,19 @@ function docker_compose() {
 
 function show_menu() {
     clear
-    echo -e "${GREEN}=== TG Export 管理工具 (tge)${APP_VERSION} ===${NC}"
+    echo -e "${GREEN}=== TG Export 管理工具 (tge) ${APP_VERSION} ===${NC}"
     echo "1. 启动服务"
     echo "2. 停止服务"
     echo "3. 重启服务"
     echo "4. 查看状态"
     echo "5. 查看日志"
     echo "6. 更新镜像"
-    echo "7. 证书管理"
-    echo "8. 密码管理"
-    echo "9. 安装/更新"
-    echo "10. 卸载工具"
+    echo "7. 密码管理"
+    echo "8. 安装/更新"
+    echo "9. 卸载工具"
     echo "0. 退出"
     echo
-    read -p "请选择 [0-10]: " choice
+    read -p "请选择 [0-9]: " choice
     handle_choice "$choice"
 }
 
@@ -1030,8 +689,8 @@ function handle_choice() {
         4) 
             docker ps | grep -E "CONTAINER|tg-export"
             echo
-            if [ -f /etc/nginx/conf.d/tg-export.conf ]; then
-                DOMAIN=$(grep "server_name" /etc/nginx/conf.d/tg-export.conf | head -1 | awk '{print $2}' | tr -d ';')
+            if [ -f /etc/nginx/sites-available/tg-export ]; then
+                DOMAIN=$(grep "server_name" /etc/nginx/sites-available/tg-export | head -1 | awk '{print $2}' | tr -d ';')
                 echo -e "域名: ${GREEN}$DOMAIN${NC}"
             fi
             read -p "按回车继续..."
@@ -1039,10 +698,9 @@ function handle_choice() {
             ;;
         5) docker_compose logs -f --tail=100 tg-export ;;
         6) cd "$APP_DIR" && docker_compose pull && docker_compose up -d; read -p "按回车继续..."; show_menu ;;
-        7) manage_certs; show_menu ;;
-        8) manage_password; show_menu ;;
-        9) bash "$APP_DIR/tg-export.sh" install; read -p "按回车继续..."; show_menu ;;
-        10) bash "$APP_DIR/tg-export.sh" uninstall; exit 0 ;;
+        7) manage_password; show_menu ;;
+        8) bash "$APP_DIR/tg-export.sh" install; read -p "按回车继续..."; show_menu ;;
+        9) bash "$APP_DIR/tg-export.sh" uninstall; exit 0 ;;
         0) exit 0 ;;
         *) show_menu ;;
     esac
@@ -1101,19 +759,7 @@ function update_password() {
     echo -e "新密码: ${YELLOW}$NEW_PWD${NC}"
 }
 
-function manage_certs() {
-    echo -e "${CYAN}=== 证书管理 ===${NC}"
-    if ls "$UNIFIED_CERT_DIR"/*.crt 1>/dev/null 2>&1; then
-        for cert in "$UNIFIED_CERT_DIR"/*.crt; do
-            DOMAIN=$(basename "$cert" .crt)
-            EXPIRY=$(openssl x509 -enddate -noout -in "$cert" 2>/dev/null | cut -d= -f2)
-            echo -e "${GREEN}✓ $DOMAIN${NC}: 过期 $EXPIRY"
-        done
-    else
-        echo -e "${YELLOW}无证书${NC}"
-    fi
-    read -p "按回车继续..."
-}
+
 
 # 直接命令支持
 case "$1" in
@@ -1175,9 +821,7 @@ uninstall_app() {
             echo "  - 所有配置和会话文件"
             echo "  - Docker 容器和镜像 (tg-export)"
             echo "  - Nginx 配置"
-            echo "  - SSL 证书 (可选)"
             echo
-            read -p "是否同时删除 SSL 证书? (y/N): " DELETE_SSL
             read -p "${RED}确认完全清理?${PLAIN} (输入 'YES' 确认): " CONFIRM
             
             if [[ "$CONFIRM" != "YES" ]]; then
@@ -1199,15 +843,6 @@ uninstall_app() {
             
             # 删除 Nginx 配置
             rm -f "$NGINX_CONF"
-            nginx -s reload 2>/dev/null || true
-            
-            # 删除 SSL 证书
-            if [[ "$DELETE_SSL" =~ ^[Yy]$ ]]; then
-                rm -rf "$UNIFIED_CERT_DIR"
-                rm -f "$CRON_FILE"
-                log "SSL 证书已删除"
-            fi
-            
             # 删除快捷命令
             rm -f /usr/bin/tge
             
@@ -1239,18 +874,12 @@ show_status() {
     fi
     
     echo
-    if [ -f "$NGINX_CONF" ]; then
-        DOMAIN=$(grep "server_name" "$NGINX_CONF" | head -1 | awk '{print $2}' | tr -d ';')
+    if [ -f "$NGINX_CONF" ] || [ -L /etc/nginx/sites-enabled/tg-export ]; then
+        DOMAIN=$(grep "server_name" "$NGINX_CONF" 2>/dev/null | head -1 | awk '{print $2}' | tr -d ';')
         echo -e "Nginx: ${GREEN}已配置${PLAIN} ($DOMAIN)"
+        echo -e "SSL: ${CYAN}nginx-acme 模块自动管理${PLAIN}"
     else
         echo -e "Nginx: ${YELLOW}未配置${PLAIN}"
-    fi
-    
-    echo
-    if ls "$UNIFIED_CERT_DIR"/*.crt 1>/dev/null 2>&1; then
-        echo -e "SSL 证书: ${GREEN}已配置${PLAIN}"
-    else
-        echo -e "SSL 证书: ${YELLOW}未配置${PLAIN}"
     fi
     
     echo
@@ -1273,13 +902,11 @@ main() {
         update) update_app ;;
         status) show_status ;;
         nginx) setup_nginx ;;
-        cert) manage_certs ;;
-        ufw) manage_ufw ;;
         logs) docker_compose logs -f --tail=100 tg-export ;;
         *) 
             while true; do
                 show_menu
-                read -p "请选择 [0-8]: " CHOICE
+                read -p "请选择 [0-6]: " CHOICE
                 echo
                 case $CHOICE in
                     1) install_app ;;
@@ -1288,8 +915,6 @@ main() {
                     4) show_status ;;
                     5) docker_compose logs -f --tail=100 tg-export ;;
                     6) setup_nginx ;;
-                    7) manage_certs ;;
-                    8) manage_ufw ;;
                     0) exit 0 ;;
                     *) error "无效选择" ;;
                 esac

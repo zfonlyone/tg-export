@@ -50,7 +50,7 @@ logger.info(f"日志已配置，存储路径: {log_file}")
 app = FastAPI(
     title="TG Export",
     description="Telegram 全功能导出工具",
-    version="2.1.8",
+    version="2.2.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )

@@ -311,7 +311,8 @@ class TDLDownloader:
         output_dir: str = "/downloads",
         threads: int = 8,
         limit: int = 1,
-        file_template: str = None
+        file_template: str = None,
+        proxy: str = None
     ) -> Dict[str, Any]:
         """使用 TDL 下载文件 (支持单链接或列表批量下载)
         
@@ -353,6 +354,11 @@ class TDLDownloader:
             # 兼容逻辑: {MessageID}-{abs(DialogID)}-{FileName}
             # [v2.1.7] 必须先用 printf 转为 string 才能配合 replace 使用，否则报错 wrong type got int64
             cmd.extend(["--template", '{{.MessageID}}-{{printf "%d" .DialogID | replace "-" ""}}-{{.FileName}}'])
+        
+        # 代理设置 (v2.2.0)
+        if proxy:
+            cmd.extend(["--proxy", proxy])
+            logger.info(f"[TDL] 使用代理: {proxy}")
         
         logger.info(f"[TDL] 正在执行批量命令 (url数量: {len(urls)})")
         

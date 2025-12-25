@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     
     # 基础配置
     APP_NAME: str = "TG Export"
-    APP_VERSION: str = "2.1.8"  # TDL 预热通信版
+    APP_VERSION: str = "2.2.0"  # 代理下载模式版
     DEBUG: bool = False
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")
@@ -46,6 +46,9 @@ class Settings(BaseSettings):
     PARALLEL_CHUNK_CONNECTIONS: int = int(os.getenv("PARALLEL_CHUNK_CONNECTIONS", 4))
     MIN_PARALLEL_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB，小于此值不启用并行
     ENABLE_PARALLEL_DOWNLOAD: bool = os.getenv("ENABLE_PARALLEL_DOWNLOAD", "true").lower() == "true"
+    
+    # 代理设置 (用于 TDL 下载)
+    PROXY_URL: str = os.getenv("PROXY_URL", "")
     
     class Config:
         env_file = ".env"

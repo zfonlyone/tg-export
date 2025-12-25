@@ -589,6 +589,36 @@ async def set_tdl_mode(
     }
 
 
+@router.post("/export/{task_id}/proxy")
+async def set_proxy(
+    task_id: str,
+    enabled: bool,
+    url: str = "",
+    current_user: User = Depends(get_current_user)
+):
+    """设置任务的代理配置（运行时可切换）
+    
+    Args:
+        enabled: 是否启用代理
+        url: 代理地址 (格式: protocol://host:port)
+    """
+    task = export_manager.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    
+    task.proxy_enabled = enabled
+    task.proxy_url = url if enabled else ""
+    export_manager._save_tasks()
+    
+    return {
+        "status": "ok",
+        "task_id": task_id,
+        "proxy_enabled": enabled,
+        "proxy_url": task.proxy_url,
+        "message": f"代理已{'启用: ' + url if enabled and url else '禁用'}"
+    }
+
+
 @router.post("/export/{task_id}/tdl-start")
 async def start_tdl_download(
     task_id: str,

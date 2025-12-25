@@ -240,6 +240,15 @@
             <p style="color: #666; font-size: 12px; margin-top: 4px;">建议范围: 5 - 10</p>
           </div>
         </div>
+        
+        <!-- 代理设置 -->
+        <div style="margin-top: 15px;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label">🌐 代理设置 (可选，TDL 模式生效)</label>
+            <input v-model="options.proxy" class="form-input" placeholder="例如: socks5://localhost:1080">
+            <p style="color: #666; font-size: 12px; margin-top: 4px;">支持 socks5/http/https 协议，格式: protocol://host:port</p>
+          </div>
+        </div>
       </div>
       
       <div style="margin-top: 20px; display: flex; justify-content: space-between;">
@@ -379,7 +388,10 @@ const options = reactive({
   
   // 消息过滤
   filter_mode: 'skip',
-  filter_messages: []
+  filter_messages: [],
+  
+  // 代理设置
+  proxy: ''
 })
 
 const formatText = {

@@ -1,8 +1,8 @@
-# TG Export - Telegram 全功能导出工具 v2.1.8
+# TG Export - Telegram 全功能导出工具 v2.2.0
 
 📥 一键导出 Telegram 私密频道、群组、私聊的全部内容，支持 HTML + JSON 格式输出。
 
-## ✨ v1.6.9 核心更新
+## ✨ v2.2.0 核心更新
 
 ### 🚀 TDL 极速引擎 (Rocket Mode)
 - **全新集成 TDL**：Go 语言编写的底层下载引擎，速度提升 3-10 倍。

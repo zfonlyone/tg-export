@@ -24,6 +24,7 @@ services:
       - BOT_TOKEN=${BOT_TOKEN:-}
       - USE_IPV6=${USE_IPV6:-false}
       - TDL_CONTAINER_NAME=${TDL_CONTAINER_NAME:-tdl}
+      - PROXY_URL=${PROXY_URL:-}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8080/health" ]
       interval: 30s

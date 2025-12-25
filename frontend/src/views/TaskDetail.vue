@@ -64,35 +64,55 @@
     <!-- 统一任务列表 (v1.6.7.2 布局优化) -->
     <div class="unified-task-list">
       <div class="list-toolbar">
-        <!-- 统一横排工具栏 -->
-        <div class="toolbar-row">
-          <!-- 左侧：并发控制 -->
-          <div class="toolbar-left">
-            <span class="toolbar-label">并发</span>
-            <div class="mini-stepper">
-              <button @click="adjustConcurrency('max', -1)" :disabled="concurrency.max <= 1">-</button>
-              <span class="ctrl-val">{{ concurrency.max }}</span>
-              <button @click="adjustConcurrency('max', 1)" :disabled="concurrency.max >= 20">+</button>
+        <!-- 三区工具栏: 功能区 | 展示区 | 输入区 -->
+        <div class="toolbar-row toolbar-three-section">
+          <!-- 功能区：开关和按钮 -->
+          <div class="toolbar-section toolbar-functions">
+            <span class="section-label">功能</span>
+            <div class="function-group">
+              <span class="toolbar-label">并发</span>
+              <div class="mini-stepper">
+                <button @click="adjustConcurrency('max', -1)" :disabled="concurrency.max <= 1">-</button>
+                <span class="ctrl-val">{{ concurrency.max }}</span>
+                <button @click="adjustConcurrency('max', 1)" :disabled="concurrency.max >= 20">+</button>
+              </div>
+              <label class="toolbar-toggle">
+                <input type="checkbox" v-model="concurrency.enableParallel" @change="toggleParallel">
+                <span>⚡并行</span>
+              </label>
+              <label class="toolbar-toggle tdl" :class="{ active: tdlMode }">
+                <input type="checkbox" v-model="tdlMode" @change="toggleTDLMode">
+                <span>🚀 TDL</span>
+              </label>
+              <label class="toolbar-toggle proxy" :class="{ active: proxyEnabled }">
+                <input type="checkbox" v-model="proxyEnabled" @change="toggleProxy">
+                <span>🌐 代理</span>
+              </label>
             </div>
-            <label class="toolbar-toggle">
-              <input type="checkbox" v-model="concurrency.enableParallel" @change="toggleParallel">
-              <span>⚡并行</span>
-            </label>
           </div>
           
-          <!-- 右侧：状态和功能 -->
-          <div class="toolbar-right">
-            <span class="toolbar-status" v-if="stats.current_concurrency">
-              🚦 {{stats.current_concurrency}} / {{stats.active_threads}}
-            </span>
-            <label class="toolbar-toggle tdl" :class="{ active: tdlMode }">
-              <input type="checkbox" v-model="tdlMode" @change="toggleTDLMode">
-              <span>🚀 TDL</span>
-            </label>
-            <button @click="toggleSort" class="toolbar-btn" :title="reversedOrder ? '倒序' : '正序'">
-              {{ reversedOrder ? '⇅ 倒序' : '⇅ 正序' }}
-            </button>
-            <button @click="toggleViewAll" class="toolbar-btn">{{ viewAll ? '精简' : '全部' }}</button>
+          <!-- 展示区：状态信息 -->
+          <div class="toolbar-section toolbar-display">
+            <span class="section-label">状态</span>
+            <div class="display-group">
+              <span class="toolbar-status" v-if="stats.current_concurrency">
+                🚦 {{stats.current_concurrency}} / {{stats.active_threads}}
+              </span>
+              <button @click="toggleSort" class="toolbar-btn" :title="reversedOrder ? '倒序' : '正序'">
+                {{ reversedOrder ? '⇅ 倒序' : '⇅ 正序' }}
+              </button>
+              <button @click="toggleViewAll" class="toolbar-btn">{{ viewAll ? '精简' : '全部' }}</button>
+            </div>
+          </div>
+          
+          <!-- 输入区：代理地址 -->
+          <div class="toolbar-section toolbar-input" v-if="proxyEnabled">
+            <span class="section-label">代理地址</span>
+            <input v-model="proxyUrl" 
+                   @blur="updateProxyUrl" 
+                   @keyup.enter="updateProxyUrl"
+                   class="proxy-input" 
+                   placeholder="socks5://host:port">
           </div>
         </div>
       </div>
@@ -195,6 +215,8 @@ const viewAll = ref(false)
 const reversedOrder = ref(false)
 const concurrency = ref({ max: 10, enableParallel: false })  // 并发控制状态
 const tdlMode = ref(false)  // TDL 下载模式开关
+const proxyEnabled = ref(false)  // 代理开关
+const proxyUrl = ref('')  // 代理地址
 let refreshTimer = null
 
 function getAuthHeader() {
@@ -228,6 +250,11 @@ async function fetchData() {
     // 同步 TDL 模式状态
     if (task.value.tdl_mode !== undefined) {
       tdlMode.value = task.value.tdl_mode
+    }
+    // 同步代理状态
+    if (task.value.proxy_enabled !== undefined) {
+      proxyEnabled.value = task.value.proxy_enabled
+      proxyUrl.value = task.value.proxy_url || ''
     }
     const newData = queueRes.data
     
@@ -379,6 +406,36 @@ async function toggleTDLMode() {
     console.error('TDL 模式切换失败:', err)
     tdlMode.value = !tdlMode.value  // 恢复原状态
     alert('TDL 操作失败: ' + (err.response?.data?.detail || err.message))
+  }
+}
+
+// 代理模式切换
+async function toggleProxy() {
+  try {
+    const res = await axios.post(`/api/export/${taskId}/proxy`, null, {
+      params: { enabled: proxyEnabled.value, url: proxyUrl.value },
+      headers: getAuthHeader()
+    })
+    if (res.data.status !== 'ok') {
+      proxyEnabled.value = !proxyEnabled.value
+      alert(res.data.message || '代理设置失败')
+    }
+  } catch (err) {
+    proxyEnabled.value = !proxyEnabled.value
+    alert('代理设置失败: ' + (err.response?.data?.detail || err.message))
+  }
+}
+
+async function updateProxyUrl() {
+  if (proxyEnabled.value && proxyUrl.value) {
+    try {
+      await axios.post(`/api/export/${taskId}/proxy`, null, {
+        params: { enabled: true, url: proxyUrl.value },
+        headers: getAuthHeader()
+      })
+    } catch (err) {
+      alert('代理地址更新失败: ' + (err.response?.data?.detail || err.message))
+    }
   }
 }
 
@@ -803,6 +860,74 @@ onUnmounted(() => {
 .toolbar-toggle:hover { background: #e2e8f0; }
 .toolbar-toggle:has(input:checked) { background: #3b82f6; color: white; border-color: #3b82f6; }
 .toolbar-toggle.tdl:has(input:checked) { background: linear-gradient(135deg, #8b5cf6, #6366f1); border-color: #7c3aed; }
+.toolbar-toggle.proxy:has(input:checked) { background: linear-gradient(135deg, #10b981, #059669); border-color: #059669; }
+
+/* 三区工具栏布局 */
+.toolbar-three-section {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.toolbar-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #f8fafc;
+  border-radius: 10px;
+  border: 1px solid #e2e8f0;
+}
+
+.section-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.function-group, .display-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.toolbar-functions {
+  flex: 1;
+  min-width: 280px;
+}
+
+.toolbar-display {
+  min-width: 160px;
+}
+
+.toolbar-input {
+  flex: 1;
+  min-width: 200px;
+}
+
+.proxy-input {
+  flex: 1;
+  padding: 6px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  background: white;
+  transition: all 0.2s;
+}
+
+.proxy-input:focus {
+  outline: none;
+  border-color: #10b981;
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+}
+
+.proxy-input::placeholder {
+  color: #94a3b8;
+}
 
 .toolbar-btn {
   padding: 4px 10px;
