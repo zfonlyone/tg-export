@@ -1950,16 +1950,16 @@ class ExportManager:
         # [v1.6.0] 慢速扫描策略
         scan_delay = 0.2  # 基础延迟
         
-        # [Chrono FIX] 从旧到新正序扫描 (v2.3.1)
-        # 如果是增量扫描且有记录，从记录+1开始；否则从 options.message_from 开始
-        start_id = max(msg_from, last_scanned_id + 1) if options.incremental_scan_enabled else msg_from
-        
-        logger.info(f"聊天 {chat.id}: 启动正序扫描 (从 ID {start_id} 开始)")
-        
+        # [v2.3.1 Revert] 回归标准倒序扫描 (从新到旧)
+        # 优化: 如果指定了 msg_to，则从 msg_to + 1 开始扫描以节省 API 资源
+        scan_offset_id = 0
+        if msg_to > 0:
+            scan_offset_id = msg_to + 1
+            
         async for msg in telegram_client.get_chat_history(
             chat_id=chat.id,
-            offset_id=start_id,
-            reverse=True, # 启用正序模式
+            offset_id=scan_offset_id,
+            min_id=msg_from,
             max_id=msg_to if msg_to > 0 else 0
         ):
             if task.status == TaskStatus.CANCELLED:
@@ -1969,9 +1969,16 @@ class ExportManager:
             task.current_scanning_msg_id = msg.id
             if task.processed_messages % 20 == 0:
                 await self._notify_progress(task.id, task)
+                
+            # 记录本次扫描到的起始/最高 ID
+            if highest_id_this_scan == 0:
+                highest_id_this_scan = msg.id
             
-            # 在正序模式下，最后一个记录的消息 ID 即为本次最高的 ID
-            highest_id_this_scan = msg.id
+            # [v1.6.3] 增量扫描逻辑: 命中历史最高点则停止
+            force_full = getattr(task, '_force_full_scan', False)
+            if options.incremental_scan_enabled and not force_full and last_scanned_id > 0 and msg.id <= last_scanned_id:
+                logger.info(f"聊天 {chat.id}: 增量扫描命中记录 {last_scanned_id}，完成扫描")
+                break
 
             # 限制请求速率
             import random
@@ -1982,9 +1989,9 @@ class ExportManager:
                 await asyncio.sleep(1)
                 if task.status == TaskStatus.CANCELLED: break
             
-            # 消息ID范围筛选 (正序下 max_id 已由 client 处理，此处仅作冗余检查)
-            if msg_to > 0 and msg.id > msg_to: break
-            if msg.id < msg_from: continue
+            # 消息ID范围筛选 (倒序模式下的冗余校验)
+            if msg_to > 0 and msg.id > msg_to: continue # 比最大值还大的消息, 跳过继续找
+            if msg.id < msg_from: break                # 比最小值还小的消息, 直接中断
             
             # 时间范围筛选
             if options.date_from and msg.date < options.date_from: continue

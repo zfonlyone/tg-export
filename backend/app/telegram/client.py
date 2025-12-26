@@ -406,43 +406,26 @@ class TelegramClient:
         limit: int = 0,
         offset_id: int = 0,
         min_id: int = 0,
-        max_id: int = 0,
-        reverse: bool = False
+        max_id: int = 0
     ) -> AsyncGenerator[Message, None]:
-        """获取聊天历史 (支持正序扫描)"""
+        """获取聊天历史 (倒序扫描: 从新到旧)"""
         await self._ensure_connected()
         if not self._is_authorized:
             return
         
         try:
-            if reverse:
-                # 正序扫描 (从小到大/从旧到新)
-                # 使用负 offset 使 Pyrogram 从 offset_id 向后查找并按 ID 递增返回
-                async for message in self._client.get_chat_history(
-                    chat_id,
-                    limit=limit,
-                    offset_id=offset_id,
-                    offset=-limit if limit > 0 else 0 
-                ):
-                    # 正序过滤
-                    if min_id and message.id < min_id:
-                        continue
-                    if max_id and message.id > max_id:
-                        break
-                    yield message
-            else:
-                # 默认倒序扫描 (从新到旧)
-                async for message in self._client.get_chat_history(
-                    chat_id,
-                    limit=limit,
-                    offset_id=offset_id
-                ):
-                    # 倒序过滤逻辑
-                    if max_id and message.id > max_id:
-                        continue
-                    if min_id and message.id < min_id:
-                        break
-                    yield message
+            async for message in self._client.get_chat_history(
+                chat_id,
+                limit=limit,
+                offset_id=offset_id
+            ):
+                # 过滤消息范围 (倒序下: 大ID先出)
+                if max_id and message.id > max_id:
+                    continue
+                if min_id and message.id < min_id:
+                    # 倒序流中如果遇到比最小值还小的 ID，说明后续都不会满足 min_id，直接中断
+                    break
+                yield message
         except Exception as e:
             print(f"[TG] 获取聊天历史出错: {e}")
     
