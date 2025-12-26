@@ -2044,7 +2044,6 @@ class ExportManager:
                             file_path=str(file_path.relative_to(export_path))
                         )
                         
-                        # 检查是否已经存在
                         if options.skip_existing and file_path.exists():
                             # 简单检查大小是否匹配 (快速跳过)
                             if file_path.stat().st_size == download_item.file_size:
@@ -2054,8 +2053,8 @@ class ExportManager:
                                 media_path = download_item.file_path
                                 task.downloaded_media += 1
                         
-                        if download_item.status != DownloadStatus.SKIPPED:
-                            task.download_queue.append(download_item)
+                        # [v2.3.1] 始终加入队列，以便 UI 反馈 (即使是 SKIPPED)
+                        task.download_queue.append(download_item)
                     else:
                         # 如果已经在队列中且已完成，则记录路径
                         if download_item.status in [DownloadStatus.COMPLETED, DownloadStatus.SKIPPED]:
@@ -2225,6 +2224,14 @@ class ExportManager:
             return msg.document.file_size
         elif msg.audio:
             return msg.audio.file_size
+        elif msg.voice:
+            return msg.voice.file_size
+        elif msg.video_note:
+            return msg.video_note.file_size
+        elif msg.sticker:
+            return msg.sticker.file_size
+        elif msg.animation:
+            return msg.animation.file_size
         return None
     
     def _update_download_progress(self, task: ExportTask, current: int):
