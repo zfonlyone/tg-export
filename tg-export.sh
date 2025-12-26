@@ -1,9 +1,12 @@
 #!/bin/bash
 
-# TG Export 一键部署脚本
+# ==========================================================
+# TG Export 一键部署脚本 v2.3
 # 功能: 安装/卸载 TG Export + Nginx 反向代理
 # 证书管理: 使用 nginx-acme 模块自动管理
-# ========================================================
+# Nginx 配置: /etc/nginx/sites-available/$DOMAIN
+# 证书目录: /etc/nginx/acme/letsencrypt/
+# ==========================================================
 
 # 颜色定义
 RED='\033[0;31m'
@@ -15,16 +18,18 @@ PLAIN='\033[0m'
 
 # ===== 统一配置 =====
 APP_NAME="TG Export"
-APP_VERSION="2.2.0"
+APP_VERSION="2.3.0"
 APP_DIR="/opt/tg-export"
-CONFIG_DIR="$APP_DIR/config"           # 配置目录
-CONFIG_FILE="$CONFIG_DIR/config.yml"   # 配置文件 (YAML 格式)
+CONFIG_DIR="$APP_DIR/config"
+CONFIG_FILE="$CONFIG_DIR/config.yml"
 DOCKER_IMAGE="zfonlyone/tg-export:latest"
-WEB_PORT=9528                  # Docker 服务端口
-NGINX_HTTPS_PORT=443           # Nginx HTTPS 监听端口
-NGINX_CONF="/etc/nginx/sites-available/tg-export"
+WEB_PORT=9528
+NGINX_HTTPS_PORT=443
+NGINX_SITES_DIR="/etc/nginx/sites-available"
+NGINX_ENABLED_DIR="/etc/nginx/sites-enabled"
+CERT_DIR="/etc/nginx/acme/letsencrypt"
 
-# 旧配置文件路径 (用于迁移)
+# 旧配置文件路径
 OLD_CONFIG_FILE="$APP_DIR/.tge_config"
 OLD_ENV_FILE="$APP_DIR/.env"
 
@@ -94,18 +99,27 @@ migrate_config() {
         need_save=true
     fi
     
-    # 迁移旧 .env
+    # 迁移并删除旧 .env (v2.3.1 彻底迁移至 config.yml)
     if [ -f "$OLD_ENV_FILE" ]; then
         log "检测到旧环境变量文件: $OLD_ENV_FILE"
+        # 尝试提取 SECRET_KEY 等残留字段
+        local OLD_SECRET=$(grep "^SECRET_KEY=" "$OLD_ENV_FILE" | cut -d'=' -f2-)
+        local OLD_IPV6=$(grep "^USE_IPV6=" "$OLD_ENV_FILE" | cut -d'=' -f2-)
+        local OLD_TDL=$(grep "^TDL_CONTAINER_NAME=" "$OLD_ENV_FILE" | cut -d'=' -f2-)
+        
+        [ -n "$OLD_SECRET" ] && SECRET_KEY="$OLD_SECRET"
+        [ -n "$OLD_IPV6" ] && USE_IPV6="$OLD_IPV6"
+        [ -n "$OLD_TDL" ] && TDL_CONTAINER_NAME="$OLD_TDL"
+        
         rm -f "$OLD_ENV_FILE"
-        log "已删除旧 .env"
+        log "已迁移残留字段并删除旧 .env"
         need_save=true
     fi
     
     # 如果有迁移，保存为新格式
-    if $need_save && [ ! -f "$CONFIG_FILE" ]; then
+    if $need_save; then
         save_config
-        log "配置已迁移到新格式: $CONFIG_FILE"
+        log "配置已合并至: $CONFIG_FILE"
     fi
 }
 
@@ -114,7 +128,7 @@ load_config() {
     migrate_config
     
     if [ -f "$CONFIG_FILE" ]; then
-        # 简单解析 YAML
+        # 简单解析 YAML (v2.3.1 支持更多字段)
         API_ID=$(grep -E "^\s*api_id:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
         API_HASH=$(grep -E "^\s*api_hash:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
         BOT_TOKEN=$(grep -E "^\s*bot_token:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
@@ -125,6 +139,9 @@ load_config() {
         DOWNLOAD_DIR=$(grep -E "^\s*download_dir:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
         LOG_LEVEL=$(grep -E "^\s*level:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
         DOCKER_IMAGE=$(grep -E "^\s*image:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
+        SECRET_KEY=$(grep -E "^\s*secret_key:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
+        TDL_CONTAINER_NAME=$(grep -E "^\s*tdl_container:" "$CONFIG_FILE" | awk '{print $2}' | tr -d '"' | head -1)
+        USE_IPV6=$(grep -E "^\s*use_ipv6:" "$CONFIG_FILE" | awk '{print $2}' | head -1)
         return 0
     fi
     return 1
@@ -133,6 +150,9 @@ load_config() {
 # ===== 保存配置 (YAML 格式) =====
 save_config() {
     mkdir -p "$CONFIG_DIR"
+    # 如果 SECRET_KEY 为空，生成一个
+    [ -z "$SECRET_KEY" ] && SECRET_KEY=$(openssl rand -hex 32)
+    
     cat > "$CONFIG_FILE" <<EOF
 # TG Export 配置文件 (由 tg-export.sh 自动生成)
 # 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
@@ -148,6 +168,7 @@ server:
   web_port: ${WEB_PORT:-9528}
   nginx_https_port: ${NGINX_HTTPS_PORT:-443}
   domain: "${DOMAIN}"
+  secret_key: "${SECRET_KEY}"
 
 # 管理员配置
 admin:
@@ -160,6 +181,8 @@ storage:
 # Docker 配置
 docker:
   image: "${DOCKER_IMAGE:-zfonlyone/tg-export:latest}"
+  tdl_container: "${TDL_CONTAINER_NAME:-tdl}"
+  use_ipv6: ${USE_IPV6:-true}
 
 # 日志配置
 logging:
@@ -186,7 +209,7 @@ show_config() {
 
 # ===== 配置 Nginx (使用 nginx-acme 模块) =====
 setup_nginx() {
-    echo -e "${CYAN}${BOLD}===== 配置 Nginx 反向代理 =====${PLAIN}"
+    echo -e "${CYAN}${BOLD}===== 配置 Nginx 反向代理 (nginx-acme) =====${PLAIN}"
     
     # 检查 nginx-acme 模块
     if ! nginx -V 2>&1 | grep -q "nginx-acme"; then
@@ -198,66 +221,61 @@ setup_nginx() {
     load_config
     
     # 域名配置
+    read -p "请输入完整域名 (例如 tg-export.example.com): " DOMAIN
     if [ -z "$DOMAIN" ]; then
-        read -p "请输入域名 (例如 tg-export.example.com): " DOMAIN
-    else
-        info "使用已配置的域名: $DOMAIN"
+        error "域名不能为空"
+        return 1
     fi
     
-    # Nginx HTTPS 端口配置
-    if [ -z "$NGINX_HTTPS_PORT" ] || [ "$NGINX_HTTPS_PORT" == "443" ]; then
-        read -p "请输入 Nginx HTTPS 端口 [默认 443]: " INPUT_HTTPS_PORT
-        NGINX_HTTPS_PORT=${INPUT_HTTPS_PORT:-443}
-    else
-        info "使用已配置的 HTTPS 端口: $NGINX_HTTPS_PORT"
-    fi
+    # HTTPS 端口配置
+    read -p "Nginx HTTPS 端口 [默认 443]: " INPUT_HTTPS_PORT
+    NGINX_HTTPS_PORT=${INPUT_HTTPS_PORT:-443}
     
-    # Docker 服务端口配置
+    # Docker 服务端口
     if [ -z "$WEB_PORT" ]; then
-        read -p "请输入 Docker 服务端口 [默认 9528]: " INPUT_WEB_PORT
+        read -p "Docker 服务端口 [默认 9528]: " INPUT_WEB_PORT
         WEB_PORT=${INPUT_WEB_PORT:-9528}
     else
         info "使用已配置的服务端口: $WEB_PORT"
     fi
     
-    # 生成 Nginx 配置 (使用 nginx-acme 自动证书)
+    # Nginx 配置文件路径 (以完整域名命名)
+    NGINX_CONF="$NGINX_SITES_DIR/$DOMAIN"
+    
+    # 生成 Nginx 配置
     cat > "$NGINX_CONF" <<NGINX
-# TG Export - HTTPS with nginx-acme
-# Docker 服务端口: ${WEB_PORT}
-# Nginx HTTPS 端口: ${NGINX_HTTPS_PORT}
+# TG Export - nginx-acme HTTPS 配置
+# 由 tg-export.sh v2.3 自动生成
+# 域名: ${DOMAIN}
 
-# ===== WebSocket 判断 =====
 map \$http_upgrade \$connection_upgrade {
     default upgrade;
     '' close;
 }
 
-# ===== HTTP → HTTPS =====
 server {
     listen 80;
     listen [::]:80;
-    
     server_name ${DOMAIN};
     
     location /.well-known/acme-challenge/ {
         root /var/www/html;
     }
     location / {
-        return 301 https://\$host:${NGINX_HTTPS_PORT}\$request_uri;
+        return 301 https://\$host\$request_uri;
     }
 }
 
-# ===== HTTPS ${NGINX_HTTPS_PORT} =====
 server {
     listen ${NGINX_HTTPS_PORT} ssl;
     listen [::]:${NGINX_HTTPS_PORT} ssl;
     http2 on;
-    
     server_name ${DOMAIN};
     
-    access_log /var/log/nginx/${DOMAIN}-access.log main buffer=64k flush=10s;
-    error_log /var/log/nginx/${DOMAIN}-error.log warn;
+    access_log /var/log/nginx/${DOMAIN}-access.log;
+    error_log /var/log/nginx/${DOMAIN}-error.log;
     
+    # nginx-acme 自动证书
     acme_certificate letsencrypt;
     ssl_certificate \$acme_certificate;
     ssl_certificate_key \$acme_certificate_key;
@@ -265,46 +283,39 @@ server {
     
     location / {
         proxy_http_version 1.1;
-        
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection \$connection_upgrade;
-        
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_set_header X-Forwarded-Port \$server_port;
-        
         proxy_pass http://127.0.0.1:${WEB_PORT};
     }
 }
 NGINX
     
     # 启用站点
-    ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
+    ln -sf "$NGINX_CONF" "$NGINX_ENABLED_DIR/$DOMAIN"
     
-    # 测试并重载 Nginx
-    nginx -t
-    if [ $? -eq 0 ]; then
+    if nginx -t; then
         nginx -s reload
         log "Nginx 配置成功！"
-        
-        # 显示端口开放命令
         echo
-        echo -e "${YELLOW}请确保防火墙已开放以下端口:${PLAIN}"
+        info "配置文件: $NGINX_CONF"
+        info "证书目录: $CERT_DIR (由 nginx-acme 自动管理)"
+        echo
+        echo -e "${YELLOW}请确保防火墙已开放端口:${PLAIN}"
         echo -e "  ufw allow 80/tcp && ufw allow ${NGINX_HTTPS_PORT}/tcp"
         echo
-        
         if [ "$NGINX_HTTPS_PORT" == "443" ]; then
             echo -e "访问地址: ${CYAN}https://${DOMAIN}${PLAIN}"
         else
             echo -e "访问地址: ${CYAN}https://${DOMAIN}:${NGINX_HTTPS_PORT}${PLAIN}"
         fi
-        
-        # 保存配置
         save_config
     else
         error "Nginx 配置有误"
+        rm -f "$NGINX_CONF"
     fi
 }
 
@@ -463,18 +474,10 @@ install_app() {
     
     save_config
     
-
+    save_config
     
-    # 生成 .env
-    cat > .env <<EOF
-API_ID=$API_ID
-API_HASH=$API_HASH
-BOT_TOKEN=$BOT_TOKEN
-ADMIN_PASSWORD=$ADMIN_PASSWORD
-SECRET_KEY=$(openssl rand -hex 32)
-WEB_PORT=${WEB_PORT:-9528}
-LOG_LEVEL=${LOG_LEVEL:-DEBUG}
-EOF
+    # 彻底弃用 .env，所有变量直接注入 environment (v2.3.1)
+    # 不再生成 .env 文件
     
     # 使用配置的镜像
     DOCKER_IMAGE=${DOCKER_IMAGE:-ghcr.io/your-username/tg-export:latest}
@@ -484,26 +487,32 @@ EOF
     cat > docker-compose.yml <<YAML
 services:
   tg-export:
-    image: $DOCKER_IMAGE
+    image: ${DOCKER_IMAGE:-zfonlyone/tg-export:latest}
     container_name: tg-export
     restart: unless-stopped
     ports:
-      - "$WEB_PORT:$WEB_PORT"
+      - "${WEB_PORT:-9528}:${WEB_PORT:-9528}"
     volumes:
       - ./data:/app/data:shared
       - $DOWNLOAD_DIR:/downloads:shared
       - /var/run/docker.sock:/var/run/docker.sock
-    env_file:
-      - .env
+      - ./config:/app/config:ro
     environment:
       - TZ=Asia/Shanghai
-      - WEB_PORT=$WEB_PORT
-      - LOG_LEVEL=\${LOG_LEVEL:-DEBUG}
+      - WEB_PORT=${WEB_PORT:-9528}
       - DATA_DIR=/app/data
       - EXPORT_DIR=/downloads
       - TEMP_DIR=/app/data/temp
-      - TDL_CONTAINER_NAME=\${TDL_CONTAINER_NAME:-tdl}
-      - USE_IPV6=\${USE_IPV6:-true}
+      - CONFIG_PATH=/app/config/config.yml
+      # 显式注入关键变量以便后端回退兼容或直接使用
+      - API_ID=$API_ID
+      - API_HASH=$API_HASH
+      - BOT_TOKEN=$BOT_TOKEN
+      - ADMIN_PASSWORD=$ADMIN_PASSWORD
+      - SECRET_KEY=$SECRET_KEY
+      - TDL_CONTAINER_NAME=${TDL_CONTAINER_NAME:-tdl}
+      - USE_IPV6=${USE_IPV6:-true}
+      - LOG_LEVEL=${LOG_LEVEL:-DEBUG}
 YAML
     
     log "拉取镜像..."
@@ -568,18 +577,18 @@ YAML
 
 # ===== 自动配置 Nginx (使用 nginx-acme) =====
 setup_nginx_auto() {
-    # 检查 nginx-acme 模块
     if ! nginx -V 2>&1 | grep -q "nginx-acme"; then
         warn "未检测到 nginx-acme 模块，跳过 Nginx 配置"
-        echo -e "${YELLOW}请先运行 nginx-acme.sh 安装带 ACME 模块的 Nginx${PLAIN}"
         return 1
     fi
     
-    WEB_PORT=${WEB_PORT:-9528}
+    [ -z "$DOMAIN" ] && return 1
     
-    # 生成 Nginx 配置 (使用 nginx-acme 自动证书)
+    WEB_PORT=${WEB_PORT:-9528}
+    NGINX_CONF="$NGINX_SITES_DIR/$DOMAIN"
+    
     cat > "$NGINX_CONF" <<NGINX
-# TG Export - HTTPS with nginx-acme
+# TG Export - nginx-acme HTTPS
 map \$http_upgrade \$connection_upgrade {
     default upgrade;
     '' close;
@@ -589,13 +598,8 @@ server {
     listen 80;
     listen [::]:80;
     server_name ${DOMAIN};
-    
-    location /.well-known/acme-challenge/ {
-        root /var/www/html;
-    }
-    location / {
-        return 301 https://\$host\$request_uri;
-    }
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://\$host\$request_uri; }
 }
 
 server {
@@ -604,8 +608,8 @@ server {
     http2 on;
     server_name ${DOMAIN};
     
-    access_log /var/log/nginx/${DOMAIN}-access.log main buffer=64k flush=10s;
-    error_log /var/log/nginx/${DOMAIN}-error.log warn;
+    access_log /var/log/nginx/${DOMAIN}-access.log;
+    error_log /var/log/nginx/${DOMAIN}-error.log;
     
     acme_certificate letsencrypt;
     ssl_certificate \$acme_certificate;
@@ -625,15 +629,8 @@ server {
 }
 NGINX
     
-    # 启用站点
-    ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
-    
-    nginx -t && nginx -s reload
-    if [ $? -eq 0 ]; then
-        log "Nginx 配置成功！"
-    else
-        error "Nginx 配置有误"
-    fi
+    ln -sf "$NGINX_CONF" "$NGINX_ENABLED_DIR/$DOMAIN"
+    nginx -t && nginx -s reload && log "Nginx 配置成功！"
 }
 
 # ===== 安装快捷命令 =====
@@ -649,7 +646,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
-APP_VERSION="2.2.0"
+APP_VERSION="2.3.1"
 
 APP_DIR="/opt/tg-export"
 
@@ -709,11 +706,12 @@ function handle_choice() {
 function manage_password() {
     echo -e "${CYAN}=== 密码管理 ===${NC}"
     echo
-    if [ -f "$APP_DIR/.env" ]; then
-        CURRENT_PWD=$(grep ADMIN_PASSWORD "$APP_DIR/.env" | cut -d= -f2)
+    local YAML_FILE="$APP_DIR/config/config.yml"
+    if [ -f "$YAML_FILE" ]; then
+        CURRENT_PWD=$(grep -E "^\s*password:" "$YAML_FILE" | awk '{print $2}' | tr -d '"' | head -1)
         echo -e "当前密码: ${YELLOW}$CURRENT_PWD${NC}"
     else
-        echo -e "${RED}未找到配置文件${NC}"
+        echo -e "${RED}未找到 YAML 配置文件: $YAML_FILE${NC}"
     fi
     echo
     echo "1. 修改密码"
@@ -740,23 +738,22 @@ function manage_password() {
 
 function update_password() {
     local NEW_PWD=$1
+    local YAML_FILE="$APP_DIR/config/config.yml"
     
-    # 更新 .env 文件
-    if [ -f "$APP_DIR/.env" ]; then
-        sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=$NEW_PWD/" "$APP_DIR/.env"
+    # 1. 更新 config.yml
+    if [ -f "$YAML_FILE" ]; then
+        sed -i "s/^\(\s*password:\).*/\1 \"$NEW_PWD\"/" "$YAML_FILE"
+        echo -e "${GREEN}YAML 配置已更新${NC}"
     fi
     
-    # 更新配置文件
-    if [ -f "$APP_DIR/.tge_config" ]; then
-        sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=\"$NEW_PWD\"/" "$APP_DIR/.tge_config"
+    # 2. 更新 docker-compose.yml 并重启服务
+    if [ -f "$APP_DIR/docker-compose.yml" ]; then
+        sed -i "s/- ADMIN_PASSWORD=.*/- ADMIN_PASSWORD=$NEW_PWD/" "$APP_DIR/docker-compose.yml"
+        echo -e "${CYAN}正在重启服务以生效新密码...${NC}"
+        docker_compose up -d
     fi
     
-    # 重启容器
-    cd "$APP_DIR" && docker_compose restart
-    
-    echo
-    echo -e "${GREEN}密码已更新！${NC}"
-    echo -e "新密码: ${YELLOW}$NEW_PWD${NC}"
+    echo -e "${GREEN}密码修改成功！${NC}"
 }
 
 
@@ -780,75 +777,78 @@ SCRIPT
 # ===== 卸载 =====
 uninstall_app() {
     echo -e "${RED}${BOLD}===== 卸载 TG Export =====${PLAIN}"
-    echo
-    echo "请选择清理级别:"
-    echo -e "  ${GREEN}1)${PLAIN} 仅停止服务 (保留所有数据)"
-    echo -e "  ${GREEN}2)${PLAIN} 标准卸载 (保留下载数据)"
-    echo -e "  ${GREEN}3)${PLAIN} 完全清理 (删除所有数据，重新安装用)"
-    echo -e "  ${GREEN}0)${PLAIN} 取消"
-    read -p "请选择 [0-3]: " CLEAN_LEVEL
     
-    case $CLEAN_LEVEL in
-        0)
-            log "取消卸载"
-            return
-            ;;
-        1)
-            log "仅停止服务..."
-            cd "$APP_DIR" 2>/dev/null && docker_compose down
-            log "服务已停止，数据保留在 $APP_DIR"
-            ;;
-        2)
-            log "标准卸载..."
-            cd "$APP_DIR" 2>/dev/null
-            docker-compose down 2>/dev/null || docker compose down
-            docker stop tg-export 2>/dev/null
-            docker rm tg-export 2>/dev/null
-            
-            # 保留下载数据，删除配置和会话
-            rm -rf "$APP_DIR/data" 2>/dev/null
-            rm -f "$APP_DIR/.env" 2>/dev/null
-            rm -f "$APP_DIR/docker-compose.yml" 2>/dev/null
-            rm -f "$NGINX_CONF" 2>/dev/null
-            nginx -s reload 2>/dev/null || true
-            rm -f /usr/bin/tge 2>/dev/null
-            
-            log "卸载完成！下载数据保留在 ${DOWNLOAD_DIR:-/storage/downloads}"
-            ;;
-        3)
-            echo -e "${RED}警告: 将删除所有数据，包括:${PLAIN}"
-            echo "  - 安装目录 $APP_DIR"
-            echo "  - 所有配置和会话文件"
-            echo "  - Docker 容器和镜像 (tg-export)"
-            echo "  - Nginx 配置"
-            echo
-            read -p "${RED}确认完全清理?${PLAIN} (输入 'YES' 确认): " CONFIRM
-            
-            if [[ "$CONFIRM" != "YES" ]]; then
-                log "取消卸载"
-                return
+    load_config
+    
+    echo
+    echo "将执行以下操作:"
+    echo "  1. 停止并删除 TG Export 容器"
+    echo "  2. 删除快捷命令 tge"
+    echo
+    
+    # 检测 Nginx 配置
+    if [ -n "$DOMAIN" ] && [ -f "$NGINX_SITES_DIR/$DOMAIN" ]; then
+        echo -e "检测到 Nginx 配置: ${CYAN}$NGINX_SITES_DIR/$DOMAIN${PLAIN}"
+    fi
+    
+    read -p "是否删除数据目录 ($APP_DIR)? (y/N): " DELETE_DATA
+    read -p "是否删除 Nginx 配置和相关证书? (y/N): " DELETE_NGINX
+    echo
+    read -p "确认卸载 TG Export? (y/N): " CONFIRM
+    
+    if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+        log "取消卸载"
+        return
+    fi
+    
+    # 停止容器
+    if [ -f "$APP_DIR/docker-compose.yml" ]; then
+        log "正在停止 TG Export 服务..."
+        cd "$APP_DIR"
+        docker_compose down 2>/dev/null || true
+    fi
+    
+    docker stop tg-export 2>/dev/null || true
+    docker rm tg-export 2>/dev/null || true
+    log "已删除容器"
+    
+    # 删除 Nginx 配置和证书
+    if [[ "$DELETE_NGINX" =~ ^[Yy]$ ]]; then
+        if [ -n "$DOMAIN" ]; then
+            # 删除 Nginx 配置
+            if [ -f "$NGINX_SITES_DIR/$DOMAIN" ]; then
+                rm -f "$NGINX_SITES_DIR/$DOMAIN"
+                rm -f "$NGINX_ENABLED_DIR/$DOMAIN"
+                log "已删除 Nginx 配置: $DOMAIN"
             fi
             
-            log "正在完全清理..."
+            # 删除对应子域名的证书 (nginx-acme 自动生成的)
+            if [ -f "$CERT_DIR/${DOMAIN}.crt" ]; then
+                rm -f "$CERT_DIR/${DOMAIN}.crt"
+                rm -f "$CERT_DIR/${DOMAIN}.key"
+                log "已删除证书: ${DOMAIN}"
+            fi
             
-            # 停止并删除容器
-            cd "$APP_DIR" 2>/dev/null
-            docker_compose down -v
-            docker stop tg-export 2>/dev/null
-            docker rm tg-export 2>/dev/null
-            docker rmi $(docker images | grep tg-export | awk '{print $3}') 2>/dev/null || true
-            
-            # 删除安装目录
+            nginx -s reload 2>/dev/null || true
+        fi
+    fi
+    
+    # 删除数据目录
+    if [[ "$DELETE_DATA" =~ ^[Yy]$ ]]; then
+        if [ -d "$APP_DIR" ]; then
             rm -rf "$APP_DIR"
-            
-            # 删除 Nginx 配置
-            rm -f "$NGINX_CONF"
-            # 删除快捷命令
-            rm -f /usr/bin/tge
-            
-            log "完全清理完成！可以重新安装。"
-            ;;
-    esac
+            log "已删除数据目录"
+        fi
+    else
+        log "保留数据目录: $APP_DIR"
+    fi
+    
+    # 删除快捷命令
+    rm -f /usr/bin/tge
+    log "已删除 tge 命令"
+    
+    echo
+    log "TG Export 卸载完成！"
 }
 
 # ===== 更新 =====
@@ -866,6 +866,8 @@ show_status() {
     echo -e "当前版本: ${GREEN}${APP_VERSION}${PLAIN}"
     echo
     
+    load_config
+    
     if docker ps | grep -q tg-export; then
         echo -e "容器状态: ${GREEN}运行中${PLAIN}"
         docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep tg-export
@@ -874,16 +876,29 @@ show_status() {
     fi
     
     echo
-    if [ -f "$NGINX_CONF" ] || [ -L /etc/nginx/sites-enabled/tg-export ]; then
-        DOMAIN=$(grep "server_name" "$NGINX_CONF" 2>/dev/null | head -1 | awk '{print $2}' | tr -d ';')
-        echo -e "Nginx: ${GREEN}已配置${PLAIN} ($DOMAIN)"
+    
+    # Nginx 配置
+    if [ -n "$DOMAIN" ] && [ -f "$NGINX_SITES_DIR/$DOMAIN" ]; then
+        echo -e "Nginx 配置: ${GREEN}$NGINX_SITES_DIR/$DOMAIN${PLAIN}"
+        echo -e "域名: ${CYAN}$DOMAIN${PLAIN}"
         echo -e "SSL: ${CYAN}nginx-acme 模块自动管理${PLAIN}"
     else
         echo -e "Nginx: ${YELLOW}未配置${PLAIN}"
     fi
     
     echo
-    if load_config; then
+    
+    # 证书状态
+    echo -e "${CYAN}证书目录: $CERT_DIR${PLAIN}"
+    if [ -n "$DOMAIN" ] && [ -f "$CERT_DIR/${DOMAIN}.crt" ]; then
+        EXPIRY=$(openssl x509 -enddate -noout -in "$CERT_DIR/${DOMAIN}.crt" 2>/dev/null | cut -d= -f2)
+        echo -e "  ${DOMAIN}: ${GREEN}有效${PLAIN} (过期: $EXPIRY)"
+    else
+        echo -e "  ${YELLOW}由 nginx-acme 自动管理${PLAIN}"
+    fi
+    
+    echo
+    if [ -n "$API_ID" ]; then
         echo -e "API ID: ${GREEN}${API_ID}${PLAIN}"
         if [[ -n "$BOT_TOKEN" ]]; then
             echo -e "Bot: ${GREEN}已配置${PLAIN}"

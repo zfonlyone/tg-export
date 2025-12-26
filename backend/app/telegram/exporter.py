@@ -311,6 +311,16 @@ class ExportManager:
         if not task:
             return False
         
+        # [Prevention] 防止重复启动已经在运行的任务协程
+        if task_id in self._running_tasks:
+            existing_task = self._running_tasks[task_id]
+            if not existing_task.done():
+                logger.warning(f"任务 {task_id[:8]} 已经在运行中，拒绝重复启动")
+                return False
+            else:
+                # 清理已完成的引用
+                del self._running_tasks[task_id]
+        
         if task.status == TaskStatus.RUNNING:
             return False
         
@@ -370,18 +380,43 @@ class ExportManager:
     async def resume_export(self, task_id: str) -> bool:
         """恢复导出任务 (支持重跑已完成/失败任务)"""
         task = self.tasks.get(task_id)
-        if not task or task.status not in [TaskStatus.PAUSED, TaskStatus.CANCELLED, TaskStatus.FAILED, TaskStatus.COMPLETED]:
-            logger.warning(f"无法恢复任务 {task_id[:8]}...: 任务不存在或状态不支持恢复 ({task.status if task else 'None'})")
+        if not task:
+            return False
+            
+        # [Prevention] 如果任务已经在运行（即使状态没同步），先确认重入保护
+        if task_id in self._running_tasks and not self._running_tasks[task_id].done():
+            if task.status in [TaskStatus.RUNNING, TaskStatus.EXTRACTING]:
+                logger.info(f"任务 {task_id[:8]} 活跃中，无需恢复")
+                return True
+        
+        if task.status not in [TaskStatus.PAUSED, TaskStatus.CANCELLED, TaskStatus.FAILED, TaskStatus.COMPLETED]:
+            logger.warning(f"无法恢复任务 {task_id[:8]}...: 状态不支持恢复 ({task.status})")
             return False
         
         logger.info(f"正在恢复/重跑任务: '{task.name}' (ID: {task_id[:8]}...)")
         
+        # 安全地彻底取消可能的旧任务协程池
+        if task_id in self._running_tasks:
+            try:
+                old_task = self._running_tasks[task_id]
+                if not old_task.done():
+                    logger.info(f"恢复前深度清理旧任务协程: {task.name}")
+                    old_task.cancel()
+                    # 强力清除所有关联的下载协程，防止残留 Worker 重叠
+                    if task_id in self._active_download_tasks:
+                        for t in list(self._active_download_tasks[task_id]):
+                            if not t.done(): t.cancel()
+                        self._active_download_tasks[task_id].clear()
+                    
+                    # 给一点时间让 cancelled handler 执行
+                    await asyncio.sleep(0.2)
+            except Exception as e:
+                logger.error(f"清理旧任务出错: {e}")
+                
         # 将所有暂停或失败的下载项恢复为等待状态
         reset_count = 0
         for item in task.download_queue:
             if item.status in [DownloadStatus.PAUSED, DownloadStatus.FAILED]:
-                # 如果是手动暂停的任务，保持其进度显示，只改状态为等待
-                # 如果是执行失败的任务，则重置进度以重新开始
                 if item.status == DownloadStatus.FAILED:
                     item.progress = 0
                     item.downloaded_size = 0
@@ -391,37 +426,18 @@ class ExportManager:
                 reset_count += 1
         
         if reset_count > 0:
-            logger.info(f"同时重置了 {reset_count} 个下载项为等待状态 (全量任务重跑)")
-            # 如果是重跑，也要重置任务级的计数
+            logger.info(f"重置了 {reset_count} 个下载项为等待状态")
             if task.status in [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED]:
                 task.downloaded_media = 0
                 task.downloaded_size = 0
             
         await self._notify_progress(task_id, task)
         
-        # 标记为正在恢复，防止旧任务取消时将状态误设为 PAUSED
-        self._resuming_tasks.add(task_id)
-        
-        # 安全地取消可能的旧任务
-        if task_id in self._running_tasks:
-            try:
-                old_task = self._running_tasks[task_id]
-                if not old_task.done():
-                    logger.info(f"取消旧的运行任务: {task.name}")
-                    old_task.cancel()
-                    # 给一点时间让 cancelled handler 执行
-                    await asyncio.sleep(0.1)
-            except Exception as e:
-                logger.error(f"取消旧任务出错: {e}")
-                
-        # 移除恢复标记
-        self._resuming_tasks.discard(task_id)
-        
-        # 状态切换为运行中
+        # 标记并发启动
         self._paused_tasks.discard(task_id)
         task.status = TaskStatus.RUNNING
 
-        # 启动处理逻辑
+        # 重新启动任务，并确保记录在管理器中
         self._running_tasks[task_id] = asyncio.create_task(self._restart_download_queue(task))
         return True
     
@@ -1934,7 +1950,18 @@ class ExportManager:
         # [v1.6.0] 慢速扫描策略
         scan_delay = 0.2  # 基础延迟
         
-        async for msg in telegram_client.get_chat_history(chat.id):
+        # [Chrono FIX] 从旧到新正序扫描 (v2.3.1)
+        # 如果是增量扫描且有记录，从记录+1开始；否则从 options.message_from 开始
+        start_id = max(msg_from, last_scanned_id + 1) if options.incremental_scan_enabled else msg_from
+        
+        logger.info(f"聊天 {chat.id}: 启动正序扫描 (从 ID {start_id} 开始)")
+        
+        async for msg in telegram_client.get_chat_history(
+            chat_id=chat.id,
+            offset_id=start_id,
+            reverse=True, # 启用正序模式
+            max_id=msg_to if msg_to > 0 else 0
+        ):
             if task.status == TaskStatus.CANCELLED:
                 break
             
@@ -1943,16 +1970,8 @@ class ExportManager:
             if task.processed_messages % 20 == 0:
                 await self._notify_progress(task.id, task)
             
-            # 记录本次扫描到的最高 ID (Telegram 历史是从新到旧)
-            if highest_id_this_scan == 0:
-                highest_id_this_scan = msg.id
-                
-            # [v1.6.3] 增量扫描逻辑
-            # 只有开启增量扫描 且 不是强制全量扫描 且 已经有扫描记录时 才触发断开
-            force_full = getattr(task, '_force_full_scan', False)
-            if options.incremental_scan_enabled and not force_full and last_scanned_id > 0 and msg.id <= last_scanned_id:
-                logger.info(f"聊天 {chat.id}: 增量扫描到达上次位置 {last_scanned_id}, 停止扫描")
-                break
+            # 在正序模式下，最后一个记录的消息 ID 即为本次最高的 ID
+            highest_id_this_scan = msg.id
 
             # 限制请求速率
             import random
@@ -1963,9 +1982,9 @@ class ExportManager:
                 await asyncio.sleep(1)
                 if task.status == TaskStatus.CANCELLED: break
             
-            # 消息ID范围筛选
-            if msg_to > 0 and msg.id > msg_to: continue
-            if msg.id < msg_from: break
+            # 消息ID范围筛选 (正序下 max_id 已由 client 处理，此处仅作冗余检查)
+            if msg_to > 0 and msg.id > msg_to: break
+            if msg.id < msg_from: continue
             
             # 时间范围筛选
             if options.date_from and msg.date < options.date_from: continue

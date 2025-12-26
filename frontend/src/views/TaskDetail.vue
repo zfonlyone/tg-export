@@ -213,6 +213,14 @@ const stats = ref({
 const currentTab = ref('active')
 const viewAll = ref(false)
 const reversedOrder = ref(false)
+
+// [v2.3.1] 操作锁锁定时间 (毫秒)，在这段时间内强制保持前端状态
+const STATE_LOCK_MS = 5000
+const locks = reactive({
+  tdl: 0,
+  proxy: 0
+})
+
 const concurrency = ref({ max: 10, enableParallel: false })  // 并发控制状态
 const tdlMode = ref(false)  // TDL 下载模式开关
 const proxyEnabled = ref(false)  // 代理开关
@@ -247,12 +255,14 @@ async function fetchData() {
     ])
     
     task.value = taskRes.data
-    // 同步 TDL 模式状态
-    if (task.value.tdl_mode !== undefined) {
+    const now = Date.now()
+    
+    // 同步 TDL 模式状态 (带锁检查)
+    if (task.value.tdl_mode !== undefined && (now - locks.tdl > STATE_LOCK_MS)) {
       tdlMode.value = task.value.tdl_mode
     }
-    // 同步代理状态
-    if (task.value.proxy_enabled !== undefined) {
+    // 同步代理状态 (带锁检查)
+    if (task.value.proxy_enabled !== undefined && (now - locks.proxy > STATE_LOCK_MS)) {
       proxyEnabled.value = task.value.proxy_enabled
       proxyUrl.value = task.value.proxy_url || ''
     }
@@ -385,32 +395,31 @@ async function verifyIntegrity() {
 
 // TDL 下载模式切换 (完全接管模式)
 async function toggleTDLMode() {
+  locks.tdl = Date.now() // 抢占锁
   try {
-    // 调用后端 API 保存 TDL 模式状态
     const res = await axios.post(`/api/export/${taskId}/tdl-mode`, null, {
       params: { enabled: tdlMode.value },
       headers: getAuthHeader()
     })
     
     if (res.data.status === 'ok') {
-      console.log('TDL 模式:', res.data.message)
-      // 提示用户
-      if (tdlMode.value) {
-        alert(`✅ TDL 模式已开启\n\n现在点击"恢复任务"将使用 TDL 下载器。`)
-      }
+      console.log('TDL 模式同步成功')
     } else {
       alert(res.data.message || 'TDL 模式设置失败')
-      tdlMode.value = !tdlMode.value  // 恢复原状态
+      tdlMode.value = !tdlMode.value
+      locks.tdl = 0 // 出错释放
     }
   } catch (err) {
     console.error('TDL 模式切换失败:', err)
-    tdlMode.value = !tdlMode.value  // 恢复原状态
+    tdlMode.value = !tdlMode.value
+    locks.tdl = 0
     alert('TDL 操作失败: ' + (err.response?.data?.detail || err.message))
   }
 }
 
 // 代理模式切换
 async function toggleProxy() {
+  locks.proxy = Date.now() // 加锁
   try {
     const res = await axios.post(`/api/export/${taskId}/proxy`, null, {
       params: { enabled: proxyEnabled.value, url: proxyUrl.value },
@@ -418,22 +427,26 @@ async function toggleProxy() {
     })
     if (res.data.status !== 'ok') {
       proxyEnabled.value = !proxyEnabled.value
+      locks.proxy = 0
       alert(res.data.message || '代理设置失败')
     }
   } catch (err) {
     proxyEnabled.value = !proxyEnabled.value
+    locks.proxy = 0
     alert('代理设置失败: ' + (err.response?.data?.detail || err.message))
   }
 }
 
 async function updateProxyUrl() {
   if (proxyEnabled.value && proxyUrl.value) {
+    locks.proxy = Date.now() // 修改地址也加锁
     try {
       await axios.post(`/api/export/${taskId}/proxy`, null, {
         params: { enabled: true, url: proxyUrl.value },
         headers: getAuthHeader()
       })
     } catch (err) {
+      locks.proxy = 0
       alert('代理地址更新失败: ' + (err.response?.data?.detail || err.message))
     }
   }

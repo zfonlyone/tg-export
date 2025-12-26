@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     
     # 基础配置
     APP_NAME: str = "TG Export"
-    APP_VERSION: str = "2.2.0"  # 代理下载模式版
+    APP_VERSION: str = "2.3.1"  # YAML 配置与正序扫描版
     DEBUG: bool = False
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")
