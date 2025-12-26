@@ -202,8 +202,8 @@ class AsyncDockerClient:
         return False, result.get("error", f"检查失败 (status={status_code})")
 
     
-    async def exec_command(self, container_name: str, cmd: list, timeout: float = 300.0) -> dict:
-        """在容器中执行命令"""
+    async def exec_command(self, container_name: str, cmd: list, timeout: float = 300.0, on_progress: callable = None) -> dict:
+        """在容器中执行命令 (支持流式进度回调)"""
         # 创建 exec
         create_result = await self._make_request(
             "POST", 
@@ -225,47 +225,104 @@ class AsyncDockerClient:
         if not exec_id:
             return {"success": False, "error": "未获取到 exec ID"}
         
-        # 启动 exec
-        start_result = await self._make_request(
-            "POST",
-            f"/exec/{exec_id}/start",
-            {"Detach": False, "Tty": False},
-            timeout=timeout
-        )
-        
-        if start_result.get("status_code") != 200:
-            return {"success": False, "error": start_result.get("error", "执行失败")}
+        # 启动 exec 并通过 Socket 捕获流
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(self.socket_path),
+                timeout=10.0
+            )
             
-        # [FIX] 增加 ExitCode 检查，确保命令真正成功运行 (v1.6.8)
-        inspect_result = await self._make_request(
-            "GET",
-            f"/exec/{exec_id}/json",
-            timeout=10.0
-        )
-        
-        # [FIX] 解析 Docker 多路复用流，获取纯净输出 (v2.1.1)
-        raw_data = start_result.get("data", {}).get("raw_bytes", b"")
-        output = self._decode_docker_stream(raw_data)
-        
-        if inspect_result.get("status_code") == 200:
-            exec_info = inspect_result.get("data", {})
-            exit_code = exec_info.get("ExitCode", -1)
-            running = exec_info.get("Running", False)
+            # 构建 Start 请求
+            # 注意：Detach=False 必须通过 Socket 协议读取
+            body = json.dumps({"Detach": False, "Tty": False}).encode()
+            request = (
+                f"POST /exec/{exec_id}/start HTTP/1.1\r\n"
+                f"Host: localhost\r\n"
+                f"Content-Type: application/json\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                f"Connection: close\r\n"
+                f"\r\n"
+            ).encode() + body
             
-            logger.debug(f"[TDL] Exec 状态检查: ExitCode={exit_code}, Running={running}")
+            writer.write(request)
+            await writer.drain()
+            
+            # 读取响应头
+            header_data = b""
+            while b"\r\n\r\n" not in header_data:
+                chunk = await reader.read(1024)
+                if not chunk: break
+                header_data += chunk
+            
+            # 处理 Stream
+            import struct
+            import re
+            output_parts = []
+            
+            # 这里的规律是：Docker Multiplexed Stream [1|2, 0, 0, 0, size_4_bytes]
+            # 我们需要实时读取并解析
+            
+            remaining = header_data[header_data.find(b"\r\n\r\n") + 4:]
+            
+            async def read_gen():
+                nonlocal remaining
+                while True:
+                    if len(remaining) < 8:
+                        new_data = await reader.read(8192)
+                        if not new_data: return
+                        remaining += new_data
+                        continue
+                    
+                    stream_type = remaining[0]
+                    # size 是后 4 个字节 (big endian)
+                    payload_size = struct.unpack(">I", remaining[4:8])[0]
+                    
+                    # 等待 payload 足够长
+                    while len(remaining) < 8 + payload_size:
+                        new_data = await reader.read(8192)
+                        if not new_data: break
+                        remaining += new_data
+                    
+                    payload = remaining[8:8+payload_size]
+                    remaining = remaining[8+payload_size:]
+                    yield payload
+
+            # 进度解析正则 (捕获 75% 这种)
+            progress_pattern = re.compile(r"(\d+)%")
+            
+            async for chunk in read_gen():
+                text = chunk.decode(errors='replace')
+                output_parts.append(text)
+                
+                if on_progress:
+                    # 从文本中提取进度
+                    matches = progress_pattern.findall(text)
+                    if matches:
+                        try:
+                            # 取最后一个匹配到的百分比
+                            percentage = int(matches[-1])
+                            on_progress(percentage)
+                        except:
+                            pass
+            
+            writer.close()
+            await writer.wait_closed()
+            
+            output = "".join(output_parts)
+            
+            # 检查最终状态
+            inspect_result = await self._make_request("GET", f"/exec/{exec_id}/json", timeout=10.0)
+            exit_code = 0
+            if inspect_result.get("status_code") == 200:
+                exit_code = inspect_result.get("data", {}).get("ExitCode", 0)
             
             if exit_code == 0:
                 return {"success": True, "output": output}
             else:
-                return {
-                    "success": False, 
-                    "error": f"命令执行失败 (ExitCode={exit_code})", 
-                    "output": output
-                }
-        
-        # 如果无法获取 ExitCode，由于启动成功，暂时返回 True 但记录警告
-        logger.warning(f"[TDL] 无法获取命令退出码 ({inspect_result.get('error')})，假设执行成功")
-        return {"success": True, "output": output}
+                return {"success": False, "error": f"命令执行失败 (ExitCode={exit_code})", "output": output}
+                
+        except Exception as e:
+            return {"success": False, "error": f"流执行出错: {str(e)}"}
 
 
 class TDLDownloader:
@@ -314,7 +371,8 @@ class TDLDownloader:
         threads: int = 8,
         limit: int = 1,
         file_template: str = None,
-        proxy: str = None
+        proxy: str = None,
+        on_progress: callable = None
     ) -> Dict[str, Any]:
         """使用 TDL 下载文件 (支持单链接或列表批量下载)
         
@@ -324,6 +382,7 @@ class TDLDownloader:
             threads: 每个文件下载的并行线程数 (-t)
             limit: 同时下载的文件数 (-l)
             file_template: 文件名模板
+            on_progress: 进度回调函数，接收 int (0-100)
         """
         urls = [url] if isinstance(url, str) else url
         logger.info(f"[TDL] 下载任务启动: count={len(urls)}, threads={threads}, limit={limit}, dir={output_dir}")
@@ -371,15 +430,13 @@ class TDLDownloader:
             
             for attempt in range(max_retries):
                 # [v2.3.1] 每次运行前强力清理可能残留的 tdl 进程 (防止 database lock 冲突)
-                # 尤其是在上一次由于超时断开连接但进程未杀掉的情况下
                 if attempt > 0:
                     logger.warning(f"[TDL] 正在执行数据库占用强力清理 (尝试 {attempt+1}/{max_retries})")
                 
-                # 尝试多种方式清理，BusyBox 通常有 killall，Alpine 通常有 pkill
                 await self.docker.exec_command(self.container_name, ["sh", "-c", "killall -9 tdl || pkill -9 tdl || true"], timeout=10.0)
                 
                 # 开始执行真正的下载任务 (超时放宽至 1 小时，适应超大批量)
-                result = await self.docker.exec_command(self.container_name, cmd, timeout=3600.0)
+                result = await self.docker.exec_command(self.container_name, cmd, timeout=3600.0, on_progress=on_progress)
                 
                 if result.get("success"):
                     break

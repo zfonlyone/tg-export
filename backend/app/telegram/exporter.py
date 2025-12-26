@@ -40,13 +40,13 @@ class TDLBatcher:
         self._active_batches = {}
         self._loop_task = None
         
-    async def add_item(self, task: ExportTask, item: DownloadItem, target_sub_dir: str):
-        """提交一个下载项到批量器"""
+    async def add_item(self, task: ExportTask, item: DownloadItem, target_sub_dir: str, on_progress: callable = None):
+        """提交一个下载项到批量器 (支持进度分发)"""
         if not self._loop_task or self._loop_task.done():
             self._loop_task = asyncio.create_task(self._batch_loop())
             
         future = asyncio.Future()
-        await self._queue.put((task, item, target_sub_dir, future))
+        await self._queue.put((task, item, target_sub_dir, future, on_progress))
         return await future
 
     async def _batch_loop(self):
@@ -54,7 +54,7 @@ class TDLBatcher:
         try:
             while True:
                 # 等待第一个项进入
-                task, item, target_sub_dir, future = await self._queue.get()
+                task, item, target_sub_dir, future, on_progress = await self._queue.get()
                 batch_key = (task.id, target_sub_dir)
                 
                 if batch_key not in self._active_batches:
@@ -62,7 +62,7 @@ class TDLBatcher:
                     # 启动定时刷新
                     asyncio.create_task(self._trigger_batch_after_delay(batch_key, task.options))
                 
-                self._active_batches[batch_key].append((item, future))
+                self._active_batches[batch_key].append((item, future, on_progress))
         except asyncio.CancelledError:
             pass
 
@@ -94,16 +94,26 @@ class TDLBatcher:
         except:
             pass
         
+        # [v2.3.1] 进度分发闭环
+        def local_on_progress(percentage: int):
+            for it, fut, prog_cb in batch:
+                if prog_cb:
+                    prog_cb(percentage)
+                else:
+                    # 如果没有传入回调，手动更新 item
+                    it.progress = float(percentage)
+        
         result = await tdl_integration.download(
             url=urls,
             output_dir=target_sub_dir,
             threads=options.download_threads,
             limit=len(urls),
-            proxy=proxy_url
+            proxy=proxy_url,
+            on_progress=local_on_progress
         )
         
         # 分发结果给所有等待的 Worker
-        for it, fut in batch:
+        for it, fut, prog_cb in batch:
             if not fut.done():
                 fut.set_result(result)
 
@@ -1160,6 +1170,13 @@ class ExportManager:
                 try: os.chmod(target_sub_dir, 0o777)
                 except: pass
 
+                # 定义 TDL 进度回调
+                def tdl_on_progress(percentage: int):
+                    item.progress = float(percentage)
+                    # 尝试估算已下载大小
+                    if item.file_size > 0:
+                        item.downloaded_size = int(item.file_size * (percentage / 100.0))
+                
                 # [v2.2.0] 如果最大并发为 1，则不使用批量聚合器，直接触发下载
                 if options.max_concurrent_downloads == 1:
                     from ..api.tdl_integration import tdl_integration
@@ -1170,14 +1187,30 @@ class ExportManager:
                         output_dir=str(target_sub_dir),
                         threads=options.download_threads,
                         limit=1,
-                        proxy=proxy_url
+                        proxy=proxy_url,
+                        on_progress=tdl_on_progress
                     )
                 else:
                     # 使用批处理聚合器提交任务，自动处理链接聚合
-                    result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir))
+                    result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir), on_progress=tdl_on_progress)
                 
+                # [CRITICAL FIX] 物理完整性校验 (v2.3.1)
+                # TDL 模式也必须通过磁盘文件大小核对
+                is_integrity_ok = False
                 if result.get("success"):
-                    # TDL 下载成功
+                    if full_item_path.exists():
+                        actual_size = full_item_path.stat().st_size
+                        if item.file_size <= 0 or actual_size == item.file_size:
+                            is_integrity_ok = True
+                        else:
+                            item.error = f"完整性检查失败: 预期 {item.file_size}, 实际 {actual_size}"
+                            logger.error(f"任务 {task.id[:8]}: [TDL] {item.file_name} {item.error}")
+                    else:
+                        item.error = "文件未能在目标路径找到"
+                        logger.error(f"任务 {task.id[:8]}: [TDL] {item.file_name} {item.error}")
+                
+                if result.get("success") and is_integrity_ok:
+                    # TDL 下载成功且校验通过
                     item.status = DownloadStatus.COMPLETED
                     item.progress = 100.0
                     item.speed = 0
@@ -1192,15 +1225,16 @@ class ExportManager:
                         if hasattr(task, 'media_stats') and media_key in task.media_stats:
                             task.media_stats[media_key] += 1
                             
-                    logger.info(f"任务 {task.id[:8]}: [TDL] 下载成功: {item.file_name}")
+                    logger.info(f"任务 {task.id[:8]}: [TDL] 下载成功并校验通过: {item.file_name}")
                 else:
-                    # TDL 下载失败
+                    # TDL 下载失败或校验未通过
                     item.status = DownloadStatus.FAILED
-                    item.error = result.get("error", "TDL 下载失败")
+                    if not item.error:
+                        item.error = result.get("error", "TDL 下载失败")
                     item.speed = 0
                     # [v2.1.1] 记录详细的 TDL 输出，方便定位 ExitCode=1 的原因
                     tdl_output = result.get("output", "")
-                    logger.error(f"任务 {task.id[:8]}: [TDL] 下载失败: {item.file_name} - {item.error}\n[TDL Output]: {tdl_output}")
+                    logger.error(f"任务 {task.id[:8]}: [TDL] 任务失败: {item.file_name} - {item.error}\n[TDL Output]: {tdl_output}")
                 
                 await self._notify_progress(task.id, task)
                 return  # TDL 模式结束，不执行后面的 Pyrogram 下载逻辑
