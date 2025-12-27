@@ -461,7 +461,6 @@ class TDLDownloader:
         threads: int = 8,
         limit: int = 1,
         file_template: str = None,
-        file_template: str = None,
         proxy: str = None,
         stuck_check_callback: callable = None
     ) -> Dict[str, Any]:
