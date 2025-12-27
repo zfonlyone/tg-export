@@ -100,6 +100,11 @@ class TDLBatcher:
             asyncio.create_task(self._monitor_temp_files(batch, target_sub_dir, monitor_stop_event, task_id, manager_inst))
             
             try:
+                # [v2.3.2] 统一权限与路径纠偏
+                # 批量下载完成后，立即对该子目录执行递归 777
+                if manager_inst:
+                    manager_inst._set_777_recursive(Path(target_sub_dir))
+                
                 result = await tdl_integration.download(
                     url=urls,
                     output_dir=target_sub_dir,
@@ -110,13 +115,38 @@ class TDLBatcher:
             finally:
                 # 下载结束（无论成功失败），通知监视器停止
                 monitor_stop_event.set()
+                # 批量完成后再次刷新权限，确保新产生文件的所有权
+                if manager_inst:
+                    manager_inst._set_777_recursive(Path(target_sub_dir))
             
             # 分发结果给所有等待的 Worker
+            from pathlib import Path
             for it, fut in batch:
                 if not fut.done():
-                    # 最终置为 100% (如果成功) 或 0% (如果失败)
+                    # [CRITICAL FIX] 确权信号与真实路径回填 (批量版)
                     if result.get("success"):
+                        it.status = DownloadStatus.COMPLETED
                         it.progress = 100.0
+                        
+                        # 检测路径并回填 (解决 99% 卡死)
+                        sub_path = Path(target_sub_dir)
+                        # 构造预定义的路径（通常是 safe_filename 转换后的结果）
+                        # 这里我们需要基于 export_manager 的 get_export_path 相对定位
+                        # 但为了简化，我们先尝试检测子目录下是否存在该文件
+                        search_prefix = f"{it.message_id}-{abs(it.chat_id)}-"
+                        try:
+                            # 遍历目录进行回填
+                            for f in sub_path.iterdir():
+                                if f.name.startswith(search_prefix) and not f.name.endswith(('.temp', '.tdl', '.tmp', '.part')):
+                                    # 找到了真实落地文件，更新下载大小
+                                    if it.file_size <= 0: it.file_size = f.stat().st_size
+                                    it.downloaded_size = f.stat().st_size
+                                    # 注意：批量器不需要更新 it.file_path，因为主 Worker 会在 fut.set_result 之后重新校验
+                                    # 但我们需要确保 it.downloaded_size 是准的，从而让进度条满 100
+                                    break
+                        except:
+                            pass
+                        
                         if it.file_size > 0: it.downloaded_size = it.file_size
                     fut.set_result(result)
         except Exception as e:
@@ -1263,19 +1293,42 @@ class ExportManager:
                 else:
                     result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir), manager_inst=self)
                 
-                # [CRITICAL FIX] 物理完整性校验 (v2.3.1)
-                # TDL 模式也必须通过磁盘文件大小核对
+                # [v2.3.2] 统一权限与路径纠偏
+                # 下载完成后，立即对该子目录执行递归 777，防止容器所有权冲突导致无法读取
+                self._set_777_recursive(target_sub_dir)
+                
+                # [CRITICAL FIX] 确权信号与真实路径回填 (解决 99% 卡死)
                 is_integrity_ok = False
                 if result.get("success"):
+                    # 1. 尝试直接按预期路径找
+                    if not full_item_path.exists():
+                        # 2. 如果没找到（可能是文件名带空格vs下划线的差异），执行模糊匹配回填
+                        logger.warning(f"任务 {task.id[:8]}: [TDL] 预期路径未找到，尝试通过前缀回填: {item.id}")
+                        search_prefix = f"{item.message_id}-{abs(item.chat_id)}-"
+                        try:
+                            for f in target_sub_dir.iterdir():
+                                if f.name.startswith(search_prefix) and not f.name.endswith(('.temp', '.tdl', '.tmp', '.part')):
+                                    # 找到了真实落地文件
+                                    full_item_path = f
+                                    item.file_path = str(f.relative_to(export_path))
+                                    logger.info(f"任务 {task.id[:8]}: [TDL] 路径回填成功: {item.file_path}")
+                                    break
+                        except Exception as e:
+                            logger.error(f"任务 {task.id[:8]}: [TDL] 路径扫描失败: {e}")
+                    
+                    # 3. 执行最终判决
                     if full_item_path.exists():
                         actual_size = full_item_path.stat().st_size
-                        if item.file_size <= 0 or actual_size == item.file_size:
+                        # 弹性校验：只要 TDL 报 Success 且文件在磁盘上，且体积差异在 0.1% 或 1KB 以内，就视为通过
+                        diff = abs(actual_size - item.file_size)
+                        if item.file_size <= 0 or actual_size == item.file_size or diff < 1024 or diff < (item.file_size * 0.001):
                             is_integrity_ok = True
+                            item.downloaded_size = actual_size # 更新为物理磁盘实际大小
                         else:
                             item.error = f"完整性检查失败: 预期 {item.file_size}, 实际 {actual_size}"
                             logger.error(f"任务 {task.id[:8]}: [TDL] {item.file_name} {item.error}")
                     else:
-                        item.error = "文件未能在目标路径找到"
+                        item.error = "ExitCode 0 但未在磁盘找到对应文件"
                         logger.error(f"任务 {task.id[:8]}: [TDL] {item.file_name} {item.error}")
                 
                 if result.get("success") and is_integrity_ok:

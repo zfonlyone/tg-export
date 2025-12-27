@@ -324,7 +324,7 @@ class TDLDownloader:
         # 构建基础命令
         cmd = ["tdl", "dl"]
         for u in urls: cmd.extend(["-u", u])
-        cmd.extend(["-d", output_dir, "-t", str(threads), "-l", str(limit), "--skip-same"])
+        cmd.extend(["-d", output_dir, "-t", str(threads), "-l", str(limit), "--skip-same", "--continue"])
         
         if file_template:
             cmd.extend(["--template", file_template])

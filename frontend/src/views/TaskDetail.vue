@@ -66,6 +66,23 @@
       <div class="list-toolbar">
         <!-- 三区工具栏: 功能区 | 展示区 | 输入区 -->
         <div class="toolbar-row toolbar-three-section">
+          <!-- 展示区：状态信息 -->
+          <div class="toolbar-section toolbar-display">
+            <span class="section-label">状态</span>
+            <div class="display-group">
+              <span class="toolbar-status" v-if="stats.current_concurrency">
+                🚦 {{stats.current_concurrency}} / {{stats.active_threads}}
+              </span>
+              <button @click="toggleSort" class="toolbar-btn" :title="reversedOrder ? '倒序' : '正序'">
+                {{ reversedOrder ? '⇅ 倒序' : '⇅ 正序' }}
+              </button>
+              <button @click="toggleViewAll" class="toolbar-btn">{{ viewAll ? '精简' : '全部' }}</button>
+            </div>
+          </div>
+
+
+
+
           <!-- 功能区：开关和按钮 -->
           <div class="toolbar-section toolbar-functions">
             <span class="section-label">功能</span>
@@ -91,19 +108,7 @@
             </div>
           </div>
           
-          <!-- 展示区：状态信息 -->
-          <div class="toolbar-section toolbar-display">
-            <span class="section-label">状态</span>
-            <div class="display-group">
-              <span class="toolbar-status" v-if="stats.current_concurrency">
-                🚦 {{stats.current_concurrency}} / {{stats.active_threads}}
-              </span>
-              <button @click="toggleSort" class="toolbar-btn" :title="reversedOrder ? '倒序' : '正序'">
-                {{ reversedOrder ? '⇅ 倒序' : '⇅ 正序' }}
-              </button>
-              <button @click="toggleViewAll" class="toolbar-btn">{{ viewAll ? '精简' : '全部' }}</button>
-            </div>
-          </div>
+
           
           <!-- 输入区：代理地址 -->
           <div class="toolbar-section toolbar-input" v-if="proxyEnabled">
