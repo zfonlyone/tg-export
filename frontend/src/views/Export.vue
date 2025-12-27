@@ -228,7 +228,7 @@
           <div class="form-group" style="margin-bottom: 0;">
             <label class="form-label" style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
               <input type="checkbox" v-model="options.enable_parallel_chunk" style="width: 18px; height: 18px;">
-              <span style="font-weight: 600;">⚡ 启用并行分块下载 (实验性)</span>
+              <span style="font-weight: 600;">⚡ 启用分块分块下载 (实验性)</span>
             </label>
             <p style="color: #666; font-size: 12px; margin-top: 4px; margin-left: 26px;">
               通过多连接极速下载大文件。注意：可能会增加被 Telegram 暂时限制的风险。

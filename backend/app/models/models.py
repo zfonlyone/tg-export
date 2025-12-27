@@ -271,6 +271,13 @@ class ExportTask(BaseModel):
                 return item
         return None
 
+    def get_download_item_by_full_id(self, item_id: str) -> Optional[DownloadItem]:
+        """通过完整 ID 获取项目 (v2.3.4)"""
+        for item in self.download_queue:
+            if item.id == item_id:
+                return item
+        return None
+
 
 class User(BaseModel):
     """用户模型"""

@@ -95,7 +95,7 @@
               </div>
               <label class="toolbar-toggle">
                 <input type="checkbox" v-model="concurrency.enableParallel" @change="toggleParallel">
-                <span>⚡并行</span>
+                <span>⚡分块</span>
               </label>
               <label class="toolbar-toggle tdl" :class="{ active: tdlMode }">
                 <input type="checkbox" v-model="tdlMode" @change="toggleTDLMode">

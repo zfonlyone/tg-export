@@ -159,8 +159,9 @@ async def startup_event():
         """递归修复目录权限为 777"""
         import os
         if not path_obj.exists():
+            print(f"[System] ⚠️ 路径不存在，跳过权限修复: {path_obj}")
             return
-        print(f"[System] 正在修复路径权限: {path_obj}")
+        print(f"[System] 正在强制修复路径权限 (777): {path_obj}")
         try:
             # 修改根目录
             os.chmod(path_obj, 0o777)
@@ -175,8 +176,8 @@ async def startup_event():
         except Exception as e:
             print(f"[System] 权限修复出错 ({path_obj}): {e}")
 
-    # 修复目标目录
-    target_dirs = ["/opt/tg-export", str(settings.EXPORT_DIR), str(settings.DATA_DIR)]
+    # 修复目标目录 (包含 /opt/tg-export)
+    target_dirs = ["/opt/tg-export", str(settings.EXPORT_DIR), str(settings.DATA_DIR), "/app"]
     for d_path in target_dirs:
         fix_recursive_permissions(Path(d_path))
 
