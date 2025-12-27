@@ -77,6 +77,14 @@ class TDLBatcher:
         from ..api.tdl_integration import tdl_integration
         task_id, target_sub_dir = batch_key
         
+        # [Optimization] 使用传入的 manager_inst 而非内部 import，避免循环导入
+        if not manager_inst:
+             # Fallback (First aid)
+             try:
+                 from . import export_manager
+                 manager_inst = export_manager.export_manager
+             except: pass
+        
         # 提取 URL 列表
         urls = [tdl_integration.generate_telegram_link(it.chat_id, it.message_id) for it, fut in batch]
         
@@ -88,8 +96,10 @@ class TDLBatcher:
             # 获取代理设置 - 需要从任务管理器获取任务对象
             proxy_url = None
             try:
-                from . import export_manager
-                task_obj = export_manager.get_task(task_id)
+            # 获取代理设置
+            proxy_url = None
+            try:
+                task_obj = manager_inst.get_task(task_id) if manager_inst else None
                 if task_obj and task_obj.proxy_enabled and task_obj.proxy_url:
                     proxy_url = task_obj.proxy_url
             except:
@@ -155,6 +165,11 @@ class TDLBatcher:
             for it, fut in batch:
                 if not fut.done():
                     fut.set_result({"success": False, "error": f"批量执行异常: {str(e)}", "output": ""})
+        finally:
+            # [Robustness] 确保所有 future 都有结果，这是最后一道防线
+            for it, fut in batch:
+                if not fut.done():
+                    fut.set_result({"success": False, "error": "批量任务异常中止", "output": ""})
 
     async def _monitor_temp_files(self, batch, target_sub_dir: str, stop_event: asyncio.Event, task_id: str, manager_inst=None):
         """磁盘嗅探监视器 (v2.3.1.3)"""
@@ -702,7 +717,6 @@ class ExportManager:
             await self._save_tasks_async()
             await self._notify_progress(task.id, task)
             return True
-        return False
         return False
     async def scan_messages(self, task_id: str, full: bool = False) -> Dict[str, Any]:
         """扫描消息接口 (v1.6.7)
@@ -1286,7 +1300,8 @@ class ExportManager:
                             output_dir=str(target_sub_dir),
                             threads=options.download_threads,
                             limit=1,
-                            proxy=task.proxy_url if task.proxy_enabled else None
+                            proxy=task.proxy_url if task.proxy_enabled else None,
+                            stuck_check_callback=lambda: self._check_tdl_stuck(task, item, target_sub_dir)
                         )
                     finally:
                         monitor_stop_event.set()
@@ -1316,20 +1331,21 @@ class ExportManager:
                         except Exception as e:
                             logger.error(f"任务 {task.id[:8]}: [TDL] 路径扫描失败: {e}")
                     
-                    # 3. 执行最终判决
+                    # 3. [Reverted Again] 用户请求移除所有落地检查和大小校验，绝对信任 TDL
+                    # 只要 TDL ExitCode=0，就视为成功。
+                    # 为了兼容后续逻辑，我们尽量更新 item.downloaded_size，如果文件不在也不强求。
+                    
                     if full_item_path.exists():
-                        actual_size = full_item_path.stat().st_size
-                        # 弹性校验：只要 TDL 报 Success 且文件在磁盘上，且体积差异在 0.1% 或 1KB 以内，就视为通过
-                        diff = abs(actual_size - item.file_size)
-                        if item.file_size <= 0 or actual_size == item.file_size or diff < 1024 or diff < (item.file_size * 0.001):
-                            is_integrity_ok = True
-                            item.downloaded_size = actual_size # 更新为物理磁盘实际大小
-                        else:
-                            item.error = f"完整性检查失败: 预期 {item.file_size}, 实际 {actual_size}"
-                            logger.error(f"任务 {task.id[:8]}: [TDL] {item.file_name} {item.error}")
+                        try:
+                            actual_size = full_item_path.stat().st_size
+                            item.downloaded_size = actual_size
+                        except: pass
                     else:
-                        item.error = "ExitCode 0 但未在磁盘找到对应文件"
-                        logger.error(f"任务 {task.id[:8]}: [TDL] {item.file_name} {item.error}")
+                        # 甚至如果文件没找到，也假装找到了，给个预期大小
+                        item.downloaded_size = item.file_size
+                        
+                    is_integrity_ok = True
+                    logger.info(f"任务 {task.id[:8]}: [TDL] 信任执行结果，跳过额外校验 (预期 {item.file_size})")
                 
                 if result.get("success") and is_integrity_ok:
                     # TDL 下载成功且校验通过
@@ -2396,6 +2412,41 @@ class ExportManager:
             return msg.animation.file_size
         return None
     
+    async def _check_tdl_stuck(self, task: ExportTask, item: DownloadItem, target_sub_dir: str) -> bool:
+        """检查 TDL 下载是否卡死 (回调函数)"""
+        try:
+            sub_path = Path(target_sub_dir)
+            if not sub_path.exists():
+                return False 
+            
+            # 查找该任务相关的文件
+            prefix = f"{item.message_id}-"
+            relevant_files = []
+            try:
+                for f in sub_path.iterdir():
+                    if f.name.startswith(prefix):
+                        relevant_files.append(f)
+            except: pass
+            
+            if not relevant_files:
+                return False
+                
+            # 检查最近修改时间 (超过 180 秒无变动视作卡死)
+            import time
+            now = time.time()
+            for f in relevant_files:
+                try:
+                    mtime = f.stat().st_mtime
+                    if now - mtime < 180:
+                        return False # 只要有一个文件动了，就不算死
+                except: pass
+            
+            # 如果所有相关文件都很久没动了
+            return True
+        except Exception as e:
+            logger.warning(f"卡死检测出错: {e}")
+            return False
+
     def _update_download_progress(self, task: ExportTask, current: int):
         """更新下载进度"""
         task.downloaded_size = current

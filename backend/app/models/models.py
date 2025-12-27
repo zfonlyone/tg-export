@@ -138,7 +138,7 @@ class ExportOptions(BaseModel):
     # 并行分块下载设置 (单文件多连接并发) [v1.5.0]
     parallel_chunk_connections: int = 2  # [v1.6.6] 默认从 4 下调至 2，对免费账号更友好
     enable_parallel_chunk: bool = False  # [v1.6.7] 默认关闭并行下载，稳定性优先
-    incremental_scan_enabled: bool = True # 是否启用增量扫描 (v1.6.0)
+    incremental_scan_enabled: bool = False # 是否启用增量扫描 (v1.6.0)
     
     # 消息过滤 (skip=跳过指定消息, specify=只下载指定消息)
     filter_mode: str = "none"            # none/skip/specify
