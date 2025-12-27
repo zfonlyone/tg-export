@@ -119,7 +119,9 @@ class AsyncDockerClient:
                     decoded_body = body_data.decode(errors='replace')
                     result = json.loads(decoded_body) if decoded_body.strip() else {}
                 except json.JSONDecodeError as e:
-                    logger.debug(f"[TDL] JSON 解析失败 (可能为流响应): {e}")
+                    # [v2.3.1] 对于 exec/start 等流响应，JSON 解析失败是预期的，不应视为错误
+                    if "/exec/" not in path or "/start" not in path:
+                         logger.debug(f"[TDL] JSON 解析失败: {e}")
                     # 记录原始字节用于流式处理
                     result = {
                         "raw": body_data.decode(errors='replace')[:1000],
@@ -364,13 +366,40 @@ class TDLDownloader:
         
         # 执行命令 (使用信号量保护)
         async with self._semaphore:
-            result = await self.docker.exec_command(self.container_name, cmd, timeout=600.0)
+            max_retries = 2
+            result = {"success": False, "error": "Unknown error"}
+            
+            for attempt in range(max_retries):
+                # [v2.3.1] 每次运行前强力清理可能残留的 tdl 进程 (防止 database lock 冲突)
+                # 尤其是在上一次由于超时断开连接但进程未杀掉的情况下
+                if attempt > 0:
+                    logger.warning(f"[TDL] 正在执行数据库占用强力清理 (尝试 {attempt+1}/{max_retries})")
+                
+                # 尝试多种方式清理，BusyBox 通常有 killall，Alpine 通常有 pkill
+                await self.docker.exec_command(self.container_name, ["sh", "-c", "killall -9 tdl || pkill -9 tdl || true"], timeout=10.0)
+                
+                # 开始执行真正的下载任务 (超时放宽至 1 小时，适应超大批量)
+                result = await self.docker.exec_command(self.container_name, cmd, timeout=3600.0)
+                
+                if result.get("success"):
+                    break
+                
+                # 检查是否是由于数据库占用导致的失败
+                output = result.get("output", "")
+                if "database is used by another process" in output or "used by another process" in output:
+                    if attempt < max_retries - 1:
+                        logger.info("[TDL] 检测到数据库文件锁冲突，等待 2 秒后重试...")
+                        await asyncio.sleep(2.0)
+                        continue
+                break
         
         if result.get("success"):
             logger.info(f"[TDL] 下载完成: {result.get('output', '')[:200]}")
         else:
             logger.error(f"[TDL] 下载失败: {result.get('error')}")
-            # 如果下载失败，返回包含错误信息的详情
+            # 输出前 200 个字符的错误信息帮助调试
+            if result.get("output"):
+                logger.error(f"[TDL] 错误输出: {result.get('output')[:200]}")
         
         return result
     

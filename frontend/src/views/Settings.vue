@@ -162,11 +162,6 @@
         <input v-model="exportPath" type="text" class="form-input" placeholder="/downloads">
       </div>
       
-      <div class="form-group">
-        <label class="form-label">最大并发下载数</label>
-        <input v-model="maxConcurrent" type="number" class="form-input" min="1" max="10">
-      </div>
-      
       <button @click="saveSettings" class="btn btn-primary">保存设置</button>
     </div>
 
