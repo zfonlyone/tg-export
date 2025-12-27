@@ -40,13 +40,13 @@ class TDLBatcher:
         self._active_batches = {}
         self._loop_task = None
         
-    async def add_item(self, task: ExportTask, item: DownloadItem, target_sub_dir: str, on_progress: callable = None):
-        """提交一个下载项到批量器 (支持进度分发)"""
+    async def add_item(self, task: ExportTask, item: DownloadItem, target_sub_dir: str):
+        """提交一个下载项到批量器 (v1.6.9)"""
         if not self._loop_task or self._loop_task.done():
             self._loop_task = asyncio.create_task(self._batch_loop())
             
         future = asyncio.Future()
-        await self._queue.put((task, item, target_sub_dir, future, on_progress))
+        await self._queue.put((task, item, target_sub_dir, future))
         return await future
 
     async def _batch_loop(self):
@@ -54,7 +54,7 @@ class TDLBatcher:
         try:
             while True:
                 # 等待第一个项进入
-                task, item, target_sub_dir, future, on_progress = await self._queue.get()
+                task, item, target_sub_dir, future = await self._queue.get()
                 batch_key = (task.id, target_sub_dir)
                 
                 if batch_key not in self._active_batches:
@@ -62,7 +62,7 @@ class TDLBatcher:
                     # 启动定时刷新
                     asyncio.create_task(self._trigger_batch_after_delay(batch_key, task.options))
                 
-                self._active_batches[batch_key].append((item, future, on_progress))
+                self._active_batches[batch_key].append((item, future))
         except asyncio.CancelledError:
             pass
 
@@ -95,34 +95,92 @@ class TDLBatcher:
             except:
                 pass
             
-            # [v2.3.1] 进度分发闭环 (带任务级节流)
-            def local_on_progress(percentage: int):
-                for it, fut, prog_cb in batch:
-                    if prog_cb:
-                        # 内部会调用 tdl_on_progress
-                        prog_cb(percentage)
-                    else:
-                        it.progress = float(percentage)
+            # [v2.3.1] 启动磁盘嗅探监视器 (每 10 秒刷新一次进度)
+            monitor_stop_event = asyncio.Event()
+            asyncio.create_task(self._monitor_temp_files(batch, target_sub_dir, monitor_stop_event, task_id))
             
-            result = await tdl_integration.download(
-                url=urls,
-                output_dir=target_sub_dir,
-                threads=options.download_threads,
-                limit=len(urls),
-                proxy=proxy_url,
-                on_progress=local_on_progress
-            )
+            try:
+                result = await tdl_integration.download(
+                    url=urls,
+                    output_dir=target_sub_dir,
+                    threads=options.download_threads,
+                    limit=len(urls),
+                    proxy=proxy_url
+                )
+            finally:
+                # 下载结束（无论成功失败），通知监视器停止
+                monitor_stop_event.set()
             
             # 分发结果给所有等待的 Worker
-            for it, fut, prog_cb in batch:
+            for it, fut in batch:
                 if not fut.done():
+                    # 最终置为 100% (如果成功) 或 0% (如果失败)
+                    if result.get("success"):
+                        it.progress = 100.0
+                        if it.file_size > 0: it.downloaded_size = it.file_size
                     fut.set_result(result)
         except Exception as e:
             logger.exception(f"任务 {task_id[:8]}: [TDLBatcher] 批量下载发生致命错误")
             # [CRITICAL] 必须释放所有 Future，否则 Worker 永远卡死在下载中
-            for it, fut, prog_cb in batch:
+            for it, fut in batch:
                 if not fut.done():
                     fut.set_result({"success": False, "error": f"批量执行异常: {str(e)}", "output": ""})
+
+    async def _monitor_temp_files(self, batch, target_sub_dir: str, stop_event: asyncio.Event, task_id: str):
+        """磁盘嗅探监视器：定期检查 .temp 文件大小以更新进度 (v2.3.1)"""
+        sub_path = Path(target_sub_dir)
+        if not sub_path.exists():
+            return
+            
+        logger.debug(f"任务 {task_id[:8]}: [磁盘嗅探] 开始监控目录: {target_sub_dir}")
+        from . import export_manager
+        
+        while not stop_event.is_set():
+            try:
+                # 等待 10 秒 (按照用户要求)
+                # 使用 wait 以便能被 stop_event 立即中断退出
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=10.0)
+                    break # 如果 wait 正常结束，说明 stop_event 已 set
+                except asyncio.TimeoutError:
+                    pass # 超时说明 10 秒到了，开始扫描
+                
+                if not sub_path.exists(): continue
+                
+                # 获取目录下所有 .temp 文件
+                # TDL 默认临时文件名为: FileName.temp
+                # 我们的文件名为: {MessageID}-{DialogID}-FileName
+                temp_files = list(sub_path.glob("*.temp"))
+                if not temp_files: continue
+                
+                updated = False
+                for it, fut in batch:
+                    if it.status != DownloadStatus.DOWNLOADING: continue
+                    
+                    # 匹配逻辑：找文件名包含 message_id 的 .temp 文件
+                    prefix = f"{it.message_id}-"
+                    for tf in temp_files:
+                        if tf.name.startswith(prefix):
+                            try:
+                                current_size = tf.stat().st_size
+                                if it.file_size > 0:
+                                    it.downloaded_size = current_size
+                                    it.progress = min(99.9, (current_size / it.file_size) * 100.0)
+                                    updated = True
+                            except: pass
+                            break
+                
+                if updated:
+                    # 触发一次任务进度同步
+                    task = export_manager.get_task(task_id)
+                    if task:
+                        await export_manager._notify_progress(task_id, task)
+                        
+            except Exception as e:
+                logger.debug(f"[磁盘嗅探] 扫描出错: {e}")
+                await asyncio.sleep(5)
+        
+        logger.debug(f"任务 {task_id[:8]}: [磁盘嗅探] 监控结束")
 
 
 class ExportManager:
@@ -1179,38 +1237,24 @@ class ExportManager:
                 try: os.chmod(target_sub_dir, 0o777)
                 except: pass
 
-                # 定义 TDL 进度回调
-                def tdl_on_progress(percentage: int):
-                    item.progress = float(percentage)
-                    # 尝试估算已下载大小
-                    if item.file_size > 0:
-                        item.downloaded_size = int(item.file_size * (percentage / 100.0))
-                    
-                    # [v2.3.1] 进度节流通知 (每 2 秒通知一次，防止 UI 抖动和后端过载)
-                    import time
-                    now = time.time()
-                    last_time = self._last_tdl_notify_time.get(task.id, 0)
-                    if now - last_time > 2.0:
-                        self._last_tdl_notify_time[task.id] = now
-                        # 使用非阻塞 notify
-                        asyncio.create_task(self._notify_progress(task.id, task))
-                
-                # [v2.2.0] 如果最大并发为 1，则不使用批量聚合器，直接触发下载
+                # [v2.1.8 稳定版逻辑] 移除复杂流式进度，确保任务进入下一项
                 if options.max_concurrent_downloads == 1:
-                    from ..api.tdl_integration import tdl_integration
-                    # 获取代理设置
-                    proxy_url = task.proxy_url if task.proxy_enabled else None
-                    result = await tdl_integration.download(
-                        url=url,
-                        output_dir=str(target_sub_dir),
-                        threads=options.download_threads,
-                        limit=1,
-                        proxy=proxy_url,
-                        on_progress=tdl_on_progress
-                    )
+                    # [v2.3.1] 磁盘嗅探监视器
+                    monitor_stop_event = asyncio.Event()
+                    asyncio.create_task(self.tdl_batcher._monitor_temp_files([(item, None)], str(target_sub_dir), monitor_stop_event, task.id))
+                    
+                    try:
+                        result = await tdl_integration.download(
+                            url=url,
+                            output_dir=str(target_sub_dir),
+                            threads=options.download_threads,
+                            limit=1,
+                            proxy=task.proxy_url if task.proxy_enabled else None
+                        )
+                    finally:
+                        monitor_stop_event.set()
                 else:
-                    # 使用批处理聚合器提交任务，自动处理链接聚合
-                    result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir), on_progress=tdl_on_progress)
+                    result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir))
                 
                 # [CRITICAL FIX] 物理完整性校验 (v2.3.1)
                 # TDL 模式也必须通过磁盘文件大小核对
@@ -1869,24 +1913,14 @@ class ExportManager:
         
         try:
             # 等待所有队列项处理完毕
-            last_log_time = 0
             while True:
-                # [v2.3.1] 深度完结检测：
-                # 1. 队列 qsize 为 0 (没活了)
-                # 2. _item_to_worker 为空 (没人在干活)
-                # 3. download_queue 中状态为 DOWNLOADING 的项为 0 (没人在下载)
-                active_map_count = len(self._item_to_worker.get(task.id, {}))
+                # 检查是否还有处于活动状态的下载项
                 active_downloads = sum(1 for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING)
                 pending_count = queue.qsize()
                 
-                # 每一分钟打印一次当前监控状态，方便排查由于队列未 done 导致的挂起
-                if time.time() - last_log_time > 60:
-                    logger.debug(f"任务 {task.id[:8]} [监控循环]: ActiveMap={active_map_count}, Downloading={active_downloads}, Pending={pending_count}")
-                    last_log_time = time.time()
-                
-                if active_downloads == 0 and pending_count == 0 and active_map_count == 0:
-                    # 队列空了，干活的人也散了，说明这波活真正干完了
-                    logger.info(f"任务 {task.id[:8]}: [检测完结] 所有 Worker 已归位，发送退出信号")
+                if active_downloads == 0 and pending_count == 0:
+                    # 队列空了，且没有正在下载的，说明这波活干完了
+                    # 发送 None 信号给所有 worker 让它们有序下班
                     for _ in range(options.max_concurrent_downloads):
                         queue.put_nowait(None)
                     break
