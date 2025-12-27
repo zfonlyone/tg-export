@@ -268,9 +268,14 @@ class AsyncDockerClient:
                 nonlocal remaining
                 while True:
                     if len(remaining) < 8:
-                        new_data = await reader.read(8192)
-                        if not new_data: return
-                        remaining += new_data
+                        # [v2.3.1] 增加单次解析超时保护，防止容器内部死锁导致后端也挂起
+                        try:
+                            new_data = await asyncio.wait_for(reader.read(8192), timeout=600.0)
+                            if not new_data: return
+                            remaining += new_data
+                        except asyncio.TimeoutError:
+                            logger.error("[TDL] 流读取超时 (10分钟无数据)，强制断开流解析")
+                            return
                         continue
                     
                     stream_type = remaining[0]
@@ -289,17 +294,23 @@ class AsyncDockerClient:
 
             # 进度解析正则 (捕获 75% 这种)
             progress_pattern = re.compile(r"(\d+)%")
+            regex_buffer = "" # [v2.3.1] 滑动窗口：防止百分比被 chunk 截断
             
             async for chunk in read_gen():
                 text = chunk.decode(errors='replace')
                 output_parts.append(text)
                 
                 if on_progress:
+                    # 维护滑动窗口 (保留最后 20 个字符)
+                    regex_buffer += text
+                    if len(regex_buffer) > 200: # 适当放宽以适应 TDL 复杂的控制符
+                        regex_buffer = regex_buffer[-100:]
+                    
                     # 从文本中提取进度
-                    matches = progress_pattern.findall(text)
+                    matches = progress_pattern.findall(regex_buffer)
                     if matches:
                         try:
-                            # 取最后一个匹配到的百分比
+                            # 取最新的百分比
                             percentage = int(matches[-1])
                             on_progress(percentage)
                         except:
