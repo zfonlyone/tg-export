@@ -93,9 +93,6 @@ class TDLBatcher:
         
         # [v2.3.1] 完善异常捕获，防止 Worker 卡死
         try:
-            # 获取代理设置 - 需要从任务管理器获取任务对象
-            proxy_url = None
-            try:
             # 获取代理设置
             proxy_url = None
             try:

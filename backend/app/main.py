@@ -154,6 +154,32 @@ async def startup_event():
     except Exception as e:
         print(f"[TDL] ❌ 通信线路异常: {e}")
 
+    # [Permission Fix] 自动修复权限 (v2.3.2)
+    def fix_recursive_permissions(path_obj: Path):
+        """递归修复目录权限为 777"""
+        import os
+        if not path_obj.exists():
+            return
+        print(f"[System] 正在修复路径权限: {path_obj}")
+        try:
+            # 修改根目录
+            os.chmod(path_obj, 0o777)
+            # 递归修改子文件和子目录
+            for root, dirs, files in os.walk(path_obj):
+                for d in dirs:
+                    try: os.chmod(os.path.join(root, d), 0o777)
+                    except: pass
+                for f in files:
+                    try: os.chmod(os.path.join(root, f), 0o777)
+                    except: pass
+        except Exception as e:
+            print(f"[System] 权限修复出错 ({path_obj}): {e}")
+
+    # 修复目标目录
+    target_dirs = ["/opt/tg-export", str(settings.EXPORT_DIR), str(settings.DATA_DIR)]
+    for d_path in target_dirs:
+        fix_recursive_permissions(Path(d_path))
+
 
 @app.on_event("shutdown")
 async def shutdown_event():

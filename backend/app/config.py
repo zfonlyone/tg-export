@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     MIN_PARALLEL_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB，小于此值不启用并行
     ENABLE_PARALLEL_DOWNLOAD: bool = os.getenv("ENABLE_PARALLEL_DOWNLOAD", "true").lower() == "true"
     
-    # 代理设置 (用于 TDL 下载)
+    # 代理设置
     PROXY_URL: str = os.getenv("PROXY_URL", "")
     
     class Config:
