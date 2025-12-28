@@ -194,8 +194,21 @@ class DownloadManagerMixin:
                 success, path, _ = await telegram_client.download_media(m, p, progress_callback=kwargs.get('progress_callback'))
                 return success, path
 
-            # 进度转发回调
+            # 进度转发回调 - 添加速度计算 (v2.4.3)
+            last_update = {"time": time.time(), "bytes": 0}
             def p_callback(current, total):
+                now = time.time()
+                elapsed = now - last_update["time"]
+                if elapsed > 0.5:  # 每0.5秒更新一次速度
+                    bytes_diff = current - last_update["bytes"]
+                    item.speed = bytes_diff / elapsed if elapsed > 0 else 0
+                    last_update["time"] = now
+                    last_update["bytes"] = current
+                    
+                    # 更新任务级总速度 (所有正在下载的 item 速度之和)
+                    total_speed = sum(i.speed for i in task.download_queue if i.status == DownloadStatus.DOWNLOADING)
+                    task.download_speed = total_speed
+                    
                 item.downloaded_size = current
                 item.progress = (current / total * 100) if total > 0 else 0
             
