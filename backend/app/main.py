@@ -50,7 +50,7 @@ logger.info(f"日志已配置，存储路径: {log_file}")
 app = FastAPI(
     title="TG Export",
     description="Telegram 全功能导出工具",
-    version="2.3.2",
+    version="2.4.4",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
@@ -192,7 +192,7 @@ async def shutdown_event():
 # 健康检查
 @app.get("/health")
 async def health_check():
-    return {"status": "ok", "version": "2.3.1"}
+    return {"status": "ok", "version": "2.4.4"}
 
 
 if __name__ == "__main__":

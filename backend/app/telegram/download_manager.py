@@ -58,7 +58,7 @@ class DownloadManagerMixin:
             await self._notify_progress(task.id, task)
 
     async def _process_download_queue(self, task: ExportTask, export_path: Path):
-        """处理任务下载队列 (Worker Pool 模式)"""
+        """处理任务下载队列 (v2.4.4 - 动态 Worker 池)"""
         await self._sync_task_with_disk(task, export_path)
         options = task.options
         
@@ -82,34 +82,40 @@ class DownloadManagerMixin:
 
         self._last_global_start_time = 0
         global_start_lock = asyncio.Lock()
+        
+        # Worker 存储 {worker_id: asyncio.Task}
+        workers: Dict[int, asyncio.Task] = {}
 
         async def worker_logic(worker_id: int):
             """内部工协程"""
             # 平滑启动
             async with global_start_lock:
                 now = time.time()
-                wait_time = max(0, self._last_global_start_time + 5 - now)
+                wait_time = max(0, self._last_global_start_time + 3 - now)
                 if wait_time > 0: await asyncio.sleep(wait_time)
                 self._last_global_start_time = time.time()
             
-            logger.debug(f"Task {task.id[:8]}: Worker #{worker_id} started")
+            logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 已启动")
 
             while True:
                 if task.status == TaskStatus.CANCELLED: break
-                if worker_id >= task.options.max_concurrent_downloads: break
+                # 动态缩容: 如果自己的 ID >= 当前最大并发数，退出
+                if worker_id >= task.options.max_concurrent_downloads:
+                    logger.info(f"任务 {task.id[:8]}: Worker #{worker_id} 因缩容退出")
+                    break
                 
                 # 全局暂停等待
                 while self.is_paused(task.id) and task.status != TaskStatus.CANCELLED:
                     await asyncio.sleep(1)
                 if task.status == TaskStatus.CANCELLED: break
 
-                priority_item = None
-                from_queue = False
-                
-                # 优先级探测 P1/P2/P4 ...
-                # (此处逻辑为了演示已精简，实际会包含完整的调度逻辑)
                 try:
-                    item = await queue.get()
+                    # 使用超时避免阻塞，便于响应并发变更
+                    try:
+                        item = await asyncio.wait_for(queue.get(), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        continue  # 无任务，继续循环检查状态
+                    
                     if item is None:
                         queue.task_done()
                         break
@@ -125,7 +131,7 @@ class DownloadManagerMixin:
                         queue.task_done()
                     
                     # 动力衰减冷却
-                    jitter = random.uniform(0.1, 0.3) if task.tdl_mode else random.uniform(2.0, 5.0)
+                    jitter = random.uniform(0.1, 0.3) if task.tdl_mode else random.uniform(1.0, 3.0)
                     await asyncio.sleep(jitter)
                     
                 except asyncio.CancelledError:
@@ -134,19 +140,32 @@ class DownloadManagerMixin:
                     logger.error(f"Task {task.id[:8]} Worker error: {e}")
                     await asyncio.sleep(1)
 
-        # 启动工作协程池
-        workers = [asyncio.create_task(worker_logic(i)) for i in range(options.max_concurrent_downloads)]
+        # 5. Worker Supervisor: 动态管理 Worker 池
+        def spawn_workers(target_count: int):
+            """启动新 Worker 直到达到目标数量"""
+            for i in range(target_count):
+                if i not in workers or workers[i].done():
+                    workers[i] = asyncio.create_task(worker_logic(i))
+                    logger.debug(f"任务 {task.id[:8]}: 创建 Worker #{i}")
+
+        # 初始启动
+        spawn_workers(options.max_concurrent_downloads)
         
-        # 速度更新与动态监控略
         try:
-             while task.status == TaskStatus.RUNNING:
-                 # 只要队列不空或者还有正在下载的，就继续
-                 if queue.empty() and not any(i.status == DownloadStatus.DOWNLOADING for i in task.download_queue):
-                     break
-                 await asyncio.sleep(2)
+            while task.status == TaskStatus.RUNNING:
+                # 动态扩容检查: 如果 max_concurrent_downloads 增加，启动新 Worker
+                current_max = task.options.max_concurrent_downloads
+                if len([w for w in workers.values() if not w.done()]) < current_max:
+                    spawn_workers(current_max)
+                
+                # 队列空且无正在下载的则退出
+                if queue.empty() and not any(i.status == DownloadStatus.DOWNLOADING for i in task.download_queue):
+                    break
+                await asyncio.sleep(2)
         finally:
-            for _ in range(options.max_concurrent_downloads): queue.put_nowait(None)
-            for w in workers: w.cancel()
+            # 清理所有 Worker
+            for _ in range(len(workers)): queue.put_nowait(None)
+            for w in workers.values(): w.cancel()
             self._task_queues.pop(task.id, None)
 
     async def _download_item_worker(self, task: ExportTask, item: DownloadItem, export_path: Path):
@@ -174,6 +193,7 @@ class DownloadManagerMixin:
 
             # 2. 常规/并行下载逻辑 (使用重试管理)
             item.status = DownloadStatus.DOWNLOADING
+            download_start_time = time.time()
             msg = await telegram_client.get_message_by_id(item.chat_id, item.message_id)
             if not msg:
                  item.status = DownloadStatus.FAILED
@@ -185,8 +205,9 @@ class DownloadManagerMixin:
             
             # 定义下载执行函数 (供 RetryManager 调用)
             async def core_download(m, p, **kwargs):
-                # 尝试并行下载
-                if options.enable_parallel_chunk and item.file_size >= self.MIN_PARALLEL_SIZE:
+                # 仅在用户显式开启分块下载时才使用 (v2.4.3 Fix)
+                use_parallel = options.enable_parallel_chunk and options.parallel_chunk_connections > 1
+                if use_parallel and item.file_size >= self.MIN_PARALLEL_SIZE:
                     success, err = await self.parallel_download(task, item, m, p, progress_callback=kwargs.get('progress_callback'))
                     if success: return True, p
                 
@@ -225,6 +246,14 @@ class DownloadManagerMixin:
                  self._safe_move(temp_path, full_path)
                  item.status = DownloadStatus.COMPLETED
                  item.progress = 100.0
+                 
+                 # 详细下载日志 (v2.4.3)
+                 download_duration = time.time() - download_start_time
+                 dc_id = getattr(msg, 'dc_id', 'N/A') if hasattr(msg, 'dc_id') else (getattr(msg.media, 'dc_id', 'N/A') if msg.media else 'N/A')
+                 logger.info(
+                     f"[下载完成] DC:{dc_id} | 群:{item.chat_id} | 消息:{item.message_id} | "
+                     f"文件:{full_path.name} | 大小:{item.file_size/1024/1024:.2f}MB | 耗时:{download_duration:.1f}s"
+                 )
             else:
                  item.status = DownloadStatus.FAILED
                  # item.error 已在 download_with_retry 中设置

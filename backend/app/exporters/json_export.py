@@ -44,7 +44,7 @@ async def export(
     export_data = {
         "export_info": {
             "app": "TG Export",
-            "version": "2.2.0",
+            "version": "2.4.4",
             "exported_at": datetime.now().isoformat(),
             "task_name": task.name,
             "options": task.options.model_dump()
