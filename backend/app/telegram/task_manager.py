@@ -193,8 +193,9 @@ class TaskManagerMixin:
         last_scanned_id = task.last_scanned_ids.get(chat.id, 0)
         highest_id_this_scan = 0
         
+        logger.info(f"任务 {task.id[:8]}: [Scanner] 开始扫描对话: {chat.title} ({chat.id}), 起点: {last_scanned_id}")
+
         chat_dir = export_path / "chats" / f"chat_{abs(chat.id)}"
-        chat_dir.mkdir(parents=True, exist_ok=True)
         media_dirs = {
             MediaType.PHOTO: chat_dir / "photos",
             MediaType.VIDEO: chat_dir / "video_files",
@@ -210,9 +211,11 @@ class TaskManagerMixin:
         # 全量扫描定义：从用户设置的起始点开始
         if getattr(task, '_force_full_scan', False):
             start_id = options.message_from
+            logger.info(f"任务 {task.id[:8]}: [Scanner] 执行全量扫描，强制起点: {start_id}")
         else:
             # 增量扫描逻辑：从 (上次扫描点 或 用户起点) 中的较大者开始
             start_id = max(options.message_from, last_scanned_id)
+            logger.info(f"任务 {task.id[:8]}: [Scanner] 执行增量扫描，计算起点: {start_id}")
         
         # [Optimization] 从旧到新扫描 (reverse=True)
         # offset_id 对 get_chat_history 是包含起始点的
@@ -224,6 +227,7 @@ class TaskManagerMixin:
             reverse=True
         )
 
+        msg_count = 0
         async for msg in history_iter:
             if task.status in [TaskStatus.CANCELLED, TaskStatus.PAUSED]: break
             
@@ -235,10 +239,13 @@ class TaskManagerMixin:
             if not getattr(task, '_force_full_scan', False) and last_scanned_id > 0 and msg.id <= last_scanned_id:
                 continue
             
+            msg_count += 1
             # 由于 reverse=True，ID 是递增的
             highest_id_this_scan = max(highest_id_this_scan, msg.id)
             
             task.total_messages += 1
+            task.processed_messages += 1 # [Fix] 同步 processed_messages 状态
+            
             media_type = telegram_client.get_media_type(msg)
             if media_type:
                 task.total_media += 1
@@ -256,8 +263,11 @@ class TaskManagerMixin:
                         self.enqueue_item(task, item)
             
             if task.total_messages % 100 == 0: await self._notify_progress(task.id, task)
-            await asyncio.sleep(0.05 + random.uniform(0, 0.05))
+            # 稍微降低频率，避免 Flood
+            if msg_count % 50 == 0:
+                await asyncio.sleep(0.01)
 
+        logger.info(f"任务 {task.id[:8]}: [Scanner] 对话 {chat.title} 扫描结束，发现消息: {msg_count}, 最高 ID: {highest_id_this_scan}")
         return messages, highest_id_this_scan
 
     def _should_download_media(self, media_type: MediaType, options: ExportOptions) -> bool:
@@ -274,9 +284,29 @@ class TaskManagerMixin:
         return mapping.get(media_type, False)
 
     async def _get_chats_to_export(self, options: ExportOptions) -> List[ChatInfo]:
-        all_chats = await telegram_client.get_dialogs()
+        """获取需要导出的对话列表 (v2.4.0)"""
+        logger.info(f"[Scanner] 正在检索对话列表 (specific_chats: {len(options.specific_chats)})")
+        
         if not options.specific_chats:
-             # 按类型初步筛选逻辑已在 exporter.py 原有方法实现，此处简化
-             return [c for c in all_chats if (c.type == ChatType.PRIVATE and options.private_chats) or (c.type == ChatType.CHANNEL and options.private_channels)]
+             # 如果没有指定，则拉取最近对话并过滤
+             all_chats = await telegram_client.get_dialogs(limit=200)
+             filtered = [
+                 c for c in all_chats 
+                 if (c.type == ChatType.PRIVATE and options.private_chats) or 
+                    (c.type in [ChatType.CHANNEL, ChatType.SUPERGROUP, ChatType.GROUP] and options.private_channels)
+             ]
+             logger.info(f"[Scanner] 自动筛选完成，匹配到 {len(filtered)} / {len(all_chats)} 个对话")
+             return filtered
+        
+        # 如果指定了，则逐个获取
         target_ids = options.specific_chats
-        return [c for c in all_chats if c.id in target_ids]
+        chats = []
+        for cid in target_ids:
+            try:
+                chat_info = await telegram_client.get_chat(cid)
+                chats.append(chat_info)
+            except Exception as e:
+                logger.warning(f"[Scanner] 无法获取指定对话 {cid}: {e}")
+                continue
+        logger.info(f"[Scanner] 指定对话检索完成，成功获取 {len(chats)} 个")
+        return chats

@@ -302,6 +302,22 @@ class TelegramClient:
             
         return None
     
+    async def get_chat(self, chat_id: Union[int, str]) -> ChatInfo:
+        """获取单个对话信息 (v2.4.0)"""
+        await self._ensure_connected()
+        try:
+            chat = await self._client.get_chat(chat_id)
+            return ChatInfo(
+                id=chat.id,
+                title=chat.title or chat.first_name or "Unknown",
+                type=self._convert_chat_type(chat),
+                username=chat.username,
+                members_count=chat.members_count
+            )
+        except Exception as e:
+            logger.error(f"[TG] 获取对话 {chat_id} 失败: {e}")
+            raise
+
     async def get_dialogs(self, limit: int = 100) -> List[ChatInfo]:
         """获取最近对话列表 (增加缓存优化)"""
         await self._ensure_connected()

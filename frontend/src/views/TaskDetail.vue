@@ -732,6 +732,17 @@ onUnmounted(() => {
   display: block;
 }
 
+/* 桥接按钮与菜单之间的 8px 间隙，防止鼠标移动时 hover 丢失 (v2.4.0) */
+.dropdown-menu::before {
+  content: "";
+  position: absolute;
+  top: -12px;
+  left: 0;
+  width: 100%;
+  height: 12px;
+  background: transparent;
+}
+
 .dropdown-menu button {
   width: 100%;
   text-align: left;
