@@ -1,12 +1,11 @@
 #!/bin/bash
 
-# ==========================================================
-# TG Export 一键部署脚本 v2.3
+# ═══════════════════════════════════════════════════════════
+# TG Export 一键部署脚本 v2.4.5
 # 功能: 安装/卸载 TG Export + Nginx 反向代理
 # 证书管理: 使用 nginx-acme 模块自动管理
-# Nginx 配置: /etc/nginx/sites-available/$DOMAIN
-# 证书目录: /etc/nginx/acme/letsencrypt/
-# ==========================================================
+# 更新日志: 任务独立存储、TDL单项下载、文件命名统一
+# ═══════════════════════════════════════════════════════════
 
 # 颜色定义
 RED='\033[0;31m'
@@ -18,7 +17,7 @@ PLAIN='\033[0m'
 
 # ===== 统一配置 =====
 APP_NAME="TG Export"
-APP_VERSION="2.3.0"
+APP_VERSION="2.4.5"
 APP_DIR="/opt/tg-export"
 CONFIG_DIR="$APP_DIR/config"
 CONFIG_FILE="$CONFIG_DIR/config.yml"
@@ -58,17 +57,26 @@ docker_compose() {
 
 # ===== 显示菜单 =====
 show_menu() {
-    echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
-    echo -e "${CYAN}${BOLD}      TG Export - Telegram 全功能导出工具 ${APP_VERSION}${PLAIN}"
-    echo -e "${CYAN}${BOLD}=============================================${PLAIN}"
-    echo -e " ${GREEN}1.${PLAIN} 安装 TG Export"
-    echo -e " ${GREEN}2.${PLAIN} 卸载 TG Export"
-    echo -e " ${GREEN}3.${PLAIN} 更新 TG Export"
-    echo -e " ${GREEN}4.${PLAIN} 查看状态"
-    echo -e " ${GREEN}5.${PLAIN} 查看日志"
-    echo -e " ${GREEN}6.${PLAIN} 配置 Nginx 反代"
-    echo -e " ${GREEN}0.${PLAIN} 退出"
-    echo -e "${CYAN}---------------------------------------------${PLAIN}"
+    clear
+    echo -e ""
+    echo -e "${CYAN}${BOLD}  ╔══════════════════════════════════════════════════════╗${PLAIN}"
+    echo -e "${CYAN}${BOLD}  ║     📦 TG Export - Telegram 全功能导出工具           ║${PLAIN}"
+    echo -e "${CYAN}${BOLD}  ║                    Version ${APP_VERSION}                     ║${PLAIN}"
+    echo -e "${CYAN}${BOLD}  ╚══════════════════════════════════════════════════════╝${PLAIN}"
+    echo -e ""
+    echo -e "  ${GREEN}━━━━━━━━━━━━━━━━━━ 📋 主菜单 ━━━━━━━━━━━━━━━━━━${PLAIN}"
+    echo -e ""
+    echo -e "    ${GREEN}1)${PLAIN} 🚀 安装 TG Export"
+    echo -e "    ${GREEN}2)${PLAIN} 🗑️  卸载 TG Export"
+    echo -e "    ${GREEN}3)${PLAIN} ⬆️  更新 TG Export"
+    echo -e "    ${GREEN}4)${PLAIN} 📊 查看运行状态"
+    echo -e "    ${GREEN}5)${PLAIN} 📜 查看实时日志"
+    echo -e "    ${GREEN}6)${PLAIN} 🔒 配置 Nginx 反代"
+    echo -e ""
+    echo -e "    ${RED}0)${PLAIN} ❌ 退出"
+    echo -e ""
+    echo -e "  ${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${PLAIN}"
+    echo -e ""
 }
 
 # ===== 环境检查 =====
@@ -646,7 +654,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
-APP_VERSION="2.3.1"
+APP_VERSION="2.4.5"
 
 APP_DIR="/opt/tg-export"
 
@@ -662,18 +670,22 @@ function docker_compose() {
 
 function show_menu() {
     clear
-    echo -e "${GREEN}=== TG Export 管理工具 (tge) ${APP_VERSION} ===${NC}"
-    echo "1. 启动服务"
-    echo "2. 停止服务"
-    echo "3. 重启服务"
-    echo "4. 查看状态"
-    echo "5. 查看日志"
-    echo "6. 更新镜像"
-    echo "7. 密码管理"
-    echo "8. 安装/更新"
-    echo "9. 卸载工具"
-    echo "0. 退出"
-    echo
+    echo -e ""
+    echo -e "${CYAN}╔══════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║    📦 TG Export 管理工具 v${APP_VERSION}      ║${NC}"
+    echo -e "${CYAN}╚══════════════════════════════════════════╝${NC}"
+    echo -e ""
+    echo -e "  ${GREEN}1)${NC} ▶️  启动服务"
+    echo -e "  ${GREEN}2)${NC} ⏹️  停止服务"
+    echo -e "  ${GREEN}3)${NC} 🔄 重启服务"
+    echo -e "  ${GREEN}4)${NC} 📊 查看状态"
+    echo -e "  ${GREEN}5)${NC} 📜 查看日志"
+    echo -e "  ${GREEN}6)${NC} ⬆️  更新镜像"
+    echo -e "  ${GREEN}7)${NC} 🔑 密码管理"
+    echo -e "  ${GREEN}8)${NC} 🚀 安装/更新"
+    echo -e "  ${GREEN}9)${NC} 🗑️  卸载工具"
+    echo -e "  ${RED}0)${NC} ❌ 退出"
+    echo -e ""
     read -p "请选择 [0-9]: " choice
     handle_choice "$choice"
 }

@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     
     # 基础配置
     APP_NAME: str = "TG Export"
-    APP_VERSION: str = "2.3.2"  # Full Scan Default & TDL Polling Fix
+    APP_VERSION: str = "2.4.5"  # Task storage, TDL single download, unified naming
     DEBUG: bool = False
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")

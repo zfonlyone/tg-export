@@ -416,8 +416,18 @@ async def delete_task(
     if task.status == TaskStatus.RUNNING:
         await export_manager.cancel_export(task_id)
     
+    # 删除任务
     del export_manager.tasks[task_id]
-    export_manager._save_tasks()  # 保存更改
+    
+    # [v2.4.5] 删除独立任务文件
+    try:
+        from ..config import settings
+        task_file = settings.DATA_DIR / "tasks" / f"{task_id}.json"
+        if task_file.exists():
+            task_file.unlink()
+    except Exception as e:
+        logger.warning(f"删除任务文件失败: {e}")
+    
     return {"status": "ok", "message": "任务已删除"}
 
 

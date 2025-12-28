@@ -20,69 +20,127 @@ logger = logging.getLogger(__name__)
 class TaskManagerMixin:
     """任务管理与扫描逻辑 Mixin (v2.3.4)"""
 
+    def _get_tasks_dir(self) -> Path:
+        """获取任务存储目录"""
+        tasks_dir = settings.DATA_DIR / "tasks"
+        tasks_dir.mkdir(parents=True, exist_ok=True)
+        return tasks_dir
+    
     def _load_tasks(self):
-        """从文件加载任务"""
+        """从文件加载任务 (v2.4.5 - 独立文件存储)"""
         try:
-            tasks_file = settings.DATA_DIR / "tasks.json"
-            if tasks_file.exists():
-                with open(tasks_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                logger.info(f"正在加载 {len(data)} 个任务...")
-                for task_data in data:
-                    try:
-                        # 迁移与补全逻辑
-                        if "options" in task_data:
-                            opts = task_data["options"]
-                            if "download_threads" in opts and "parallel_chunk_connections" not in opts:
-                                opts["parallel_chunk_connections"] = min(8, max(1, opts["download_threads"]))
-                            opts.setdefault("incremental_scan_enabled", True)
-                            opts.setdefault("enable_parallel_chunk", True)
-                            opts.setdefault("parallel_chunk_connections", 4)
+            tasks_dir = self._get_tasks_dir()
+            
+            # 迁移旧格式：如果存在旧的 tasks.json，先迁移
+            old_tasks_file = settings.DATA_DIR / "tasks.json"
+            if old_tasks_file.exists():
+                logger.info("检测到旧版 tasks.json，正在迁移到独立文件存储...")
+                try:
+                    content = old_tasks_file.read_text(encoding='utf-8')
+                    data = json.loads(content)
+                    for task_data in data:
+                        task_id = task_data.get("id")
+                        if task_id:
+                            task_file = tasks_dir / f"{task_id}.json"
+                            with open(task_file, 'w', encoding='utf-8') as f:
+                                json.dump(task_data, f, ensure_ascii=False, indent=2, default=str)
+                    # 备份并删除旧文件
+                    import shutil
+                    backup_path = settings.DATA_DIR / "tasks_migrated.json.bak"
+                    shutil.move(str(old_tasks_file), str(backup_path))
+                    logger.info(f"✅ 已迁移 {len(data)} 个任务到独立文件，旧文件已备份")
+                except json.JSONDecodeError as e:
+                    logger.error(f"⚠️ 旧 tasks.json 已损坏无法迁移: {e}")
+                    # 重命名损坏文件
+                    import shutil
+                    shutil.move(str(old_tasks_file), str(settings.DATA_DIR / "tasks_corrupted.json.bak"))
+                except Exception as e:
+                    logger.error(f"迁移失败: {e}")
+            
+            # 加载独立任务文件
+            task_files = list(tasks_dir.glob("*.json"))
+            if not task_files:
+                logger.info("未找到任务文件")
+                return
+            
+            logger.info(f"正在加载 {len(task_files)} 个任务文件...")
+            loaded_count = 0
+            for task_file in task_files:
+                try:
+                    with open(task_file, 'r', encoding='utf-8') as f:
+                        task_data = json.load(f)
+                    
+                    # 迁移与补全逻辑
+                    if "options" in task_data:
+                        opts = task_data["options"]
+                        if "download_threads" in opts and "parallel_chunk_connections" not in opts:
+                            opts["parallel_chunk_connections"] = min(8, max(1, opts["download_threads"]))
+                        opts.setdefault("incremental_scan_enabled", True)
+                        opts.setdefault("enable_parallel_chunk", True)
+                        opts.setdefault("parallel_chunk_connections", 4)
+                    
+                    task_data.setdefault("last_scanned_id", 0)
+                    task = ExportTask.model_validate(task_data)
+                    
+                    if task.status in [TaskStatus.RUNNING, TaskStatus.EXTRACTING]:
+                        task.status = TaskStatus.PAUSED
+                        self._paused_tasks.add(task.id)
+                    elif task.status == TaskStatus.PAUSED:
+                        self._paused_tasks.add(task.id)
+                    
+                    for item in task.download_queue:
+                        if item.status == DownloadStatus.DOWNLOADING:
+                            item.status = DownloadStatus.WAITING
+                            item.speed = 0
                         
-                        task_data.setdefault("last_scanned_id", 0)
-                        task = ExportTask.model_validate(task_data)
-                        
-                        if task.status in [TaskStatus.RUNNING, TaskStatus.EXTRACTING]:
-                            task.status = TaskStatus.PAUSED
-                            self._paused_tasks.add(task.id)
-                        elif task.status == TaskStatus.PAUSED:
-                            self._paused_tasks.add(task.id)
-                        
-                        for item in task.download_queue:
-                            if item.status == DownloadStatus.DOWNLOADING:
-                                item.status = DownloadStatus.WAITING
-                                item.speed = 0
-                            
-                        self.tasks[task.id] = task
-                    except Exception as e:
-                        logger.error(f"加载任务失败: {e}")
-                logger.info(f"✅ 已加载 {len(self.tasks)} 个任务")
-            else:
-                 logger.info("未找到任务文件")
+                    self.tasks[task.id] = task
+                    loaded_count += 1
+                except Exception as e:
+                    logger.error(f"加载任务文件 {task_file.name} 失败: {e}")
+            
+            logger.info(f"✅ 已加载 {loaded_count} 个任务")
         except Exception as e:
-            logger.error(f"加载文件失败: {e}")
+            logger.error(f"加载任务失败: {e}")
 
     def _save_tasks(self):
-        """同步保存"""
+        """同步保存所有任务 (v2.4.5 - 独立文件存储)"""
         try:
-            tasks_file = settings.DATA_DIR / "tasks.json"
-            data = [task.model_dump(mode='json') for task in self.tasks.values()]
-            with open(tasks_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+            tasks_dir = self._get_tasks_dir()
+            for task in self.tasks.values():
+                task_file = tasks_dir / f"{task.id}.json"
+                data = task.model_dump(mode='json')
+                with open(task_file, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2, default=str)
             self._needs_save = False
         except Exception as e:
             logger.error(f"保存失败: {e}")
 
+    def _save_task(self, task_id: str):
+        """保存单个任务 (v2.4.5)"""
+        task = self.tasks.get(task_id)
+        if not task:
+            return
+        try:
+            tasks_dir = self._get_tasks_dir()
+            task_file = tasks_dir / f"{task_id}.json"
+            data = task.model_dump(mode='json')
+            with open(task_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+        except Exception as e:
+            logger.error(f"保存任务 {task_id[:8]} 失败: {e}")
+
     async def _save_tasks_async(self):
-        """异步保存"""
+        """异步保存所有任务 (v2.4.5 - 独立文件存储)"""
         async with self._save_lock:
             if not self._needs_save: return
             try:
-                data = [task.model_dump(mode='json') for task in self.tasks.values()]
+                tasks_dir = self._get_tasks_dir()
                 def save():
-                    tasks_file = settings.DATA_DIR / "tasks.json"
-                    with open(tasks_file, 'w', encoding='utf-8') as f:
-                        json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+                    for task in self.tasks.values():
+                        task_file = tasks_dir / f"{task.id}.json"
+                        data = task.model_dump(mode='json')
+                        with open(task_file, 'w', encoding='utf-8') as f:
+                            json.dump(data, f, ensure_ascii=False, indent=2, default=str)
                 await asyncio.get_event_loop().run_in_executor(None, save)
                 self._needs_save = False
             except Exception as e:
