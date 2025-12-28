@@ -499,28 +499,41 @@ class TelegramClient:
         max_id: int = 0,
         reverse: bool = False
     ) -> AsyncGenerator[Message, None]:
-        """获取聊天历史 (v2.4.3 - 修复 reverse 参数)"""
+        """获取聊天历史 (v2.4.3 - 修复 reverse)"""
         await self._ensure_connected()
         if not self._is_authorized:
             return
         
         try:
-            # Pyrogram 不支持 reverse，使用 iter_messages 替代
-            # iter_messages 支持 from_message_id (offset_id) 和 reverse
-            async for message in self._client.iter_messages(
-                chat_id,
-                limit=limit if limit > 0 else None,
-                offset_id=offset_id,
-                reverse=reverse
-            ):
-                # 过滤消息范围
-                if max_id and message.id > max_id:
-                    if reverse: break
-                    continue
-                if min_id and message.id < min_id:
-                    if not reverse: break
-                    continue
-                yield message
+            # Pyrogram 的 get_chat_history 默认是从新到旧
+            # 如果需要从旧到新 (reverse=True)，收集后反转
+            if reverse:
+                messages = []
+                async for message in self._client.get_chat_history(
+                    chat_id,
+                    limit=limit if limit > 0 else 0,
+                    offset_id=offset_id
+                ):
+                    if max_id and message.id > max_id:
+                        continue
+                    if min_id and message.id < min_id:
+                        break
+                    messages.append(message)
+                
+                # 反转后按 ID 从小到大 yield
+                for msg in reversed(messages):
+                    yield msg
+            else:
+                async for message in self._client.get_chat_history(
+                    chat_id,
+                    limit=limit if limit > 0 else 0,
+                    offset_id=offset_id
+                ):
+                    if max_id and message.id > max_id:
+                        continue
+                    if min_id and message.id < min_id:
+                        break
+                    yield message
         except Exception as e:
             logger.error(f"[TG] 获取聊天历史出错: {e}")
     
