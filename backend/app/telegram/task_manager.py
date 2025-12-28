@@ -218,13 +218,14 @@ class TaskManagerMixin:
             logger.info(f"任务 {task.id[:8]}: [Scanner] 执行增量扫描，计算起点: {start_id}")
         
         # [Optimization] 从旧到新扫描 (reverse=True)
-        # offset_id 对 get_chat_history 是包含起始点的
+        # Pyrogram 的 offset_id 是"从此 ID 向前获取"，不适合前向扫描
+        # 改为：获取全部消息，用 min_id 过滤掉起点之前的
         history_iter = telegram_client.get_chat_history(
             chat.id, 
-            offset_id=start_id, 
-            limit=0, 
-            max_id=options.message_to if options.message_to > 0 else 0, # 支持扫描范围终点
-            reverse=True
+            limit=0,  # 0 = 无限制
+            min_id=start_id - 1 if start_id > 1 else 0,  # 只获取 >= start_id 的消息
+            max_id=options.message_to if options.message_to > 0 else 0,
+            reverse=True  # 从旧到新
         )
 
         msg_count = 0
