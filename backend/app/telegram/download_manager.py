@@ -176,12 +176,52 @@ class DownloadManagerMixin:
         try:
             # 1. TDL 触发逻辑
             if task.tdl_mode:
-                 # 使用 tdl_batcher (来自 ExporterBase)
                  target_sub_dir = export_path / item.file_path
                  target_sub_dir = target_sub_dir.parent
                  target_sub_dir.mkdir(parents=True, exist_ok=True)
                  
-                 result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir), manager_inst=self)
+                 # [v2.4.4] 立即将状态设为下载中，让 UI 显示正在处理
+                 item.status = DownloadStatus.DOWNLOADING
+                 await self._notify_progress(task.id, task)
+                 
+                 # [v2.4.4] 根据并发数决定下载模式
+                 # 并发数=1：直接调用 TDL 单项下载，不聚合
+                 # 并发数>1：使用 TDL 批量聚合器
+                 if options.max_concurrent_downloads <= 1:
+                     # 单项下载模式 - 直接调用 TDL
+                     from ..api.tdl_integration import tdl_integration
+                     url = tdl_integration.generate_telegram_link(item.chat_id, item.message_id)
+                     
+                     # 获取代理设置
+                     proxy_url = task.proxy_url if task.proxy_enabled and task.proxy_url else None
+                     
+                     result = await tdl_integration.download(
+                         url=url,
+                         output_dir=str(target_sub_dir),
+                         threads=options.download_threads,
+                         limit=1,
+                         proxy=proxy_url
+                     )
+                     
+                     # 更新权限
+                     self._set_777_recursive(target_sub_dir)
+                     
+                     # 回填下载结果
+                     if result.get("success"):
+                         # 查找下载的文件并更新大小
+                         search_prefix = f"{item.message_id}-{abs(item.chat_id)}-"
+                         try:
+                             for f in target_sub_dir.iterdir():
+                                 if f.name.startswith(search_prefix) and not f.name.endswith(('.temp', '.tdl', '.tmp', '.part')):
+                                     if item.file_size <= 0: item.file_size = f.stat().st_size
+                                     item.downloaded_size = f.stat().st_size
+                                     break
+                         except: pass
+                         if item.file_size > 0: item.downloaded_size = item.file_size
+                 else:
+                     # 批量聚合模式 - 使用 tdl_batcher
+                     result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir), manager_inst=self)
+                 
                  if result.get("success"):
                       item.status = DownloadStatus.COMPLETED
                       item.progress = 100.0
