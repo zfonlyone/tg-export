@@ -303,8 +303,10 @@ class TaskManagerMixin:
         chats = []
         for cid in target_ids:
             try:
+                logger.info(f"[Scanner] 正在解析指定对话: {cid}")
                 chat_info = await telegram_client.get_chat(cid)
                 chats.append(chat_info)
+                logger.info(f"[Scanner] 成功解析对话: {chat_info.title} (ID: {chat_info.id})")
             except Exception as e:
                 logger.warning(f"[Scanner] 无法获取指定对话 {cid}: {e}")
                 continue

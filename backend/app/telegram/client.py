@@ -27,6 +27,7 @@ class TelegramClient:
     def __init__(self):
         self._client: Optional[Client] = None
         self._is_authorized = False
+        self._peers_warmed = False # 是否已预热对话缓存 (v2.4.2)
         self._api_id: Optional[int] = None
         self._api_hash: Optional[str] = None
         self._phone: Optional[str] = None
@@ -303,38 +304,80 @@ class TelegramClient:
         return None
     
     async def get_chat(self, chat_id: Union[int, str]) -> ChatInfo:
-        """获取单个对话信息 (v2.4.1)"""
+        """获取单个对话信息 (v2.4.2)"""
         await self._ensure_connected()
         
-        # 尝试原始 ID
-        try:
-            chat = await self._client.get_chat(chat_id)
+        # 定义尝试逻辑，便于复用
+        async def try_get(cid):
+            chat = await self._client.get_chat(cid)
             return self._convert_to_chat_info(chat)
+
+        # 1. 尝试原始 ID
+        try:
+            return await try_get(chat_id)
         except Exception as e:
             error_str = str(e)
             
-            # 针对 PEER_ID_INVALID 进行智能回退
-            if "PEER_ID_INVALID" in error_str or "INPUT_USER_DEACTIVATED" in error_str:
-                # 1. 如果是正数且长度 >= 9，尝试加上 -100 前缀 (可能是超级群组/频道)
-                if isinstance(chat_id, int) and chat_id > 0 and len(str(chat_id)) >= 9:
-                    try:
-                        new_id = int(f"-100{chat_id}")
-                        logger.info(f"[TG] 尝试回退至超级群组 ID: {new_id}")
-                        chat = await self._client.get_chat(new_id)
-                        return self._convert_to_chat_info(chat)
+            # 针对 PEER_ID_INVALID/NAME_INVALID 进行预热和回退
+            if "PEER_ID_INVALID" in error_str or "NAME_INVALID" in error_str:
+                # A. 只有在没预热过的情况下才执行预热
+                if not self._peers_warmed:
+                    logger.warning(f"[TG] 遇到 Peer 报错，正在执行 Peer 预热 (全量拉取对话)...")
+                    await self._warm_up_peer_cache()
+                    # 预热后再次尝试原始 ID
+                    try: return await try_get(chat_id)
                     except: pass
+
+                # B. 智能回退: 尝试常见的 ID 变体
+                # 提取基础 ID (去掉符号和 -100 前缀)
+                str_id = str(abs(chat_id)) if isinstance(chat_id, int) else ""
+                if str_id.startswith("100") and len(str_id) > 10:
+                    base_id = int(str_id[3:])
+                else:
+                    base_id = int(str_id) if str_id.isdigit() else None
                 
-                # 2. 如果是正数，尝试加上 - 前缀 (可能是普通群组)
-                if isinstance(chat_id, int) and chat_id > 0:
+                if base_id:
+                    # 尝试超级群组格式 (-100...)
+                    if len(str(base_id)) >= 9:
+                        try:
+                            tid = int(f"-100{base_id}")
+                            if tid != chat_id:
+                                logger.info(f"[TG] 尝试超级群组回退 ID: {tid}")
+                                return await try_get(tid)
+                        except: pass
+                    
+                    # 尝试普通群组格式 (-...)
                     try:
-                        new_id = -chat_id
-                        logger.info(f"[TG] 尝试回退至普通群组 ID: {new_id}")
-                        chat = await self._client.get_chat(new_id)
-                        return self._convert_to_chat_info(chat)
+                        tid = -base_id
+                        if tid != chat_id:
+                            logger.info(f"[TG] 尝试普通群组回退 ID: {tid}")
+                            return await try_get(tid)
+                        except: pass
+                    
+                    # 尝试个人用户格式 (正数)
+                    try:
+                        if base_id != chat_id:
+                            logger.info(f"[TG] 尝试用户回退 ID: {base_id}")
+                            return await try_get(base_id)
                     except: pass
 
             logger.error(f"[TG] 获取对话 {chat_id} 彻底失败: {e}")
             raise
+
+    async def _warm_up_peer_cache(self):
+        """
+        拉取所有对话以填充 Pyrogram Session 数据库 (v2.4.2)
+        这是解决 PEER_ID_INVALID 的最可靠方式
+        """
+        if not self._is_authorized: return
+        try:
+            count = 0
+            async for _ in self._client.get_dialogs():
+                count += 1
+            self._peers_warmed = True
+            logger.info(f"[TG] Peer 预热完成，共拉取 {count} 个对话")
+        except Exception as e:
+            logger.error(f"[TG] Peer 预热失败: {e}")
 
     def _convert_to_chat_info(self, chat) -> ChatInfo:
         """模型转换工具"""
