@@ -6,7 +6,7 @@ import asyncio
 import os
 import logging
 from pathlib import Path
-from typing import Optional, List, AsyncGenerator
+from typing import Optional, List, AsyncGenerator, Union
 from pyrogram import Client
 from pyrogram.types import Chat, Message, Dialog
 from pyrogram.enums import ChatType as PyChatType
