@@ -207,7 +207,8 @@ class TaskManagerMixin:
         for d in media_dirs.values(): d.mkdir(parents=True, exist_ok=True)
 
         # [Optimization] 从旧到新扫描 (reverse=True)
-        # 如果是增量扫描，从 last_scanned_id 之后开始
+        # offset_id 对 get_chat_history 是包含起始点的
+        # 如果是增量扫描，我们希望从 from_id 之后的第一条开始
         history_iter = telegram_client.get_chat_history(
             chat.id, 
             offset_id=from_id, 
@@ -217,6 +218,11 @@ class TaskManagerMixin:
 
         async for msg in history_iter:
             if task.status in [TaskStatus.CANCELLED, TaskStatus.PAUSED]: break
+            
+            # [CRITICAL FIX] 增量正序扫描时，Pyrogram 会包含 offset_id 本身
+            # 如果该 ID 已经被扫描过，我们需要显式跳过
+            if from_id > 0 and msg.id <= from_id:
+                continue
             
             # 由于 reverse=True，ID 是递增的
             highest_id_this_scan = max(highest_id_this_scan, msg.id)

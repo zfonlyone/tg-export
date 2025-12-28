@@ -406,9 +406,10 @@ class TelegramClient:
         limit: int = 0,
         offset_id: int = 0,
         min_id: int = 0,
-        max_id: int = 0
+        max_id: int = 0,
+        reverse: bool = False
     ) -> AsyncGenerator[Message, None]:
-        """获取聊天历史 (倒序扫描: 从新到旧)"""
+        """获取聊天历史 (支持正序/倒序)"""
         await self._ensure_connected()
         if not self._is_authorized:
             return
@@ -417,17 +418,19 @@ class TelegramClient:
             async for message in self._client.get_chat_history(
                 chat_id,
                 limit=limit,
-                offset_id=offset_id
+                offset_id=offset_id,
+                reverse=reverse
             ):
-                # 过滤消息范围 (倒序下: 大ID先出)
+                # 过滤消息范围
                 if max_id and message.id > max_id:
+                    if reverse: break # 正序流下遇到比最大值还大的，后面都没意义了
                     continue
                 if min_id and message.id < min_id:
-                    # 倒序流中如果遇到比最小值还小的 ID，说明后续都不会满足 min_id，直接中断
-                    break
+                    if not reverse: break # 倒序流下遇到比最小值还小的，后面都没意义了
+                    continue
                 yield message
         except Exception as e:
-            print(f"[TG] 获取聊天历史出错: {e}")
+            logger.error(f"[TG] 获取聊天历史出错: {e}")
     
     async def get_message_by_id(self, chat_id: int, message_id: int) -> Optional[Message]:
         """获取单条消息（用于刷新 file_reference，增加缓存避免 API 损耗）"""
