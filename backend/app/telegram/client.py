@@ -499,24 +499,26 @@ class TelegramClient:
         max_id: int = 0,
         reverse: bool = False
     ) -> AsyncGenerator[Message, None]:
-        """获取聊天历史 (支持正序/倒序)"""
+        """获取聊天历史 (v2.4.3 - 修复 reverse 参数)"""
         await self._ensure_connected()
         if not self._is_authorized:
             return
         
         try:
-            async for message in self._client.get_chat_history(
+            # Pyrogram 不支持 reverse，使用 iter_messages 替代
+            # iter_messages 支持 from_message_id (offset_id) 和 reverse
+            async for message in self._client.iter_messages(
                 chat_id,
-                limit=limit,
+                limit=limit if limit > 0 else None,
                 offset_id=offset_id,
                 reverse=reverse
             ):
                 # 过滤消息范围
                 if max_id and message.id > max_id:
-                    if reverse: break # 正序流下遇到比最大值还大的，后面都没意义了
+                    if reverse: break
                     continue
                 if min_id and message.id < min_id:
-                    if not reverse: break # 倒序流下遇到比最小值还小的，后面都没意义了
+                    if not reverse: break
                     continue
                 yield message
         except Exception as e:
