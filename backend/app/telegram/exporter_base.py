@@ -37,11 +37,11 @@ class ExporterBase:
             pass
 
     def _get_export_path(self, task: ExportTask) -> Path:
-        """获取任务导出路径"""
+        """获取任务导出路径 (v2.4.4 - 修复路径缺失任务名)"""
         from ..config import settings
-        if task.options.export_path:
-            return Path(task.options.export_path).expanduser()
-        return settings.EXPORT_DIR / task.name
+        # 始终使用 task.name 作为子目录，避免不同任务文件混淆
+        base_path = Path(task.options.export_path).expanduser() if task.options.export_path else settings.EXPORT_DIR
+        return base_path / task.name
 
     def is_paused(self, task_id: str) -> bool:
         """检查任务是否处于暂停状态"""

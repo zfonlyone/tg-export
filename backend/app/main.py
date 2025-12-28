@@ -176,8 +176,8 @@ async def startup_event():
         except Exception as e:
             print(f"[System] 权限修复出错 ({path_obj}): {e}")
 
-    # 修复目标目录 (包含 /opt/tg-export)
-    target_dirs = ["/opt/tg-export", str(settings.EXPORT_DIR), str(settings.DATA_DIR), "/app"]
+    # 修复目标目录
+    target_dirs = [str(settings.EXPORT_DIR), str(settings.DATA_DIR), "/app"]
     for d_path in target_dirs:
         fix_recursive_permissions(Path(d_path))
 

@@ -78,10 +78,11 @@ class RetryManagerMixin:
         **kwargs
     ) -> Tuple[bool, Optional[str]]:
         """
-        带重试逻辑的通用下载包装器
+        带重试逻辑的通用下载包装器 (v2.4.4 - FILE_REFERENCE_EXPIRED 修复)
         """
         max_retries = task.options.max_download_retries
         last_error = None
+        current_message = message  # 可能在重试时刷新
         
         for attempt in range(max_retries):
             if self.is_paused(task.id) or task.status == DownloadStatus.PAUSED:
@@ -90,7 +91,7 @@ class RetryManagerMixin:
 
             try:
                 # 执行实际下载 (可能是并行下载或常规下载)
-                success, result_path = await download_func(message, file_path, **kwargs)
+                success, result_path = await download_func(current_message, file_path, **kwargs)
                 if success:
                     return True, result_path
             except Exception as e:
@@ -101,6 +102,20 @@ class RetryManagerMixin:
                 if not self.is_retryable(error_type):
                     item.error = f"不可重试错误: {error_type.value}"
                     return False, None
+                
+                # FILE_REFERENCE_EXPIRED 专项处理: 重新获取消息以刷新 file_reference
+                if error_type == ErrorType.FILE_REF_EXPIRED:
+                    logger.info(f"[FILE_REF] 检测到文件引用过期，正在重新获取消息: {item.chat_id}/{item.message_id}")
+                    try:
+                        from .client import telegram_client
+                        refreshed_msg = await telegram_client.get_message_by_id(item.chat_id, item.message_id)
+                        if refreshed_msg and refreshed_msg.media:
+                            current_message = refreshed_msg
+                            logger.info(f"[FILE_REF] 消息刷新成功: {item.chat_id}/{item.message_id}")
+                        else:
+                            logger.warning(f"[FILE_REF] 消息刷新失败，消息可能已被删除: {item.chat_id}/{item.message_id}")
+                    except Exception as refresh_err:
+                        logger.error(f"[FILE_REF] 刷新消息异常: {refresh_err}")
                 
                 # 处理限速
                 if error_type == ErrorType.FLOOD_WAIT:
@@ -115,6 +130,7 @@ class RetryManagerMixin:
                     item.error = str(last_error)
         
         return False, None
+
 
     def _record_failure(self, task: ExportTask, item: DownloadItem, error: Exception):
         """记录失败信息到任务模型"""
