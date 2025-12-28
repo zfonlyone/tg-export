@@ -182,6 +182,8 @@ class DownloadManagerMixin:
                  
                  # [v2.4.4] 立即将状态设为下载中，让 UI 显示正在处理
                  item.status = DownloadStatus.DOWNLOADING
+                 download_start_time = time.time()
+                 logger.info(f"[TDL开始] 群:{item.chat_id} | 消息:{item.message_id} | 文件:{item.file_name} | 预期大小:{item.file_size/1024/1024:.2f}MB")
                  await self._notify_progress(task.id, task)
                  
                  # [v2.4.4] 根据并发数决定下载模式
@@ -222,12 +224,15 @@ class DownloadManagerMixin:
                      # 批量聚合模式 - 使用 tdl_batcher
                      result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir), manager_inst=self)
                  
+                 download_duration = time.time() - download_start_time
                  if result.get("success"):
                       item.status = DownloadStatus.COMPLETED
                       item.progress = 100.0
+                      logger.info(f"[TDL完成] 群:{item.chat_id} | 消息:{item.message_id} | 文件:{item.file_name} | 大小:{item.downloaded_size/1024/1024:.2f}MB | 耗时:{download_duration:.1f}s")
                  else:
                       item.status = DownloadStatus.FAILED
                       item.error = result.get("error", "TDL 失败")
+                      logger.error(f"[TDL失败] 群:{item.chat_id} | 消息:{item.message_id} | 文件:{item.file_name} | 耗时:{download_duration:.1f}s | 错误:{item.error}")
                  await self._notify_progress(task.id, task)
                  return
 
@@ -240,8 +245,11 @@ class DownloadManagerMixin:
                  item.error = "找不到消息"
                  return
             
+            # [v2.4.5] 统一下载路径: 直接下载到输出路径，使用 .temp 后缀
+            # 这与 TDL 的行为保持一致，简化文件完整性检查
             full_path = export_path / item.file_path
-            temp_path = settings.DATA_DIR / "temp" / f"{item.id}_{full_path.name}"
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = full_path.with_suffix(full_path.suffix + ".temp")
             
             # 定义下载执行函数 (供 RetryManager 调用)
             async def core_download(m, p, **kwargs):
@@ -283,7 +291,11 @@ class DownloadManagerMixin:
             )
 
             if success:
-                 self._safe_move(temp_path, full_path)
+                 # [v2.4.5] 重命名移除 .temp 后缀
+                 if temp_path.exists():
+                     if full_path.exists():
+                         full_path.unlink()  # 删除旧文件
+                     temp_path.rename(full_path)
                  item.status = DownloadStatus.COMPLETED
                  item.progress = 100.0
                  
@@ -296,28 +308,55 @@ class DownloadManagerMixin:
                  )
             else:
                  item.status = DownloadStatus.FAILED
-                 # item.error 已在 download_with_retry 中设置
+                 download_duration = time.time() - download_start_time
+                 logger.error(f"[下载失败] 群:{item.chat_id} | 消息:{item.message_id} | 文件:{item.file_name} | 耗时:{download_duration:.1f}s | 错误:{item.error}")
             
         except asyncio.CancelledError:
              item.status = DownloadStatus.PAUSED
+             logger.info(f"[下载暂停] 群:{item.chat_id} | 消息:{item.message_id} | 文件:{item.file_name}")
              raise
         except Exception as e:
-             logger.error(f"Download error for {item.id}: {e}")
+             logger.error(f"[下载异常] 群:{item.chat_id} | 消息:{item.message_id} | 文件:{item.file_name} | 异常:{e}")
              item.status = DownloadStatus.FAILED
              item.error = str(e)
         finally:
              await self._notify_progress(task.id, task)
 
     async def _sync_task_with_disk(self, task: ExportTask, export_path: Path):
-        """磁盘同步逻辑"""
+        """磁盘同步逻辑 (v2.4.5 - 统一路径检查)"""
         for item in task.download_queue:
-            p = export_path / item.file_path
-            if p.exists():
-                s = p.stat().st_size
-                if item.file_size > 0 and s == item.file_size:
+            if item.status == DownloadStatus.COMPLETED:
+                continue  # 已完成的跳过
+                
+            # 1. 检查标准路径 (常规下载)
+            standard_path = export_path / item.file_path
+            if standard_path.exists() and not standard_path.name.endswith('.temp'):
+                s = standard_path.stat().st_size
+                # 放宽检查：文件存在且大小合理即认为完成
+                if s > 0 and (item.file_size <= 0 or s >= item.file_size * 0.99):
                     item.status = DownloadStatus.COMPLETED
                     item.downloaded_size = s
+                    if item.file_size <= 0: item.file_size = s
                     item.progress = 100.0
+                    continue
+            
+            # 2. 检查 TDL 命名格式 (TDL 下载)
+            # TDL 格式: {message_id}-{chat_id}-{filename}
+            parent_dir = standard_path.parent
+            if parent_dir.exists():
+                search_prefix = f"{item.message_id}-{abs(item.chat_id)}-"
+                try:
+                    for f in parent_dir.iterdir():
+                        if f.name.startswith(search_prefix) and not f.name.endswith(('.temp', '.tdl', '.tmp', '.part')):
+                            s = f.stat().st_size
+                            if s > 0 and (item.file_size <= 0 or s >= item.file_size * 0.99):
+                                item.status = DownloadStatus.COMPLETED
+                                item.downloaded_size = s
+                                if item.file_size <= 0: item.file_size = s
+                                item.progress = 100.0
+                                break
+                except: pass
+        
         self._update_task_stats(task)
 
     def _update_task_stats(self, task: ExportTask):

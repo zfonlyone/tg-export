@@ -279,11 +279,13 @@ class TaskManagerMixin:
                     item = task.get_download_item(msg.id, chat.id)
                     if not item:
                         file_name = self._get_media_filename(msg, media_type)
+                        # [v2.4.5] 统一命名格式与 TDL 一致: {msg_id}-{chat_id}-{filename}
+                        unified_filename = f"{msg.id}-{abs(chat.id)}-{file_name}"
                         item = DownloadItem(
                             id=f"{chat.id}_{msg.id}", message_id=msg.id, chat_id=chat.id,
                             file_name=file_name, file_size=self._get_file_size(msg) or 0,
                             media_type=media_type, 
-                            file_path=str((media_dirs.get(media_type, chat_dir/"other") / file_name).relative_to(export_path))
+                            file_path=str((media_dirs.get(media_type, chat_dir/"other") / unified_filename).relative_to(export_path))
                         )
                         # [Refinement] 生产者逻辑：仅负责注册，将维护权交给 QueueManager
                         self.enqueue_item(task, item)
