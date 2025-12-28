@@ -125,6 +125,31 @@ class TaskManagerMixin:
         self._save_tasks()
         return True
 
+    async def resume_export(self, task_id: str) -> bool:
+        """恢复暂停的导出任务 (v2.4.3)"""
+        task = self.tasks.get(task_id)
+        if not task: return False
+        if task.status not in [TaskStatus.PAUSED, TaskStatus.COMPLETED, TaskStatus.FAILED]:
+            return False
+        
+        # 重置状态并重新启动
+        task.status = TaskStatus.RUNNING
+        self._paused_tasks.discard(task_id)
+        
+        # 如果已经有运行中的协程，先清理
+        if task_id in self._running_tasks:
+            if not self._running_tasks[task_id].done():
+                self._running_tasks[task_id].cancel()
+            del self._running_tasks[task_id]
+        
+        # 重新启动
+        async_task = asyncio.create_task(self._run_export(task))
+        self._running_tasks[task_id] = async_task
+        
+        await self._notify_progress(task_id, task)
+        self._save_tasks()
+        return True
+
     async def cancel_export(self, task_id: str) -> bool:
         """取消导出任务"""
         task = self.tasks.get(task_id)
