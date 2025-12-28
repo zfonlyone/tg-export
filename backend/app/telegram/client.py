@@ -303,20 +303,48 @@ class TelegramClient:
         return None
     
     async def get_chat(self, chat_id: Union[int, str]) -> ChatInfo:
-        """获取单个对话信息 (v2.4.0)"""
+        """获取单个对话信息 (v2.4.1)"""
         await self._ensure_connected()
+        
+        # 尝试原始 ID
         try:
             chat = await self._client.get_chat(chat_id)
-            return ChatInfo(
-                id=chat.id,
-                title=chat.title or chat.first_name or "Unknown",
-                type=self._convert_chat_type(chat),
-                username=chat.username,
-                members_count=chat.members_count
-            )
+            return self._convert_to_chat_info(chat)
         except Exception as e:
-            logger.error(f"[TG] 获取对话 {chat_id} 失败: {e}")
+            error_str = str(e)
+            
+            # 针对 PEER_ID_INVALID 进行智能回退
+            if "PEER_ID_INVALID" in error_str or "INPUT_USER_DEACTIVATED" in error_str:
+                # 1. 如果是正数且长度 >= 9，尝试加上 -100 前缀 (可能是超级群组/频道)
+                if isinstance(chat_id, int) and chat_id > 0 and len(str(chat_id)) >= 9:
+                    try:
+                        new_id = int(f"-100{chat_id}")
+                        logger.info(f"[TG] 尝试回退至超级群组 ID: {new_id}")
+                        chat = await self._client.get_chat(new_id)
+                        return self._convert_to_chat_info(chat)
+                    except: pass
+                
+                # 2. 如果是正数，尝试加上 - 前缀 (可能是普通群组)
+                if isinstance(chat_id, int) and chat_id > 0:
+                    try:
+                        new_id = -chat_id
+                        logger.info(f"[TG] 尝试回退至普通群组 ID: {new_id}")
+                        chat = await self._client.get_chat(new_id)
+                        return self._convert_to_chat_info(chat)
+                    except: pass
+
+            logger.error(f"[TG] 获取对话 {chat_id} 彻底失败: {e}")
             raise
+
+    def _convert_to_chat_info(self, chat) -> ChatInfo:
+        """模型转换工具"""
+        return ChatInfo(
+            id=chat.id,
+            title=chat.title or chat.first_name or "Unknown",
+            type=self._convert_chat_type(chat),
+            username=chat.username,
+            members_count=getattr(chat, 'members_count', None)
+        )
 
     async def get_dialogs(self, limit: int = 100) -> List[ChatInfo]:
         """获取最近对话列表 (增加缓存优化)"""
@@ -399,9 +427,10 @@ class TelegramClient:
             str_id = str(chat_id_input).strip()
             
             # 这里的逻辑是：如果用户输的是 1234567890 (10位+)，很大可能是超级群组 ID
-            # 如果它不是以 - 开头，且长度 >= 9，我们帮他加 -100 (私密频道 ID 转换)
-            if str_id.isdigit():
+            # 注意：新版 ID 可能是 10 位，以 5/6 开头也可能是超级群组
+            if str_id.lstrip("-").isdigit():
                 val = int(str_id)
+                # 如果是正数且长度足够，尝试标准化为超级群组 ID (-100...)
                 if val > 0 and len(str_id) >= 9:
                     return int(f"-100{str_id}")
                 return val

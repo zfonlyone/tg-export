@@ -251,3 +251,52 @@ class DownloadManagerMixin:
         task.downloaded_size = stats["size"]
         task.total_media = stats["total"]
         task.total_size = stats["total_size"]
+
+    async def adjust_task_concurrency(
+        self, 
+        task_id: str, 
+        max_concurrent: Optional[int] = None,
+        download_threads: Optional[int] = None,
+        parallel_chunk: Optional[int] = None
+    ) -> bool:
+        """运行中动态调整任务并发设置 (v2.4.1)"""
+        task = self.get_task(task_id)
+        if not task: return False
+        
+        options = task.options
+        changed = False
+        
+        if max_concurrent is not None:
+            options.max_concurrent_downloads = max(1, min(20, max_concurrent))
+            task.current_max_concurrent_downloads = options.max_concurrent_downloads
+            # 同步更新全局连接池限制
+            telegram_client.set_max_concurrent_transmissions(options.max_concurrent_downloads)
+            
+            # 动态调整信号量 (Adaptive Scaling)
+            if task_id in self._parallel_semaphores:
+                chunk_multiplier = 3 if options.enable_parallel_chunk else 1
+                new_limit = min(30, max(8, options.max_concurrent_downloads * chunk_multiplier))
+                # 注意：Python 的 Semaphore 不支持直接修改 _value，这里我们通过创建一个新的信号量来实现
+                # 这在异步环境下是安全的，因为后续 worker 会获取新的信号量
+                self._parallel_semaphores[task_id] = asyncio.Semaphore(new_limit)
+            
+            # 如果管线空了且并发数增加，尝试重新填充
+            if task.status == TaskStatus.RUNNING:
+                self.refill_task_queue(task)
+            changed = True
+            
+        if download_threads is not None:
+            options.download_threads = max(1, min(20, download_threads))
+            changed = True
+            
+        if parallel_chunk is not None:
+            options.parallel_chunk_connections = max(1, min(8, parallel_chunk))
+            options.enable_parallel_chunk = parallel_chunk > 1
+            changed = True
+            
+        if changed:
+            self._save_tasks()
+            await self._notify_progress(task_id, task)
+            logger.info(f"任务 {task_id[:8]} 并发配置已更新: 并发={options.max_concurrent_downloads}, 分块={options.parallel_chunk_connections}")
+            return True
+        return False
