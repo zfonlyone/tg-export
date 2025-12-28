@@ -189,8 +189,9 @@ class TaskManagerMixin:
         """核心扫描逻辑"""
         options = task.options
         messages = []
+        # [Refinement] 确定扫描起始点与终点 (v2.3.9)
+        last_scanned_id = task.last_scanned_ids.get(chat.id, 0)
         highest_id_this_scan = 0
-        from_id = 0 if getattr(task, '_force_full_scan', False) else task.last_scanned_ids.get(chat.id, 0)
         
         chat_dir = export_path / "chats" / f"chat_{abs(chat.id)}"
         chat_dir.mkdir(parents=True, exist_ok=True)
@@ -206,22 +207,32 @@ class TaskManagerMixin:
         }
         for d in media_dirs.values(): d.mkdir(parents=True, exist_ok=True)
 
+        # 全量扫描定义：从用户设置的起始点开始
+        if getattr(task, '_force_full_scan', False):
+            start_id = options.message_from
+        else:
+            # 增量扫描逻辑：从 (上次扫描点 或 用户起点) 中的较大者开始
+            start_id = max(options.message_from, last_scanned_id)
+        
         # [Optimization] 从旧到新扫描 (reverse=True)
         # offset_id 对 get_chat_history 是包含起始点的
-        # 如果是增量扫描，我们希望从 from_id 之后的第一条开始
         history_iter = telegram_client.get_chat_history(
             chat.id, 
-            offset_id=from_id, 
+            offset_id=start_id, 
             limit=0, 
+            max_id=options.message_to if options.message_to > 0 else 0, # 支持扫描范围终点
             reverse=True
         )
 
         async for msg in history_iter:
             if task.status in [TaskStatus.CANCELLED, TaskStatus.PAUSED]: break
             
-            # [CRITICAL FIX] 增量正序扫描时，Pyrogram 会包含 offset_id 本身
-            # 如果该 ID 已经被扫描过，我们需要显式跳过
-            if from_id > 0 and msg.id <= from_id:
+            # [CRITICAL FIX] 正序扫描边界处理：
+            # 1. 如果当前 ID 已经扫描过 (增量模式)，跳过
+            # 2. 如果当前 ID 小于用户设定的起点，跳过
+            if msg.id < options.message_from:
+                continue
+            if not getattr(task, '_force_full_scan', False) and last_scanned_id > 0 and msg.id <= last_scanned_id:
                 continue
             
             # 由于 reverse=True，ID 是递增的
