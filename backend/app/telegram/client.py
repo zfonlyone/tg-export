@@ -325,8 +325,10 @@ class TelegramClient:
                     logger.warning(f"[TG] 遇到 Peer 报错，正在执行 Peer 预热 (全量拉取对话)...")
                     await self._warm_up_peer_cache()
                     # 预热后再次尝试原始 ID
-                    try: return await try_get(chat_id)
-                    except: pass
+                    try: 
+                        return await try_get(chat_id)
+                    except: 
+                        pass
 
                 # B. 智能回退: 尝试常见的 ID 变体
                 # 提取基础 ID (去掉符号和 -100 前缀)
@@ -352,7 +354,7 @@ class TelegramClient:
                         if tid != chat_id:
                             logger.info(f"[TG] 尝试普通群组回退 ID: {tid}")
                             return await try_get(tid)
-                        except: pass
+                    except: pass
                     
                     # 尝试个人用户格式 (正数)
                     try:
