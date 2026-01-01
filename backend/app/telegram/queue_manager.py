@@ -38,6 +38,8 @@ class QueueManagerMixin:
         """
         维护者逻辑：从待处理池中提取所有 WAITING 项目，填入下载管线
         通常在任务启动或从暂停恢复时调用
+        
+        注意：不包含 FAILED 状态的项，失败项需要用户手动点击重试
         """
         queue = self._task_queues.get(task.id)
         if not queue:
@@ -45,20 +47,21 @@ class QueueManagerMixin:
             return
             
         count = 0
+        # [v2.4.5 Fix] 移除 FAILED 状态，避免恢复任务时自动重下载失败项
         # 排序：重试优先，然后按消息 ID
         pending_items = sorted(
-            [i for i in task.download_queue if i.status in [DownloadStatus.WAITING, DownloadStatus.PAUSED, DownloadStatus.FAILED]],
+            [i for i in task.download_queue if i.status in [DownloadStatus.WAITING, DownloadStatus.PAUSED] and not i.is_manually_paused],
             key=lambda x: (not getattr(x, 'is_retry', False), x.message_id)
         )
         
         for item in pending_items:
-            # 重置状态
-            if not item.is_manually_paused:
-                item.status = DownloadStatus.WAITING
-                queue.put_nowait(item)
-                count += 1
+            # 重置状态为等待中
+            item.status = DownloadStatus.WAITING
+            queue.put_nowait(item)
+            count += 1
         
         logger.info(f"维护者：已为任务 {task.id[:8]} 重新填充下载管线 (项数: {count})")
+
 
     def get_download_queue(self, task_id: str, limit: int = 20, reversed_order: bool = False) -> Dict[str, Any]:
         """获取任务的分段下载队列 (v1.6.7)"""

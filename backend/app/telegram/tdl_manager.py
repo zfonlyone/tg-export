@@ -138,14 +138,17 @@ class TDLBatcher:
                     fut.set_result({"success": False, "error": "批量任务异常中止", "output": ""})
 
     async def _monitor_temp_files(self, batch, target_sub_dir: str, stop_event: asyncio.Event, task_id: str, manager_inst=None):
-        """磁盘嗅探监视器 (v2.3.1.3)"""
+        """磁盘嗅探监视器 (v2.4.6 - 增强匹配逻辑)"""
         sub_path = Path(target_sub_dir)
         logger.info(f"任务 {task_id[:8]}: [磁盘嗅探] 开始监控目录: {target_sub_dir}")
+        
+        # 缩短监控间隔以提高进度更新频率
+        monitor_interval = 3.0  # 每 3 秒检查一次
         
         while not stop_event.is_set():
             try:
                 try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=10.0)
+                    await asyncio.wait_for(stop_event.wait(), timeout=monitor_interval)
                     break 
                 except asyncio.TimeoutError:
                     pass
@@ -153,47 +156,73 @@ class TDLBatcher:
                 if not sub_path.exists():
                     continue
                 
-                temp_files = []
-                for ext in ["*.temp", "*.tdl", "*.tmp", "*.part"]:
-                    temp_files.extend(list(sub_path.glob(ext)))
+                # [v2.4.6] 增强的临时文件匹配：遍历目录中所有文件
+                all_files = []
+                try:
+                    all_files = list(sub_path.iterdir())
+                except:
+                    continue
                 
                 updated_count = 0
                 for it, fut in batch:
                     if it.status != DownloadStatus.DOWNLOADING:
                         continue
                     
-                    # 匹配逻辑：找文件名包含 message_id 的临时文件
+                    # [v2.4.6] 增强匹配逻辑：支持多种临时文件命名模式
+                    # TDL 可能的文件模式：
+                    # 1. {message_id}-{chat_id}-{filename}.temp
+                    # 2. {message_id}-{chat_id}-{filename}.tdl
+                    # 3. {message_id}-{chat_id}-{filename} (正在写入)
+                    # 4. 其他包含 message_id 的文件
                     found = False
                     prefix = f"{it.message_id}-"
-                    for tf in temp_files:
-                        if tf.name.startswith(prefix):
+                    alt_prefix = f"{it.message_id}_{abs(it.chat_id)}"  # 备选格式
+                    
+                    for f in all_files:
+                        fname = f.name
+                        # 匹配以 message_id- 开头的文件（包括临时文件和正在写入的目标文件）
+                        if fname.startswith(prefix) or fname.startswith(alt_prefix):
                             try:
-                                current_size = tf.stat().st_size
+                                current_size = f.stat().st_size
+                                # 判断是否为临时文件
+                                is_temp = any(fname.endswith(ext) for ext in ['.temp', '.tdl', '.tmp', '.part', '.downloading'])
+                                
                                 if it.file_size > 0:
                                     it.downloaded_size = current_size
-                                    it.progress = min(99.9, (current_size / it.file_size) * 100.0)
+                                    # 临时文件进度最高 99.9%，完成文件才能 100%
+                                    if is_temp:
+                                        it.progress = min(99.9, (current_size / it.file_size) * 100.0)
+                                    else:
+                                        # 非临时文件且大小接近期望值，可能已完成
+                                        if current_size >= it.file_size * 0.99:
+                                            it.progress = 100.0
+                                        else:
+                                            it.progress = (current_size / it.file_size) * 100.0
                                     updated_count += 1
                                     found = True
-                            except: pass
-                            break
+                            except: 
+                                pass
+                            break  # 找到匹配后退出内层循环
                     
-                    # 容错：如果找不到 .temp 但原文件已存在且在增长，也可以作为进度（虽然 TDL 通常先写临时文件）
+                    # 容错：如果找不到匹配文件但有 file_path，尝试直接检查目标文件
                     if not found and it.file_path:
                         f_path = sub_path / Path(it.file_path).name
                         if f_path.exists():
                             try:
                                 current_size = f_path.stat().st_size
-                                if it.file_size > 0 and current_size < it.file_size:
+                                if it.file_size > 0:
                                     it.downloaded_size = current_size
-                                    it.progress = (current_size / it.file_size) * 100.0
+                                    it.progress = min(99.9, (current_size / it.file_size) * 100.0)
                                     updated_count += 1
-                            except: pass
+                            except: 
+                                pass
 
-                if updated_count > 0 and manager_inst:
+                # [v2.4.6] 始终尝试通知进度，确保 UI 更新
+                # 即使 updated_count 为 0，也定期发送心跳以保持 UI 活跃
+                if manager_inst:
                     task = manager_inst.get_task(task_id)
                     if task:
                         # 核心：必须更新任务总计统计，否则 UI 上的总进度条不动
-                        # 注意：如果 manager_inst 是 ExportManager 实例，它应该有这个方法
                         if hasattr(manager_inst, '_update_task_stats'):
                             manager_inst._update_task_stats(task)
                         await manager_inst._notify_progress(task_id, task)
@@ -201,3 +230,4 @@ class TDLBatcher:
             except Exception as e:
                 logger.error(f"[磁盘嗅探] 核心循环出错: {e}")
                 await asyncio.sleep(5)
+

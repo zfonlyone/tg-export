@@ -241,7 +241,6 @@ class AsyncDockerClient:
         # 3. 轮询等待结束
         import time
         start_time = time.time()
-        exit_code = -1
         
         while True:
             # 检查是否超时
@@ -254,139 +253,22 @@ class AsyncDockerClient:
                 timeout=5.0
             )
             
-            if inspect_result.get("status_code") != 200:
-                await asyncio.sleep(1.0)
-                continue
-                
-            info = inspect_result.get("data", {})
-            running = info.get("Running", True) # 默认认为运行中，防止误判
-            
-            if not running:
-                exit_code = info.get("ExitCode", -1)
-                break
-            
-            await asyncio.sleep(0.5)
-            
-        # 4. 获取日志 (通过 logs 接口回溯，或者如果 docker API 支持从 exec 获取流也可以)
-        # 由于 Docker API 没有直接获取 exec 日志的便捷 HTTP 接口 (通常是 start 时 attach)
-        # 且我们使用了 Detached，我们需要一种方式获取输出。
-        # 实际上 Detached exec 的输出很难通过标准 API 再次获取，除非配置了 logging driver
-        # 所以更稳妥的 Polling 方式其实是：Keep Attached but read in small chunks? No, that hangs.
-        
-        # 修正策略：为了修复 "信号捕获" 问题，核心是不要依赖 stream close event
-        # 我们使用 Docker SDK 风格的 "Socket Read" 但配合超时控制
-        # 然而为了彻底解决，我们还是切回 (Detach=False) 但优化读取循环 ?
-        
-        # 不，用户报告的问题是"无法捕获成功信号"，意味着 Python 以为还在运行或者读取超时了。
-        # 最稳的方案 (针对 TDL 这种可能长时间无输出的):
-        # 还是得用 Attached 模式，但是要处理 socket 读取超时。
-        
-        # 考虑到当前架构限制，我们使用一个混合方案：
-        # 启动时 Attach，但使用 asyncio.wait_for 包装 read，并且容忍超时 (超时不代表结束)
-        # 同时并发检查 exec inspect。
-        
-        # 但既然已经写了 Detached 的开头，我们换个思路：
-        # 对于 TDL download，我们其实不太关心 stdout 内容，除非出错。
-        # ExitCode 0 才是硬指标。
-        # 如果 ExitCode=0，我们就认为成功。Detail 交给 verify 阶段。
-        # 如果非 0，我们即便拿不到完整 log，拿个大概也行。
-        
-        # 但为了调试，我们最好还是能拿到输出。
-        # 遗憾 Docker HTTP API 对 Detached Exec 的日志获取支持有限。
-        # 因此，回退到：Attach 模式，但重写 _make_request 里的读取逻辑？
-        # 更简单的：改回 Detached=False，但是在读取流时，使用 inspect 辅助判断是否该退出？
-        
-        # Let's stick to the Attached mode logic BUT fix the stream reader hanging issue.
-        # The previous implementation relies on `reader.read(8192)` returning empty bytes for EOF.
-        # If TDL holds open stdout but sends nothing, it hangs.
-        
-        # 经过思考，针对 "tdl下载无法正确捕获成功下载信号"：
-        # 最好的办法是【不依赖】输出流的结束，而是依赖【进程状态】的结束。
-        # 所以 Polling ExitCode 是最正确的。
-        # 问题是：Polling 时怎么拿日志？
-        # 各种 Docker 库的做法是：Detach=False (Streaming), 但单独开个 Tasks 去读 Stream，主流程 Wait 状态。
-        
-        # 这里为了简化且稳健：
-        # 1. Start exec (Detach=False)
-        # 2. 读取 Response Body (Hijacked stream)
-        # 3. 解析 Log
-        
-        # 原有实现的问题在于 `await reader.read` 可能会永久挂起如果对方不关闭流。
-        # 我们改写这个简单的 exec_command，让它更鲁棒。
-        
-        # 方案：使用 Detach=False，常规 http 请求。
-        # 但是！如果下载一个大文件，http response 会非常长/久。
-        # 之前的实现也是一次性读取或者简单的 chunk read。
-        
-        # 让我们实施【Polling 检查 + 忽略实时输出 (TDL会写文件)】策略?
-        # 不行，出错得看日志。
-        
-        # 最终决定方案：
-        # 使用 Detach=True 启动。
-        # 这样请求会立即返回。
-        # 然后我们轮询 Inspect API 等待 Running=False。
-        # 这样绝对能捕获 ExitCode。
-        # 【缺点】：拿不到 stdout/stderr。
-        # 【弥补】：TDL 下载成功与否主要看文件是否存在+大小。失败时没日志确实是个痛点。
-        # 但用户痛点是 "卡住" 和 "无法捕获成功"。
-        # 既然是 TDL，我们可以让 TDL 把日志写到文件里吗？
-        # 或者，我们可以 trust TDL is robust enough.
-        
-        # 还是回头看 `_make_request`。它里面有 `timeout`。
-        # 如果命令执行超过 timeout (默认 300s)，_make_request 就会报错 Timeout。
-        # 这就是问题所在！TDL 下载可能很久。
-        # 原代码 `timeout=3600.0` 传给了 `_make_request`。
-        # `asyncio.open_unix_connection` 的 timeout 是连接超时。
-        # 但 `reader.read` 的 timeout 也是传进去的 3600。
-        
-        # 如果 TDL 下载了 2 小时，这里就超时报错了，但其实还在下。
-        # 或者 TDL 没有任何输出，reader.read 卡住。
-        
-        # 修正：Polling 模式是必须的。不要 hold 一个长连接 1 小时。
-        # 实现 Polling 模式，且放弃获取日志 (或者只获取 TDL 自身的日志文件，如果支持)。
-        # 实际上，只要 ExitCode=0，我们就不需要日志。
-        # 如果 ExitCode!=0，我们可能丢失日志，但解决了卡死问题。
-        # 考虑到 TDL 失败通常是因为网络或文件系统，用户重试即可。
-        # 权衡之下，解决 "卡住" 是第一优先级。
-        
-        # 实施 Polling 模式 (Detach=True)。
-        
-        start_result = await self._make_request(
-            "POST",
-            f"/exec/{exec_id}/start",
-            {"Detach": True, "Tty": False},
-            timeout=10.0 # 只要启动指令发送成功即可
-        )
-        
-        if start_result.get("status_code") != 200:
-            return {"success": False, "error": start_result.get("error", "启动执行失败")}
-            
-        # 轮询
-        import time
-        start_time = time.time()
-        
-        while True:
-            if time.time() - start_time > timeout:
-                return {"success": False, "error": "执行超时"}
-            
-            inspect_result = await self._make_request(
-                "GET",
-                f"/exec/{exec_id}/json",
-                timeout=5.0
-            )
-            
             if inspect_result.get("status_code") == 200:
-                data = inspect_result.get("data", {})
-                if not data.get("Running"):
-                    exit_code = data.get("ExitCode")
+                info = inspect_result.get("data", {})
+                running = info.get("Running", True)  # 默认认为运行中，防止误判
+                
+                if not running:
+                    exit_code = info.get("ExitCode", -1)
                     if exit_code == 0:
                         return {"success": True, "output": "(Polling Mode: Success)"}
                     else:
                         return {"success": False, "error": f"ExitCode={exit_code}", "output": ""}
+            else:
+                await asyncio.sleep(1.0)
+                continue
             
             # [Optimization] 卡死检测逻辑 (Stuck Detection)
             # 如果提供了检查回调，且返回 True (表示卡死)，则终止进程
-            # 外部回调通常检查文件大小是否在增长
             if stuck_check_callback:
                 try:
                     if asyncio.iscoroutinefunction(stuck_check_callback):
@@ -396,9 +278,7 @@ class AsyncDockerClient:
                     
                     if is_stuck:
                         logger.error(f"[TDL] 检测到执行卡死 (Stuck Detected)，强制终止: {container_name}")
-                        # 尝试 kill 容器内的主进程 (tdl) 
-                        # 由于这是 exec，我们实际上需要杀掉 exec 进程或者容器内的 tdl 进程
-                        # 简单起见，我们在容器内执行 killall
+                        # 尝试 kill 容器内的主进程 (tdl)
                         await self._make_request(
                             "POST", 
                             f"/containers/{container_name}/exec",
@@ -407,7 +287,6 @@ class AsyncDockerClient:
                                 "Cmd": ["sh", "-c", "killall -9 tdl"]
                             },
                         )
-                        # 同时尝试 resize exec 以触发信号? 不，直接返回超时/失败让外部处理
                         return {"success": False, "error": "Stuck detected (File not growing)"}
                 except Exception as e:
                     logger.warning(f"[TDL] 卡死检测回调执行出错: {e}")

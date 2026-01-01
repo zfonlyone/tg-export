@@ -499,7 +499,7 @@ services:
     container_name: tg-export
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-9528}:${WEB_PORT:-9528}"
+      - "127.0.0.1:${WEB_PORT:-9528}:9528"
     volumes:
       - ./data:/app/data:shared
       - $DOWNLOAD_DIR:/downloads:shared
