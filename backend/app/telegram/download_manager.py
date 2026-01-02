@@ -259,9 +259,12 @@ class DownloadManagerMixin:
                     success, err = await self.parallel_download(task, item, m, p, progress_callback=kwargs.get('progress_callback'))
                     if success: return True, p
                 
-                # 回退到标准下载
-                success, path, _ = await telegram_client.download_media(m, p, progress_callback=kwargs.get('progress_callback'))
-                return success, path
+                # [v2.4.6 Fix] 回退到标准下载 - 修复返回值处理
+                # telegram_client.download_media 返回单个值（文件路径或 None）
+                result_path = await telegram_client.download_media(m, p, progress_callback=kwargs.get('progress_callback'))
+                if result_path:
+                    return True, result_path
+                return False, None
 
             # 进度转发回调 - 添加速度计算 (v2.4.3)
             last_update = {"time": time.time(), "bytes": 0}

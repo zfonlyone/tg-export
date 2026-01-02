@@ -360,6 +360,8 @@ class TDLDownloader:
         if file_template:
             cmd.extend(["--template", file_template])
         else:
+            # 格式: {MessageID}-{DialogID}-{FileName}
+            # 其中 DialogID 移除负号，FileName 是 Telegram 原始文件名
             cmd.extend(["--template", '{{.MessageID}}-{{printf "%d" .DialogID | replace "-" ""}}-{{.FileName}}'])
         
         if proxy:
