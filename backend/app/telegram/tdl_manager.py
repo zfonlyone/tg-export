@@ -49,7 +49,7 @@ class TDLBatcher:
             pass
 
     async def _trigger_batch_after_delay(self, batch_key, options: ExportOptions, manager_inst):
-        """等到一小段时间后执行批量下载"""
+        """等到一小段时间后执行批量下载 (v2.4.7 - 增加暂停检查)"""
         # 动态聚合延迟：如果任务量大，可以稍微等久一点点
         await asyncio.sleep(0.3) 
         
@@ -59,6 +59,15 @@ class TDLBatcher:
         # 延迟导入以避免循环依赖
         from ..api.tdl_integration import tdl_integration
         task_id, target_sub_dir = batch_key
+        
+        # [v2.4.7] 检查任务是否已暂停，如果暂停则取消批量下载
+        if manager_inst and manager_inst.is_paused(task_id):
+            logger.info(f"任务 {task_id[:8]}: [TDLBatcher] 任务已暂停，取消批量下载")
+            for it, fut in batch:
+                if not fut.done():
+                    it.status = DownloadStatus.WAITING
+                    fut.set_result({"success": False, "error": "任务已暂停", "output": ""})
+            return
         
         # 提取 URL 列表
         urls = [tdl_integration.generate_telegram_link(it.chat_id, it.message_id) for it, fut in batch]

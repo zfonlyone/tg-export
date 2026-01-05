@@ -176,6 +176,10 @@ class DownloadManagerMixin:
         try:
             # 1. TDL 触发逻辑
             if task.tdl_mode:
+                 # [v2.4.7] 检查任务是否已暂停
+                 if self.is_paused(task.id):
+                     item.status = DownloadStatus.WAITING
+                     return
                  target_sub_dir = export_path / item.file_path
                  target_sub_dir = target_sub_dir.parent
                  target_sub_dir.mkdir(parents=True, exist_ok=True)

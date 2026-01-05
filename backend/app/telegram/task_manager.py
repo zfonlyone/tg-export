@@ -172,13 +172,23 @@ class TaskManagerMixin:
         return True
 
     async def pause_export(self, task_id: str) -> bool:
-        """暂停导出任务"""
+        """暂停导出任务 (v2.4.7 - 同时终止 TDL 进程)"""
         task = self.tasks.get(task_id)
         if not task: return False
         task.status = TaskStatus.PAUSED
         self._paused_tasks.add(task_id)
         if task_id in self._running_tasks:
             self._running_tasks[task_id].cancel()
+        
+        # [v2.4.7] 如果是 TDL 模式，终止 TDL 进程
+        if task.tdl_mode:
+            try:
+                from ..api.tdl_integration import tdl_integration
+                await tdl_integration.kill_tdl()
+                logger.info(f"任务 {task_id[:8]}: 已终止 TDL 进程")
+            except Exception as e:
+                logger.warning(f"任务 {task_id[:8]}: 终止 TDL 进程时出错: {e}")
+        
         await self._notify_progress(task_id, task)
         self._save_tasks()
         return True

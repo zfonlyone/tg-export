@@ -47,6 +47,14 @@ class ExporterBase:
         """检查任务是否处于暂停状态"""
         return task_id in self._paused_tasks
 
+    def _normalize_chat_id(self, chat_id: int) -> str:
+        """[v2.4.6] 统一 chat_id 格式，去掉超级群组的 100 前缀，与 TDL DialogID 一致"""
+        raw_id = str(abs(chat_id))
+        if raw_id.startswith("100") and len(raw_id) > 10:
+            return raw_id[3:]
+        return raw_id
+
+
     def _safe_move(self, src: Union[str, Path], dst: Union[str, Path]) -> bool:
         """稳健的文件移动"""
         import shutil
@@ -94,6 +102,7 @@ class ExporterBase:
         ext = ext_map.get(media_type, "bin")
         date_str = msg.date.strftime("%Y%m%d_%H%M%S")
         return f"{msg_id}-{chat_id}-{date_str}.{ext}"
+
 
     def _safe_filename(self, name: str) -> str:
         """生成安全的文件名"""

@@ -304,6 +304,25 @@ class TDLDownloader:
         self._semaphore = asyncio.Semaphore(1)
         logger.info(f"[TDL] 下载器初始化: container={self.container_name}, socket={DOCKER_SOCKET}")
     
+    async def kill_tdl(self) -> bool:
+        """终止 TDL 进程 (用于暂停任务时停止下载)"""
+        try:
+            running, error = await self.docker.is_container_running(self.container_name)
+            if not running:
+                return True  # 容器没运行，无需终止
+            
+            # 执行 kill 命令终止 tdl 进程
+            result = await self.docker.exec_command(
+                self.container_name, 
+                ["sh", "-c", "killall -9 tdl || pkill -9 tdl || true"], 
+                timeout=10.0
+            )
+            logger.info(f"[TDL] 终止 TDL 进程: success={result.get('success', True)}")
+            return True
+        except Exception as e:
+            logger.error(f"[TDL] 终止 TDL 进程失败: {e}")
+            return False
+    
     async def get_status(self) -> Dict[str, Any]:
         """获取 TDL 状态（异步）"""
         docker_available, docker_error = await self.docker.is_available()
@@ -360,9 +379,9 @@ class TDLDownloader:
         if file_template:
             cmd.extend(["--template", file_template])
         else:
-            # 格式: {MessageID}-{DialogID}-{FileName}
-            # 其中 DialogID 移除负号，FileName 是 Telegram 原始文件名
-            cmd.extend(["--template", '{{.MessageID}}-{{printf "%d" .DialogID | replace "-" ""}}-{{.FileName}}'])
+            # [v2.4.6] TDL 的 DialogID 不含100前缀，需手动添加以匹配 Web 显示格式
+            # 输出格式: {MessageID}-100{DialogID}-{OriginalFileName}
+            cmd.extend(["--template", '{{.MessageID}}-100{{.DialogID}}-{{.FileName}}'])
         
         if proxy:
             cmd.extend(["--proxy", proxy])
