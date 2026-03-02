@@ -29,7 +29,7 @@ services:
       TDL_CONTAINER_NAME: ${TDL_CONTAINER_NAME:-tdl}
       PROXY_URL: ${PROXY_URL:-}
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:${WEB_PORT:-9528}/health" ]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${WEB_PORT:-9528}/health')" ]
       interval: 30s
       timeout: 10s
       retries: 3

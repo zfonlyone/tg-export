@@ -66,6 +66,56 @@
       
       <!-- 未连接 - 登录流程 -->
       <div v-else>
+        <div style="display: flex; gap: 10px; margin-bottom: 16px;">
+          <button
+            class="btn"
+            :class="loginMode === 'phone' ? 'btn-primary' : 'btn-outline'"
+            @click="switchLoginMode('phone')"
+          >
+            手机号登录
+          </button>
+          <button
+            class="btn"
+            :class="loginMode === 'qr' ? 'btn-primary' : 'btn-outline'"
+            @click="switchLoginMode('qr')"
+          >
+            扫码登录
+          </button>
+        </div>
+
+        <div v-if="loginMode === 'qr'" style="text-align: center; padding: 10px 0 6px;">
+          <p style="color: #666; margin-bottom: 12px;">
+            在 Telegram App 中打开「设置 -> 设备 -> 连接桌面设备」扫描下方二维码
+          </p>
+          <div
+            style="display: inline-flex; align-items: center; justify-content: center; width: 280px; height: 280px; border: 1px solid #eee; border-radius: 10px; background: #fff;"
+          >
+            <img v-if="qrImageDataUrl" :src="qrImageDataUrl" alt="Telegram QR Login" style="max-width: 260px; max-height: 260px;">
+            <span v-else style="color: #999; font-size: 13px;">点击“生成二维码”开始扫码登录</span>
+          </div>
+          <div style="margin-top: 12px; display: flex; justify-content: center; gap: 10px;">
+            <button @click="startQrLogin" class="btn btn-primary" :disabled="loading">
+              {{ loading ? '生成中...' : (qrImageDataUrl ? '刷新二维码' : '生成二维码') }}
+            </button>
+            <button class="btn btn-outline" @click="showQrPasswordInput" :disabled="!qrImageDataUrl">
+              已扫码，输入2FA
+            </button>
+            <button class="btn btn-outline" @click="switchLoginMode('phone')">改用手机号</button>
+          </div>
+
+          <div v-if="qrPasswordRequired" style="max-width: 420px; margin: 14px auto 0; text-align: left;">
+            <p style="color: #666; margin-bottom: 8px;">扫码成功，请输入 Telegram 两步验证密码完成登录</p>
+            <div class="form-group" style="margin-bottom: 10px;">
+              <label class="form-label">两步验证密码</label>
+              <input v-model="qrPassword" type="password" class="form-input" placeholder="输入两步验证密码" @keyup.enter="submitQrPassword">
+            </div>
+            <button @click="submitQrPassword" class="btn btn-primary" :disabled="!qrPassword || loading">
+              {{ loading ? '验证中...' : '确认登录' }}
+            </button>
+          </div>
+        </div>
+
+        <template v-if="loginMode === 'phone'">
         <!-- 步骤指示器 -->
         <div style="display: flex; gap: 10px; margin-bottom: 20px;">
           <div :class="['login-step', loginStep >= 1 ? 'active' : '']">1. 手机号</div>
@@ -121,6 +171,7 @@
             </button>
           </div>
         </div>
+        </template>
       </div>
       
       <!-- 消息提示 -->
@@ -174,8 +225,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import axios from 'axios'
+import QRCode from 'qrcode'
 
 const apiId = ref('')
 const apiHash = ref('')
@@ -190,12 +242,19 @@ const editingApi = ref(false)
 
 const telegramStatus = ref({ authorized: false, user: null })
 const loginStep = ref(1)
+const loginMode = ref('phone')
 const loading = ref(false)
 const message = ref('')
 const messageType = ref('success')
 const botSaved = ref(false)
 const savingBot = ref(false)
 const hasApiConfig = ref(false)  // 后端是否已配置 API
+const qrTokenId = ref('')
+const qrLoginUrl = ref('')
+const qrImageDataUrl = ref('')
+const qrPasswordRequired = ref(false)
+const qrPassword = ref('')
+let qrPollingTimer = null
 
 // API 是否已配置 (从后端读取的状态)
 const apiConfigured = computed(() => {
@@ -302,9 +361,134 @@ async function disconnectTelegram() {
     await axios.post('/api/telegram/disconnect', {}, { headers: getAuthHeader() })
     telegramStatus.value = { authorized: false, user: null }
     loginStep.value = 1
+    stopQrPolling()
     showMessage('已断开连接', 'success')
   } catch (err) {
     showMessage('断开失败: ' + (err.response?.data?.detail || err.message), 'error')
+  }
+}
+
+function stopQrPolling() {
+  if (qrPollingTimer) {
+    clearInterval(qrPollingTimer)
+    qrPollingTimer = null
+  }
+}
+
+function switchLoginMode(mode) {
+  loginMode.value = mode
+  if (mode !== 'qr') {
+    stopQrPolling()
+  }
+  qrPasswordRequired.value = false
+  qrPassword.value = ''
+}
+
+function showQrPasswordInput() {
+  if (!qrImageDataUrl.value) return
+  qrPasswordRequired.value = true
+  stopQrPolling()
+}
+
+function startQrPolling() {
+  stopQrPolling()
+  if (!qrTokenId.value) return
+
+  qrPollingTimer = setInterval(async () => {
+    if (qrPasswordRequired.value) {
+      stopQrPolling()
+      return
+    }
+    try {
+      const res = await axios.get('/api/telegram/qr/status', {
+        headers: getAuthHeader(),
+        params: { token_id: qrTokenId.value }
+      })
+      if (res.data.status === 'authorized') {
+        stopQrPolling()
+        loginStep.value = 4
+        showMessage('🎉 扫码登录成功!', 'success')
+        await fetchStatus()
+      } else if (res.data.status === 'pending' && res.data.refresh && res.data.login_url) {
+        if (res.data.token_id) {
+          qrTokenId.value = res.data.token_id
+        }
+        qrLoginUrl.value = res.data.login_url
+        qrImageDataUrl.value = await QRCode.toDataURL(qrLoginUrl.value, {
+          width: 260,
+          margin: 1
+        })
+      } else if (res.data.status === 'password_required') {
+        stopQrPolling()
+        qrPasswordRequired.value = true
+        showMessage('该账号开启了两步验证，请输入密码完成登录', 'error')
+      } else if (res.data.status === 'expired') {
+        stopQrPolling()
+        showMessage(res.data.message || '二维码已过期，请刷新', 'error')
+      }
+    } catch (err) {
+      stopQrPolling()
+      const detail = err.response?.data?.detail || err.message
+      showMessage('二维码状态轮询失败: ' + detail, 'error')
+      console.error('二维码状态轮询失败:', err)
+    }
+  }, 2000)
+}
+
+async function startQrLogin() {
+  loading.value = true
+  try {
+    const res = await axios.post('/api/telegram/qr/start', {}, { headers: getAuthHeader() })
+    if (res.data.status === 'authorized') {
+      loginStep.value = 4
+      showMessage('🎉 登录成功!', 'success')
+      await fetchStatus()
+      return
+    }
+
+    qrTokenId.value = res.data.token_id
+    qrLoginUrl.value = res.data.login_url
+    qrPasswordRequired.value = false
+    qrPassword.value = ''
+    qrImageDataUrl.value = await QRCode.toDataURL(qrLoginUrl.value, {
+      width: 260,
+      margin: 1
+    })
+    switchLoginMode('qr')
+    startQrPolling()
+    showMessage('请在 Telegram App 中扫描二维码并确认登录', 'success')
+  } catch (err) {
+    showMessage('二维码登录初始化失败: ' + (err.response?.data?.detail || err.message), 'error')
+  } finally {
+    loading.value = false
+  }
+}
+
+async function submitQrPassword() {
+  if (!qrPassword.value) {
+    showMessage('请输入两步验证密码', 'error')
+    return
+  }
+  loading.value = true
+  try {
+    const res = await axios.post('/api/telegram/qr/password', {
+      password: qrPassword.value
+    }, {
+      headers: getAuthHeader()
+    })
+    if (res.data.status === 'authorized') {
+      qrPasswordRequired.value = false
+      qrPassword.value = ''
+      loginStep.value = 4
+      showMessage('🎉 登录成功!', 'success')
+      await fetchStatus()
+      return
+    }
+    showMessage('验证未完成，请重试', 'error')
+  } catch (err) {
+    showMessage('密码验证失败: ' + (err.response?.data?.detail || err.message), 'error')
+  } finally {
+    loading.value = false
   }
 }
 
@@ -340,6 +524,9 @@ function showMessage(msg, type) {
 }
 
 onMounted(fetchStatus)
+onUnmounted(() => {
+  stopQrPolling()
+})
 </script>
 
 <style scoped>

@@ -5,9 +5,16 @@ TG Export - Telegram 客户端
 import asyncio
 import os
 import logging
+import base64
+import secrets
+import time
 from pathlib import Path
-from typing import Optional, List, AsyncGenerator, Union
+from typing import Optional, List, AsyncGenerator, Union, Dict, Any
 from pyrogram import Client
+from pyrogram import raw
+from pyrogram.session import Session
+from pyrogram.session.auth import Auth
+from pyrogram.utils import compute_password_check
 from pyrogram.types import Chat, Message, Dialog
 from pyrogram.enums import ChatType as PyChatType
 from pyrogram.errors import (
@@ -37,6 +44,30 @@ class TelegramClient:
         self._me_cache = None    # 缓存 get_me 结果
         self._me_cache_time = 0  # 缓存时间戳
         self._cache_lock = asyncio.Lock()
+        self._qr_login_tokens: Dict[str, Dict[str, Any]] = {}
+        self._qr_password_session: Optional[Session] = None
+        self._qr_password_dc_id: Optional[int] = None
+
+    async def _close_qr_password_session(self):
+        if self._qr_password_session:
+            try:
+                await self._qr_password_session.stop()
+            except Exception:
+                pass
+        self._qr_password_session = None
+        self._qr_password_dc_id = None
+
+    async def _sync_auth_from_session(self, session: Session):
+        """将已授权的 QR 会话授权导入主会话，确保后续统一使用 self._client。"""
+        if not self._client:
+            raise RuntimeError("客户端未初始化")
+        main_dc = await self._client.storage.dc_id()
+        exported = await session.invoke(
+            raw.functions.auth.ExportAuthorization(dc_id=main_dc)
+        )
+        await self._client.invoke(
+            raw.functions.auth.ImportAuthorization(id=exported.id, bytes=exported.bytes)
+        )
     
     @property
     def is_authorized(self) -> bool:
@@ -91,7 +122,7 @@ class TelegramClient:
                     pass
                 self._client = None
             
-            session_path = settings.SESSIONS_DIR / session_name
+            settings.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
             
             # IPv6 自动检测与回退
             use_ipv6 = settings.USE_IPV6
@@ -101,7 +132,7 @@ class TelegramClient:
                     print("[TG] IPv6 不可用，自动切换到 IPv4")
             
             self._client = Client(
-                name=str(session_path),
+                name=session_name,
                 api_id=api_id,
                 api_hash=api_hash,
                 workdir=str(settings.SESSIONS_DIR),
@@ -196,6 +227,261 @@ class TelegramClient:
         except Exception as e:
             print(f"[TG] 登录失败: {e}")
             raise
+
+    async def verify_2fa_password(self, password: str) -> Dict[str, Any]:
+        """为二维码登录流程提交两步验证密码"""
+        await self._ensure_connected()
+        if not self._client:
+            raise RuntimeError("客户端未初始化")
+        try:
+            logger.info("[TG][QR] verify_2fa_password start")
+            if self._qr_password_session:
+                pwd = await self._qr_password_session.invoke(raw.functions.account.GetPassword())
+                await self._qr_password_session.invoke(
+                    raw.functions.auth.CheckPassword(
+                        password=compute_password_check(pwd, password)
+                    )
+                )
+                await self._sync_auth_from_session(self._qr_password_session)
+                await self._close_qr_password_session()
+            else:
+                await self._client.check_password(password)
+            self._is_authorized = True
+            self._qr_login_tokens.clear()
+            me = await self.get_me()
+            logger.info("[TG][QR] verify_2fa_password success")
+            return {"status": "authorized", "user": me}
+        except Exception as e:
+            err = str(e).lower()
+            logger.warning("[TG][QR] verify_2fa_password failed: %s", e)
+            if "auth_key_unregistered" in err:
+                await self._close_qr_password_session()
+                raise RuntimeError("二维码登录会话已失效，请重新扫码")
+            if "password" in err or "hash" in err:
+                raise RuntimeError("两步验证密码错误")
+            raise
+
+    def _encode_qr_login_url(self, token_bytes: bytes) -> str:
+        token_b64 = base64.urlsafe_b64encode(token_bytes).decode("ascii")
+        return f"tg://login?token={token_b64}"
+
+    async def _process_qr_login_result(self, result) -> Dict[str, Any]:
+        """处理 export/import 返回类型，遵循 Telegram 官方 QR 登录流程"""
+        if isinstance(result, raw.types.auth.LoginTokenSuccess):
+            logger.info("[TG][QR] result=LoginTokenSuccess")
+            self._is_authorized = True
+            me = await self.get_me()
+            return {"status": "authorized", "user": me}
+
+        if isinstance(result, raw.types.auth.LoginToken):
+            logger.info("[TG][QR] result=LoginToken (pending)")
+            return {"status": "pending", "token": result.token}
+
+        if isinstance(result, raw.types.auth.LoginTokenMigrateTo):
+            logger.info("[TG][QR] result=LoginTokenMigrateTo dc_id=%s", result.dc_id)
+            try:
+                migrated = await self._import_qr_token_on_dc(result.token, result.dc_id)
+            except SessionPasswordNeeded:
+                logger.info("[TG][QR] migrate import requires 2FA password")
+                return {"status": "password_required"}
+            except Exception as e:
+                err = str(e).upper()
+                if "AUTH_TOKEN_EXPIRED" in err or "AUTH_TOKEN_INVALID" in err:
+                    logger.info("[TG][QR] migrate import token expired/invalid, refresh required")
+                    return {"status": "pending"}
+                raise
+            return await self._process_qr_login_result(migrated)
+
+        raise RuntimeError("无法处理二维码登录响应")
+
+    async def _export_qr_token(self) -> Dict[str, Any]:
+        """按官方流程导出二维码 token；可能直接返回 authorized/password_required"""
+        if not self._client:
+            raise RuntimeError("客户端未初始化")
+
+        result = await self._client.invoke(
+            raw.functions.auth.ExportLoginToken(
+                api_id=int(self._api_id),
+                api_hash=str(self._api_hash),
+                except_ids=[]
+            )
+        )
+        return await self._process_qr_login_result(result)
+
+    async def _import_qr_token_on_dc(self, token: bytes, dc_id: Optional[int] = None):
+        """在指定 DC 导入二维码 token；处理 LoginTokenMigrateTo 时必须按 dc_id 执行。"""
+        if not self._client:
+            raise RuntimeError("客户端未初始化")
+
+        if not dc_id or dc_id == await self._client.storage.dc_id():
+            return await self._client.invoke(
+                raw.functions.auth.ImportLoginToken(token=token)
+            )
+
+        session = Session(
+            self._client,
+            dc_id,
+            await Auth(
+                self._client,
+                dc_id,
+                await self._client.storage.test_mode()
+            ).create(),
+            await self._client.storage.test_mode(),
+            is_media=True
+        )
+        keep_session = False
+        try:
+            await session.start()
+            result = await session.invoke(
+                raw.functions.auth.ImportLoginToken(token=token)
+            )
+            if isinstance(result, raw.types.auth.LoginTokenSuccess):
+                # 无 2FA 的扫码成功，直接把授权迁回主会话。
+                await self._sync_auth_from_session(session)
+            return result
+        except SessionPasswordNeeded:
+            # 保留会话给 verify_2fa_password 使用，不能在这里关闭。
+            await self._close_qr_password_session()
+            self._qr_password_session = session
+            self._qr_password_dc_id = dc_id
+            keep_session = True
+            raise
+        finally:
+            if not keep_session:
+                await session.stop()
+
+    async def start_qr_login(self) -> Dict[str, Any]:
+        """启动二维码登录，返回扫码链接和 token_id"""
+        await self._ensure_connected()
+        await self._close_qr_password_session()
+        if not self._client:
+            raise RuntimeError("客户端未初始化")
+        if not self._api_id or not self._api_hash:
+            raise RuntimeError("请先配置 API ID 和 API Hash")
+
+        exported: Dict[str, Any] = {}
+        last_error: Optional[Exception] = None
+        for _ in range(3):
+            try:
+                exported = await self._export_qr_token()
+                break
+            except Exception as e:
+                last_error = e
+                err = str(e).upper()
+                if "AUTH_TOKEN_EXPIRED" in err or "AUTH_TOKEN_INVALID" in err:
+                    logger.info("[TG][QR] start got expired token, retrying export")
+                    await asyncio.sleep(0.3)
+                    continue
+                raise
+        if not exported:
+            if last_error:
+                raise last_error
+            raise RuntimeError("二维码初始化失败，请重试")
+        if exported.get("status") == "authorized":
+            return exported
+        if exported.get("status") == "password_required":
+            return {"status": "password_required"}
+
+        token_bytes = exported["token"]
+
+        token_id = secrets.token_urlsafe(16)
+        self._qr_login_tokens[token_id] = {
+            "token": token_bytes,
+            "created_at": int(time.time()),
+            "status": "pending",
+            "next_check_at": 0
+        }
+        return {
+            "status": "pending",
+            "token_id": token_id,
+            "login_url": self._encode_qr_login_url(token_bytes),
+            "expires_in": 30
+        }
+
+    async def check_qr_login(self, token_id: str) -> Dict[str, Any]:
+        """轮询二维码登录状态"""
+        await self._ensure_connected()
+        token_state = self._qr_login_tokens.get(token_id)
+        if not token_state:
+            return {"status": "expired", "message": "二维码已过期，请刷新"}
+
+        if token_state.get("status") == "password_required":
+            return {"status": "password_required"}
+
+        if int(time.time()) - token_state.get("created_at", 0) > 120:
+            self._qr_login_tokens.pop(token_id, None)
+            return {"status": "expired", "message": "二维码已过期，请刷新"}
+
+        now = int(time.time())
+        if now < int(token_state.get("next_check_at", 0)):
+            return {"status": "pending", "retry_after": int(token_state["next_check_at"] - now)}
+
+        try:
+            # 轮询阶段使用 export 检测状态迁移，并节流防止被 Telegram 风控限流。
+            exported = await self._export_qr_token()
+            token_state["next_check_at"] = now + 5
+        except SessionPasswordNeeded:
+            logger.info("[TG][QR] import requires 2FA password")
+            token_state["status"] = "password_required"
+            return {"status": "password_required"}
+        except FloodWait as e:
+            wait = int(max(2, e.value))
+            token_state["next_check_at"] = now + wait
+            logger.warning("[TG][QR] flood wait=%ss, return pending", wait)
+            if token_state.get("status") == "password_required":
+                return {"status": "password_required"}
+            return {"status": "pending", "retry_after": wait}
+        except Exception as e:
+            err = str(e).upper()
+            if "AUTH_TOKEN_EXPIRED" in err or "AUTH_TOKEN_INVALID" in err:
+                logger.info("[TG][QR] token expired/invalid, rotate token")
+                exported = {"status": "pending"}
+            else:
+                raise
+
+        if exported.get("status") == "authorized":
+            self._qr_login_tokens.pop(token_id, None)
+            return exported
+        if exported.get("status") == "password_required":
+            token_state["status"] = "password_required"
+            return {"status": "password_required"}
+
+        if exported.get("status") == "pending" and exported.get("token"):
+            new_token = exported["token"]
+            old_url = self._encode_qr_login_url(token_state["token"])
+            new_url = self._encode_qr_login_url(new_token)
+            token_state["token"] = new_token
+            token_state["created_at"] = int(time.time())
+            return {
+                "status": "pending",
+                "token_id": token_id,
+                "login_url": new_url,
+                "refresh": new_url != old_url
+            }
+
+        # import 因 token 失效且没有返回新 token 时，重新 export 新二维码
+        if exported.get("status") == "pending":
+            rotated = await self._export_qr_token()
+            if rotated.get("status") == "authorized":
+                self._qr_login_tokens.pop(token_id, None)
+                return rotated
+            if rotated.get("status") == "password_required":
+                token_state["status"] = "password_required"
+                return {"status": "password_required"}
+            if rotated.get("token"):
+                new_token = rotated["token"]
+                old_url = self._encode_qr_login_url(token_state["token"])
+                new_url = self._encode_qr_login_url(new_token)
+                token_state["token"] = new_token
+                token_state["created_at"] = int(time.time())
+                return {
+                    "status": "pending",
+                    "token_id": token_id,
+                    "login_url": new_url,
+                    "refresh": new_url != old_url
+                }
+
+        return {"status": "pending"}
     
     async def start(self) -> bool:
         """启动客户端（如果已有会话则直接登录）"""
@@ -218,6 +504,7 @@ class TelegramClient:
     async def stop(self):
         """停止客户端"""
         async with self._lock:
+            await self._close_qr_password_session()
             if self._client:
                 try:
                     if self._client.is_connected:

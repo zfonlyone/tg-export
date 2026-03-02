@@ -3,8 +3,9 @@ TG Export - API 路由
 """
 from datetime import timedelta
 from typing import List, Optional
-from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi import APIRouter, HTTPException, Depends, status, Body
 from fastapi.security import OAuth2PasswordRequestForm
+import logging
 
 from ..config import settings
 from ..models import (
@@ -20,6 +21,20 @@ from .env_utils import upsert_env_values
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+async def _ensure_tg_client_initialized():
+    """确保 Telegram 客户端已经初始化"""
+    import os
+    if telegram_client.is_initialized:
+        return
+    api_id = os.environ.get("API_ID") or settings.API_ID
+    api_hash = os.environ.get("API_HASH") or settings.API_HASH
+    if api_id and api_hash:
+        await telegram_client.init(int(api_id), api_hash)
+        return
+    raise RuntimeError("请先配置 API ID 和 API Hash")
 
 
 # ===== 认证相关 =====
@@ -76,17 +91,8 @@ async def send_code(
     current_user: User = Depends(get_current_user)
 ):
     """发送验证码"""
-    import os
     try:
-        # 自动从环境变量初始化客户端
-        if not telegram_client.is_initialized:
-            api_id = os.environ.get("API_ID") or settings.API_ID
-            api_hash = os.environ.get("API_HASH") or settings.API_HASH
-            if api_id and api_hash:
-                await telegram_client.init(int(api_id), api_hash)
-            else:
-                raise RuntimeError("请先配置 API ID 和 API Hash")
-        
+        await _ensure_tg_client_initialized()
         phone_code_hash = await telegram_client.send_code(phone)
         return {"status": "ok", "phone_code_hash": phone_code_hash}
     except Exception as e:
@@ -118,6 +124,46 @@ async def sign_in(
             # 这是一个特定流程，使用 403 区分于 401 (Web Token 过期)
             raise HTTPException(status_code=403, detail="SESSION_PASSWORD_NEEDED")
         raise HTTPException(status_code=400, detail=error_msg)
+
+
+@router.post("/telegram/qr/start")
+async def start_qr_login(current_user: User = Depends(get_current_user)):
+    """创建二维码登录 token"""
+    try:
+        await _ensure_tg_client_initialized()
+        return await telegram_client.start_qr_login()
+    except Exception as e:
+        logger.exception("[TG][QR] start failed: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/telegram/qr/status")
+async def qr_login_status(
+    token_id: str,
+    current_user: User = Depends(get_current_user)
+):
+    """轮询二维码登录状态"""
+    try:
+        await _ensure_tg_client_initialized()
+        return await telegram_client.check_qr_login(token_id)
+    except Exception as e:
+        logger.exception("[TG][QR] status failed token_id=%s: %s", token_id, e)
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/telegram/qr/password")
+async def qr_submit_password(
+    password: str = Body(..., embed=True),
+    current_user: User = Depends(get_current_user)
+):
+    """二维码登录后提交两步验证密码"""
+    try:
+        await _ensure_tg_client_initialized()
+        logger.info("[TG][QR] password submit received (len=%s)", len(password or ""))
+        return await telegram_client.verify_2fa_password(password)
+    except Exception as e:
+        logger.exception("[TG][QR] password submit failed: %s", e)
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/telegram/disconnect")
@@ -528,5 +574,3 @@ async def set_proxy(
         "proxy_url": task.proxy_url,
         "message": f"代理已{'启用: ' + url if enabled and url else '禁用'}"
     }
-
-
