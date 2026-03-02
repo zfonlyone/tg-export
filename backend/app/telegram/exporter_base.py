@@ -22,9 +22,6 @@ class ExporterBase:
         self._parallel_semaphores: Dict[str, asyncio.Semaphore] = {}
         self._needs_save = False
         
-        from .tdl_manager import TDLBatcher
-        self.tdl_batcher = TDLBatcher()
-        
     def _set_777_recursive(self, path: Path):
         """递归设置 777 权限"""
         try:
@@ -48,7 +45,7 @@ class ExporterBase:
         return task_id in self._paused_tasks
 
     def _normalize_chat_id(self, chat_id: int) -> str:
-        """[v2.4.6] 统一 chat_id 格式，去掉超级群组的 100 前缀，与 TDL DialogID 一致"""
+        """[v2.4.6] 统一 chat_id 格式，去掉超级群组的 100 前缀"""
         raw_id = str(abs(chat_id))
         if raw_id.startswith("100") and len(raw_id) > 10:
             return raw_id[3:]
@@ -113,20 +110,3 @@ class ExporterBase:
         name = re.sub(r'_+', '_', name).strip('_')
         return name[:100] if name else 'unnamed'
 
-    async def _check_tdl_stuck(self, task: ExportTask, item: DownloadItem, target_sub_dir: str) -> bool:
-        """检查 TDL 下载是否卡死"""
-        try:
-            sub_path = Path(target_sub_dir)
-            if not sub_path.exists(): return False 
-            prefix = f"{item.message_id}-"
-            relevant_files = [f for f in sub_path.iterdir() if f.name.startswith(prefix)]
-            if not relevant_files: return False
-            import time
-            now = time.time()
-            for f in relevant_files:
-                try:
-                    if now - f.stat().st_mtime < 180: return False
-                except: pass
-            return True
-        except Exception:
-            return False

@@ -144,7 +144,7 @@ class ExportOptions(BaseModel):
     filter_mode: str = "none"            # none/skip/specify
     filter_messages: List[int] = Field(default_factory=list)  # 过滤的消息 ID 列表
     
-    # 代理设置 (用于 TDL 下载)
+    # 代理设置
     proxy: str = ""  # 格式: protocol://host:port
 
     @field_validator("export_path")
@@ -240,9 +240,6 @@ class ExportTask(BaseModel):
     failed_downloads: List["FailedDownload"] = Field(default_factory=list)
     retry_downloads: int = 0              # 重试成功的数量
     download_speed: float = 0.0           # 总下载速度 (字节/秒)
-    
-    # TDL 模式
-    tdl_mode: bool = False                # 是否使用 TDL 下载器 (完全接管)
     
     # 代理设置 (运行时可修改)
     proxy_enabled: bool = False           # 是否启用代理

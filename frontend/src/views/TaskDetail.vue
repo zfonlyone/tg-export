@@ -97,10 +97,6 @@
                 <input type="checkbox" v-model="concurrency.enableParallel" @change="toggleParallel">
                 <span>⚡分块</span>
               </label>
-              <label class="toolbar-toggle tdl" :class="{ active: tdlMode }">
-                <input type="checkbox" v-model="tdlMode" @change="toggleTDLMode">
-                <span>🚀 TDL</span>
-              </label>
               <label class="toolbar-toggle proxy" :class="{ active: proxyEnabled }">
                 <input type="checkbox" v-model="proxyEnabled" @change="toggleProxy">
                 <span>🌐 代理</span>
@@ -222,12 +218,10 @@ const reversedOrder = ref(false)
 // [v2.3.1] 操作锁锁定时间 (毫秒)，在这段时间内强制保持前端状态
 const STATE_LOCK_MS = 5000
 const locks = reactive({
-  tdl: 0,
   proxy: 0
 })
 
 const concurrency = ref({ max: 10, enableParallel: false })  // 并发控制状态
-const tdlMode = ref(false)  // TDL 下载模式开关
 const proxyEnabled = ref(false)  // 代理开关
 const proxyUrl = ref('')  // 代理地址
 let refreshTimer = null
@@ -261,11 +255,7 @@ async function fetchData() {
     
     task.value = taskRes.data
     const now = Date.now()
-    
-    // 同步 TDL 模式状态 (带锁检查)
-    if (task.value.tdl_mode !== undefined && (now - locks.tdl > STATE_LOCK_MS)) {
-      tdlMode.value = task.value.tdl_mode
-    }
+
     // 同步代理状态 (带锁检查)
     if (task.value.proxy_enabled !== undefined && (now - locks.proxy > STATE_LOCK_MS)) {
       proxyEnabled.value = task.value.proxy_enabled
@@ -398,30 +388,6 @@ async function verifyIntegrity() {
   }
 }
 
-// TDL 下载模式切换 (完全接管模式)
-async function toggleTDLMode() {
-  locks.tdl = Date.now() // 抢占锁
-  try {
-    const res = await axios.post(`/api/export/${taskId}/tdl-mode`, null, {
-      params: { enabled: tdlMode.value },
-      headers: getAuthHeader()
-    })
-    
-    if (res.data.status === 'ok') {
-      console.log('TDL 模式同步成功')
-    } else {
-      alert(res.data.message || 'TDL 模式设置失败')
-      tdlMode.value = !tdlMode.value
-      locks.tdl = 0 // 出错释放
-    }
-  } catch (err) {
-    console.error('TDL 模式切换失败:', err)
-    tdlMode.value = !tdlMode.value
-    locks.tdl = 0
-    alert('TDL 操作失败: ' + (err.response?.data?.detail || err.message))
-  }
-}
-
 // 代理模式切换
 async function toggleProxy() {
   locks.proxy = Date.now() // 加锁
@@ -455,65 +421,6 @@ async function updateProxyUrl() {
       alert('代理地址更新失败: ' + (err.response?.data?.detail || err.message))
     }
   }
-}
-
-let tdlProgressTimer = null
-
-function startTDLProgressPolling() {
-  if (tdlProgressTimer) return
-  
-  tdlProgressTimer = setInterval(async () => {
-    try {
-      const res = await axios.get(`/api/export/${taskId}/tdl-progress`, { 
-        headers: getAuthHeader() 
-      })
-      
-      if (res.data && res.data.items) {
-        // 更新下载队列中的进度
-        for (const tdlItem of res.data.items) {
-          const queueItem = findQueueItem(tdlItem.id)
-          if (queueItem) {
-            queueItem.downloaded_size = tdlItem.downloaded_size
-            queueItem.progress = tdlItem.progress
-            // 同步状态
-            if (tdlItem.status === 'completed') {
-              queueItem.status = 'completed'
-            } else if (tdlItem.status === 'failed') {
-              queueItem.status = 'failed'
-            } else if (tdlItem.status === 'running') {
-              queueItem.status = 'downloading'
-            }
-          }
-        }
-        
-        // 检查是否全部完成
-        if (res.data.status === 'completed') {
-          stopTDLProgressPolling()
-          tdlMode.value = false
-          alert('✅ TDL 下载完成')
-        }
-      }
-    } catch (err) {
-      console.error('获取 TDL 进度失败:', err)
-    }
-  }, 1500)
-}
-
-function stopTDLProgressPolling() {
-  if (tdlProgressTimer) {
-    clearInterval(tdlProgressTimer)
-    tdlProgressTimer = null
-  }
-}
-
-function findQueueItem(itemId) {
-  const allItems = [
-    ...queue.value.downloading,
-    ...queue.value.waiting,
-    ...queue.value.failed,
-    ...queue.value.completed
-  ]
-  return allItems.find(item => item.id === itemId)
 }
 
 function formatSize(bytes) {
@@ -552,7 +459,6 @@ onMounted(() => {
 
 onUnmounted(() => { 
   if (refreshTimer) clearInterval(refreshTimer)
-  stopTDLProgressPolling()
 })
 </script>
 
@@ -888,7 +794,6 @@ onUnmounted(() => {
 .toolbar-toggle input { display: none; }
 .toolbar-toggle:hover { background: #e2e8f0; }
 .toolbar-toggle:has(input:checked) { background: #3b82f6; color: white; border-color: #3b82f6; }
-.toolbar-toggle.tdl:has(input:checked) { background: linear-gradient(135deg, #8b5cf6, #6366f1); border-color: #7c3aed; }
 .toolbar-toggle.proxy:has(input:checked) { background: linear-gradient(135deg, #10b981, #059669); border-color: #059669; }
 
 /* 三区工具栏布局 */
@@ -1092,29 +997,6 @@ onUnmounted(() => {
 .action-btn-circle.warning:hover { border-color: #f59e0b; color: #f59e0b; background: #fffbeb; }
 .action-btn-circle.success:hover { border-color: #22c55e; color: #22c55e; background: #f0fdf4; }
 .action-btn-circle.danger:hover { border-color: #ef4444; color: #ef4444; background: #fef2f2; }
-
-/* TDL 模式开关 */
-.tdl-mode-toggle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 12px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 20px;
-  cursor: pointer;
-  transition: all 0.2s;
-  margin-right: 8px;
-}
-.tdl-mode-toggle input { display: none; }
-.tdl-mode-toggle .toggle-icon { font-size: 0.9rem; }
-.tdl-mode-toggle .toggle-label-text { font-size: 0.75rem; font-weight: 700; color: #64748b; }
-.tdl-mode-toggle:hover { background: #e2e8f0; }
-.tdl-mode-toggle.active {
-  background: linear-gradient(135deg, #8b5cf6, #6366f1);
-  border-color: #7c3aed;
-}
-.tdl-mode-toggle.active .toggle-label-text { color: white; }
 
 /* 队列选择 Tab */
 .queue-tabs {

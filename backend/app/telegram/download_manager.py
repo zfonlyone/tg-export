@@ -131,7 +131,7 @@ class DownloadManagerMixin:
                         queue.task_done()
                     
                     # 动力衰减冷却
-                    jitter = random.uniform(0.1, 0.3) if task.tdl_mode else random.uniform(1.0, 3.0)
+                    jitter = random.uniform(1.0, 3.0)
                     await asyncio.sleep(jitter)
                     
                 except asyncio.CancelledError:
@@ -169,78 +169,12 @@ class DownloadManagerMixin:
             self._task_queues.pop(task.id, None)
 
     async def _download_item_worker(self, task: ExportTask, item: DownloadItem, export_path: Path):
-        """核心单文件下载算法 (整合了 TDL 和常规下载)"""
+        """核心单文件下载算法（Pyrogram）"""
         if task.status == TaskStatus.CANCELLED: return
         options = task.options
 
         try:
-            # 1. TDL 触发逻辑
-            if task.tdl_mode:
-                 # [v2.4.7] 检查任务是否已暂停
-                 if self.is_paused(task.id):
-                     item.status = DownloadStatus.WAITING
-                     return
-                 target_sub_dir = export_path / item.file_path
-                 target_sub_dir = target_sub_dir.parent
-                 target_sub_dir.mkdir(parents=True, exist_ok=True)
-                 
-                 # [v2.4.4] 立即将状态设为下载中，让 UI 显示正在处理
-                 item.status = DownloadStatus.DOWNLOADING
-                 download_start_time = time.time()
-                 logger.info(f"[TDL开始] 群:{item.chat_id} | 消息:{item.message_id} | 文件:{item.file_name} | 预期大小:{item.file_size/1024/1024:.2f}MB")
-                 await self._notify_progress(task.id, task)
-                 
-                 # [v2.4.4] 根据并发数决定下载模式
-                 # 并发数=1：直接调用 TDL 单项下载，不聚合
-                 # 并发数>1：使用 TDL 批量聚合器
-                 if options.max_concurrent_downloads <= 1:
-                     # 单项下载模式 - 直接调用 TDL
-                     from ..api.tdl_integration import tdl_integration
-                     url = tdl_integration.generate_telegram_link(item.chat_id, item.message_id)
-                     
-                     # 获取代理设置
-                     proxy_url = task.proxy_url if task.proxy_enabled and task.proxy_url else None
-                     
-                     result = await tdl_integration.download(
-                         url=url,
-                         output_dir=str(target_sub_dir),
-                         threads=options.download_threads,
-                         limit=1,
-                         proxy=proxy_url
-                     )
-                     
-                     # 更新权限
-                     self._set_777_recursive(target_sub_dir)
-                     
-                     # 回填下载结果
-                     if result.get("success"):
-                         # 查找下载的文件并更新大小
-                         search_prefix = f"{item.message_id}-{abs(item.chat_id)}-"
-                         try:
-                             for f in target_sub_dir.iterdir():
-                                 if f.name.startswith(search_prefix) and not f.name.endswith(('.temp', '.tdl', '.tmp', '.part')):
-                                     if item.file_size <= 0: item.file_size = f.stat().st_size
-                                     item.downloaded_size = f.stat().st_size
-                                     break
-                         except: pass
-                         if item.file_size > 0: item.downloaded_size = item.file_size
-                 else:
-                     # 批量聚合模式 - 使用 tdl_batcher
-                     result = await self.tdl_batcher.add_item(task, item, str(target_sub_dir), manager_inst=self)
-                 
-                 download_duration = time.time() - download_start_time
-                 if result.get("success"):
-                      item.status = DownloadStatus.COMPLETED
-                      item.progress = 100.0
-                      logger.info(f"[TDL完成] 群:{item.chat_id} | 消息:{item.message_id} | 文件:{item.file_name} | 大小:{item.downloaded_size/1024/1024:.2f}MB | 耗时:{download_duration:.1f}s")
-                 else:
-                      item.status = DownloadStatus.FAILED
-                      item.error = result.get("error", "TDL 失败")
-                      logger.error(f"[TDL失败] 群:{item.chat_id} | 消息:{item.message_id} | 文件:{item.file_name} | 耗时:{download_duration:.1f}s | 错误:{item.error}")
-                 await self._notify_progress(task.id, task)
-                 return
-
-            # 2. 常规/并行下载逻辑 (使用重试管理)
+            # 常规/并行下载逻辑 (使用重试管理)
             item.status = DownloadStatus.DOWNLOADING
             download_start_time = time.time()
             msg = await telegram_client.get_message_by_id(item.chat_id, item.message_id)
@@ -250,7 +184,6 @@ class DownloadManagerMixin:
                  return
             
             # [v2.4.5] 统一下载路径: 直接下载到输出路径，使用 .temp 后缀
-            # 这与 TDL 的行为保持一致，简化文件完整性检查
             full_path = export_path / item.file_path
             full_path.parent.mkdir(parents=True, exist_ok=True)
             temp_path = full_path.with_suffix(full_path.suffix + ".temp")
@@ -347,23 +280,6 @@ class DownloadManagerMixin:
                     item.progress = 100.0
                     continue
             
-            # 2. 检查 TDL 命名格式 (TDL 下载)
-            # TDL 格式: {message_id}-{chat_id}-{filename}
-            parent_dir = standard_path.parent
-            if parent_dir.exists():
-                search_prefix = f"{item.message_id}-{abs(item.chat_id)}-"
-                try:
-                    for f in parent_dir.iterdir():
-                        if f.name.startswith(search_prefix) and not f.name.endswith(('.temp', '.tdl', '.tmp', '.part')):
-                            s = f.stat().st_size
-                            if s > 0 and (item.file_size <= 0 or s >= item.file_size * 0.99):
-                                item.status = DownloadStatus.COMPLETED
-                                item.downloaded_size = s
-                                if item.file_size <= 0: item.file_size = s
-                                item.progress = 100.0
-                                break
-                except: pass
-        
         self._update_task_stats(task)
 
     def _update_task_stats(self, task: ExportTask):

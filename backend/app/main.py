@@ -142,18 +142,6 @@ async def startup_event():
     else:
         print("[TG] 未配置 API_ID/API_HASH，请在设置页面配置")
 
-    # [TDL] 容器初始化检查 (v2.1.8)
-    from .api.tdl_integration import tdl_integration
-    print("[TDL] 正在针对 TDL 模式预热通信...")
-    try:
-        tdl_status = await tdl_integration.get_status()
-        if tdl_status.get("container_running"):
-            print(f"[TDL] ✅ TDL 容器通信已建立 ({tdl_status.get('container_name')})")
-        else:
-            print(f"[TDL] ⚠️ TDL 容器未就绪 (模式仍可用但可能下载失败): {tdl_status.get('container_error') or '未启动'}")
-    except Exception as e:
-        print(f"[TDL] ❌ 通信线路异常: {e}")
-
     # [Permission Fix] 自动修复权限 (v2.3.2)
     def fix_recursive_permissions(path_obj: Path):
         """递归修复目录权限为 777"""
