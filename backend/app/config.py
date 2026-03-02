@@ -51,6 +51,6 @@ class Settings(BaseSettings):
     PROXY_URL: str = os.getenv("PROXY_URL", "")
     
     class Config:
-        env_file = ".env"
+        env_file = (".env", "/app/data/.env")
 
 settings = Settings()

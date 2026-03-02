@@ -14,6 +14,7 @@ from fastapi.security import OAuth2PasswordBearer
 
 from ..config import settings
 from ..models import User, TokenResponse
+from .env_utils import upsert_env_values
 
 
 # 密码加密
@@ -115,10 +116,11 @@ def init_admin_user():
         
         create_user(settings.ADMIN_USERNAME, password)
         
-        # 保存密码到 .env
-        env_file = settings.BASE_DIR / ".env"
-        with open(env_file, "a", encoding="utf-8") as f:
-            f.write(f"\nADMIN_PASSWORD={password}\n")
+        # 保存到持久化 data/.env，避免重启后丢失
+        try:
+            upsert_env_values({"ADMIN_PASSWORD": password})
+        except Exception:
+            pass
 
 
 async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:

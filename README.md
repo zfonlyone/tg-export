@@ -26,17 +26,25 @@
 
 ## 🛠️ 安装与部署
 
-### 容器化一键部署 (推荐)
-```bash
-bash <(curl -sL https://raw.githubusercontent.com/zfonlyone/tg-export/main/tg-export.sh)
-```
-
-### 手动构建部署
+### 标准 Docker Compose 部署（不依赖 `tg-export.sh`）
 ```bash
 git clone https://github.com/zfonlyone/tg-export.git
 cd tg-export
-docker-compose build
-docker-compose up -d
+cp .env.example .env
+# 编辑 .env，填入 API_ID / API_HASH / ADMIN_PASSWORD 等配置
+docker compose up -d --build
+```
+
+访问地址：
+- `http://<你的服务器IP>:${WEB_PORT}`（默认 `9528`）
+
+说明：
+- 项目已迁移为 `env` 配置模式，不再依赖 `config.yml`。
+- 运行时在面板中修改的关键配置会持久化到 `data/.env`（容器重启后仍可用）。
+
+### 一键脚本部署（可选）
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/zfonlyone/tg-export/main/tg-export.sh)
 ```
 
 ---

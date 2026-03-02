@@ -17,6 +17,7 @@ from .auth import (
     create_user, get_user
 )
 from .tdl_integration import tdl_integration
+from .env_utils import upsert_env_values
 
 
 router = APIRouter()
@@ -61,6 +62,10 @@ async def init_telegram(
     """初始化 Telegram 客户端"""
     try:
         await telegram_client.init(api_id, api_hash)
+        try:
+            upsert_env_values({"API_ID": str(api_id), "API_HASH": api_hash})
+        except Exception:
+            pass
         return {"status": "ok", "message": "客户端已初始化"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -489,6 +494,10 @@ async def save_bot_token(
     # 保存到环境变量或配置文件
     import os
     os.environ["BOT_TOKEN"] = token
+    try:
+        upsert_env_values({"BOT_TOKEN": token})
+    except Exception:
+        pass
     return {"status": "ok", "message": "Bot Token 已保存"}
 
 
