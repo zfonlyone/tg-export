@@ -19,6 +19,13 @@ class TelegramBot:
     def __init__(self):
         self._bot: Optional[Client] = None
         self._user_states = {}  # 用户状态管理
+        self.allowed_chat_id = settings.BOT_CHAT_ID if settings.BOT_CHAT_ID else None
+        self.allowed_topic_id = settings.BOT_TOPIC_ID if settings.BOT_TOPIC_ID else None
+        self.allowed_admin_ids = {
+            int(x.strip())
+            for x in str(settings.BOT_ADMIN_IDS or "").split(",")
+            if x.strip().isdigit()
+        }
     
     async def init(self, bot_token: str, api_id: int, api_hash: str):
         """初始化 Bot"""
@@ -36,52 +43,93 @@ class TelegramBot:
         
         @self._bot.on_message(filters.command("start"))
         async def start_handler(client: Client, message: Message):
-            await self._handle_start(message)
+            if await self._is_allowed_message(message):
+                await self._handle_start(message)
         
         @self._bot.on_message(filters.command("help"))
         async def help_handler(client: Client, message: Message):
-            await self._handle_help(message)
+            if await self._is_allowed_message(message):
+                await self._handle_help(message)
         
         @self._bot.on_message(filters.command("status"))
         async def status_handler(client: Client, message: Message):
-            await self._handle_status(message)
+            if await self._is_allowed_message(message):
+                await self._handle_status(message)
         
         @self._bot.on_message(filters.command("list"))
         async def list_handler(client: Client, message: Message):
-            await self._handle_list(message)
+            if await self._is_allowed_message(message):
+                await self._handle_list(message)
         
         @self._bot.on_message(filters.command("export"))
         async def export_handler(client: Client, message: Message):
-            await self._handle_export(message)
+            if await self._is_allowed_message(message):
+                await self._handle_export(message)
         
         @self._bot.on_message(filters.command("tasks"))
         async def tasks_handler(client: Client, message: Message):
-            await self._handle_tasks(message)
+            if await self._is_allowed_message(message):
+                await self._handle_tasks(message)
         
         @self._bot.on_message(filters.command("cancel"))
         async def cancel_handler(client: Client, message: Message):
-            await self._handle_cancel(message)
+            if await self._is_allowed_message(message):
+                await self._handle_cancel(message)
         
         @self._bot.on_message(filters.command("pause"))
         async def pause_handler(client: Client, message: Message):
-            await self._handle_pause(message)
+            if await self._is_allowed_message(message):
+                await self._handle_pause(message)
         
         @self._bot.on_message(filters.command("resume"))
         async def resume_handler(client: Client, message: Message):
-            await self._handle_resume(message)
+            if await self._is_allowed_message(message):
+                await self._handle_resume(message)
         
         @self._bot.on_message(filters.command("retry"))
         async def retry_handler(client: Client, message: Message):
-            await self._handle_retry(message)
+            if await self._is_allowed_message(message):
+                await self._handle_retry(message)
         
         @self._bot.on_message(filters.command("failed"))
         async def failed_handler(client: Client, message: Message):
-            await self._handle_failed(message)
+            if await self._is_allowed_message(message):
+                await self._handle_failed(message)
         
         @self._bot.on_callback_query()
         async def callback_handler(client: Client, callback: CallbackQuery):
-            await self._handle_callback(callback)
+            if await self._is_allowed_callback(callback):
+                await self._handle_callback(callback)
     
+    async def _is_allowed_message(self, message: Message) -> bool:
+        if self.allowed_chat_id is not None and message.chat and int(message.chat.id) != int(self.allowed_chat_id):
+            return False
+        if self.allowed_topic_id is not None:
+            msg_topic = getattr(message, "message_thread_id", None)
+            if int(msg_topic or 0) != int(self.allowed_topic_id):
+                return False
+        user_id = int(message.from_user.id) if message.from_user else 0
+        if self.allowed_admin_ids and user_id not in self.allowed_admin_ids:
+            await message.reply("❌ 无权限")
+            return False
+        return True
+
+    async def _is_allowed_callback(self, callback: CallbackQuery) -> bool:
+        msg = callback.message
+        if not msg:
+            return False
+        if self.allowed_chat_id is not None and msg.chat and int(msg.chat.id) != int(self.allowed_chat_id):
+            return False
+        if self.allowed_topic_id is not None:
+            topic_id = getattr(msg, "message_thread_id", None)
+            if int(topic_id or 0) != int(self.allowed_topic_id):
+                return False
+        user_id = int(callback.from_user.id) if callback.from_user else 0
+        if self.allowed_admin_ids and user_id not in self.allowed_admin_ids:
+            await callback.answer("无权限", show_alert=True)
+            return False
+        return True
+
     async def start(self):
         """启动 Bot"""
         if self._bot:

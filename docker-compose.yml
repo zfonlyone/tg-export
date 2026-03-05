@@ -25,6 +25,9 @@ services:
       API_ID: ${API_ID:-}
       API_HASH: ${API_HASH:-}
       BOT_TOKEN: ${BOT_TOKEN:-}
+      BOT_CHAT_ID: ${BOT_CHAT_ID:-0}
+      BOT_TOPIC_ID: ${BOT_TOPIC_ID:-0}
+      BOT_ADMIN_IDS: ${BOT_ADMIN_IDS:-}
       USE_IPV6: ${USE_IPV6:-false}
       TDL_CONTAINER_NAME: ${TDL_CONTAINER_NAME:-tdl}
       PROXY_URL: ${PROXY_URL:-}

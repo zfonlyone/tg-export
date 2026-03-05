@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     API_ID: int = int(os.getenv("API_ID", 0))
     API_HASH: str = os.getenv("API_HASH", "")
     BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
+    BOT_CHAT_ID: int = int(os.getenv("BOT_CHAT_ID", 0))
+    BOT_TOPIC_ID: int = int(os.getenv("BOT_TOPIC_ID", 0))
+    BOT_ADMIN_IDS: str = os.getenv("BOT_ADMIN_IDS", "")
     USE_IPV6: bool = os.getenv("USE_IPV6", "true").lower() == "true"  # IPv6 支持，默认开启
     
     # Web 认证

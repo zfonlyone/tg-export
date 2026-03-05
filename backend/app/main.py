@@ -120,11 +120,12 @@ async def startup_event():
     
     # 尝试自动恢复 Telegram 会话
     import os
-    from .telegram import telegram_client
-    
+    from .telegram import telegram_client, telegram_bot
+
     api_id = os.environ.get("API_ID") or settings.API_ID
     api_hash = os.environ.get("API_HASH") or settings.API_HASH
-    
+    bot_token = os.environ.get("BOT_TOKEN") or settings.BOT_TOKEN
+
     if api_id and api_hash:
         session_file = settings.SESSIONS_DIR / "tg_export.session"
         if session_file.exists():
@@ -139,6 +140,16 @@ async def startup_event():
                 print(f"[TG] 自动登录失败: {e}")
         else:
             print("[TG] 未找到会话文件，请在设置页面登录 Telegram")
+
+        if bot_token:
+            try:
+                await telegram_bot.init(bot_token, int(api_id), api_hash)
+                await telegram_bot.start()
+                print("[TG BOT] ✅ Bot 已启动")
+            except Exception as e:
+                print(f"[TG BOT] 启动失败: {e}")
+        else:
+            print("[TG BOT] 未配置 BOT_TOKEN，跳过")
     else:
         print("[TG] 未配置 API_ID/API_HASH，请在设置页面配置")
 
@@ -173,7 +184,8 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """关闭事件"""
-    from .telegram import telegram_client
+    from .telegram import telegram_client, telegram_bot
+    await telegram_bot.stop()
     await telegram_client.stop()
 
 
