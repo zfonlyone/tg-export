@@ -6,7 +6,7 @@ services:
     env_file:
       - .env
     ports:
-      - "${WEB_PORT:-9528}:${WEB_PORT:-9528}"
+      - "127.0.0.1:${WEB_PORT:-9528}:${WEB_PORT:-9528}"
     volumes:
       - ${DATA_DIR:-./data}:/app/data:shared
       - ${DOWNLOAD_DIR:-/storage/downloads}:/downloads:shared
