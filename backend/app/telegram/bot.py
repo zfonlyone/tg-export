@@ -185,12 +185,12 @@ Telegram 全功能导出工具，支持：
 **📝 命令列表:**
 `/start` - 显示此欢迎信息
 `/help` - 查看详细帮助
-`/status` - 查看连接状态
-`/list` - 列出所有对话
-`/export` - 开始导出向导
+/status - 查看连接状态
+/list - 列出所有对话
+/export - 开始导出向导
 `/export <ID>` - 导出指定聊天
 `/export <ID> 1-100` - 导出指定消息范围
-`/tasks` - 查看任务列表
+/tasks - 查看任务列表
 `/pause` `/resume` `/cancel` - 任务控制
 `/failed` `/retry` - 失败处理
 
@@ -218,22 +218,22 @@ Telegram 全功能导出工具，支持：
         help_text = """
 📖 **TG Export 可直接用命令**
 
-`/status` 查看连接状态
-`/list` 列可导出聊天
-`/export` 打开导出菜单
-`/export <chat_id>` 导出指定聊天
-`/export <chat_id> 1-100` 导出指定消息范围
-`/tasks` 查看任务列表
-`/pause <task_id>` 暂停任务
-`/resume <task_id>` 恢复任务
-`/cancel <task_id>` 取消任务
-`/failed <task_id>` 查看失败文件
-`/retry <task_id>` 重试失败文件
+/status 查看连接状态
+/list 列可导出聊天
+/export 打开导出菜单
+/export <chat_id> 导出指定聊天
+/export <chat_id> 1-100 导出指定消息范围
+/tasks 查看任务列表
+/pause <task_id> 暂停任务
+/resume <task_id> 恢复任务
+/cancel <task_id> 取消任务
+/failed <task_id> 查看失败文件
+/retry <task_id> 重试失败文件
 
 **常用流程：**
-1. `/list` 找到 chat_id
-2. `/export <chat_id> 1-0` 先全量导一次
-3. `/tasks` 看进度，失败用 `/retry <task_id>`
+1. /list 找到 chat_id
+2. /export <chat_id> 1-0 先全量导一次
+3. /tasks 看进度，失败用 /retry <task_id>
         """
         keyboard = InlineKeyboardMarkup([
             [
