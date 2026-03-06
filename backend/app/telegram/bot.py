@@ -126,7 +126,8 @@ class TelegramBot:
             return False
         if self.allowed_topic_id is not None:
             msg_topic = self._extract_topic_id(message)
-            if int(msg_topic or 0) != int(self.allowed_topic_id):
+            # 某些客户端/命令菜单不会带 topic id，放行并记录
+            if msg_topic is not None and int(msg_topic or 0) != 0 and int(msg_topic) != int(self.allowed_topic_id):
                 print(f"[TG BOT] 拒绝消息: topic={msg_topic} expected={self.allowed_topic_id}")
                 return False
         user_id = int(message.from_user.id) if message.from_user else 0
@@ -143,7 +144,7 @@ class TelegramBot:
             return False
         if self.allowed_topic_id is not None:
             topic_id = self._extract_topic_id(msg)
-            if int(topic_id or 0) != int(self.allowed_topic_id):
+            if topic_id is not None and int(topic_id or 0) != 0 and int(topic_id) != int(self.allowed_topic_id):
                 return False
         user_id = int(callback.from_user.id) if callback.from_user else 0
         if self.allowed_admin_ids and user_id not in self.allowed_admin_ids:
