@@ -101,12 +101,33 @@ class TelegramBot:
             if await self._is_allowed_callback(callback):
                 await self._handle_callback(callback)
     
+    def _extract_topic_id(self, message: Message) -> int:
+        """兼容不同 Pyrogram 版本的 topic id 字段"""
+        if not message:
+            return 0
+        for attr in ("message_thread_id", "reply_to_top_message_id"):
+            v = getattr(message, attr, None)
+            if v:
+                try:
+                    return int(v)
+                except Exception:
+                    pass
+        # 某些场景下 topic starter id 在 reply_to_message.message_id
+        try:
+            if getattr(message, "reply_to_message", None) and getattr(message.reply_to_message, "forum_topic_created", None):
+                return int(getattr(message.reply_to_message, "id", 0) or 0)
+        except Exception:
+            pass
+        return 0
+
     async def _is_allowed_message(self, message: Message) -> bool:
         if self.allowed_chat_id is not None and message.chat and int(message.chat.id) != int(self.allowed_chat_id):
+            print(f"[TG BOT] 拒绝消息: chat_id={getattr(message.chat, 'id', None)} expected={self.allowed_chat_id}")
             return False
         if self.allowed_topic_id is not None:
-            msg_topic = getattr(message, "message_thread_id", None)
+            msg_topic = self._extract_topic_id(message)
             if int(msg_topic or 0) != int(self.allowed_topic_id):
+                print(f"[TG BOT] 拒绝消息: topic={msg_topic} expected={self.allowed_topic_id}")
                 return False
         user_id = int(message.from_user.id) if message.from_user else 0
         if self.allowed_admin_ids and user_id not in self.allowed_admin_ids:
@@ -121,7 +142,7 @@ class TelegramBot:
         if self.allowed_chat_id is not None and msg.chat and int(msg.chat.id) != int(self.allowed_chat_id):
             return False
         if self.allowed_topic_id is not None:
-            topic_id = getattr(msg, "message_thread_id", None)
+            topic_id = self._extract_topic_id(msg)
             if int(topic_id or 0) != int(self.allowed_topic_id):
                 return False
         user_id = int(callback.from_user.id) if callback.from_user else 0
