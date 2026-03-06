@@ -124,12 +124,7 @@ class TelegramBot:
         if self.allowed_chat_id is not None and message.chat and int(message.chat.id) != int(self.allowed_chat_id):
             print(f"[TG BOT] 拒绝消息: chat_id={getattr(message.chat, 'id', None)} expected={self.allowed_chat_id}")
             return False
-        if self.allowed_topic_id is not None:
-            msg_topic = self._extract_topic_id(message)
-            # 某些客户端/命令菜单不会带 topic id，放行并记录
-            if msg_topic is not None and int(msg_topic or 0) != 0 and int(msg_topic) != int(self.allowed_topic_id):
-                print(f"[TG BOT] 拒绝消息: topic={msg_topic} expected={self.allowed_topic_id}")
-                return False
+        # topic 限制临时放宽：同群管理员可在任意话题使用
         user_id = int(message.from_user.id) if message.from_user else 0
         if self.allowed_admin_ids and user_id not in self.allowed_admin_ids:
             await message.reply("❌ 无权限")
@@ -142,10 +137,7 @@ class TelegramBot:
             return False
         if self.allowed_chat_id is not None and msg.chat and int(msg.chat.id) != int(self.allowed_chat_id):
             return False
-        if self.allowed_topic_id is not None:
-            topic_id = self._extract_topic_id(msg)
-            if topic_id is not None and int(topic_id or 0) != 0 and int(topic_id) != int(self.allowed_topic_id):
-                return False
+        # topic 限制临时放宽：同群管理员可在任意话题使用
         user_id = int(callback.from_user.id) if callback.from_user else 0
         if self.allowed_admin_ids and user_id not in self.allowed_admin_ids:
             await callback.answer("无权限", show_alert=True)
