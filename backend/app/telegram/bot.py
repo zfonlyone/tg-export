@@ -216,47 +216,24 @@ Telegram 全功能导出工具，支持：
     async def _handle_help(self, message: Message):
         """处理 /help 命令"""
         help_text = """
-📖 **TG Export Bot 命令手册**
+📖 **TG Export 可直接用命令**
 
-━━━━━ **基础命令** ━━━━━
-`/start` - 显示欢迎信息和快捷按钮
-`/help` - 显示此帮助文档
-`/status` - 查看 Telegram 账号连接状态
+`/status` 查看连接状态
+`/list` 列可导出聊天
+`/export` 打开导出菜单
+`/export <chat_id>` 导出指定聊天
+`/export <chat_id> 1-100` 导出指定消息范围
+`/tasks` 查看任务列表
+`/pause <task_id>` 暂停任务
+`/resume <task_id>` 恢复任务
+`/cancel <task_id>` 取消任务
+`/failed <task_id>` 查看失败文件
+`/retry <task_id>` 重试失败文件
 
-━━━━━ **导出命令** ━━━━━
-`/list` - 列出所有可导出的对话 (私聊/群组/频道)
-`/export` - 打开导出向导菜单
-`/export <chat_id>` - 导出指定聊天的全部消息
-`/export <chat_id> 1-100` - 导出指定聊天的第1-100条消息
-`/export <chat_id> 1-0` - 导出指定聊天的全部消息 (0=最新)
-
-━━━━━ **任务管理** ━━━━━
-`/tasks` - 查看所有导出任务及进度
-`/pause <task_id>` - 暂停指定任务
-`/resume <task_id>` - 恢复暂停的任务
-`/cancel <task_id>` - 取消指定任务
-`/failed <task_id>` - 查看失败的下载列表
-`/retry <task_id>` - 重试失败的下载
-
-━━━━━ **导出选项** ━━━━━
-📤 **聊天类型:**
-  • 私聊 / 机器人
-  • 私密群组 / 公开群组
-  • 私密频道 / 公开频道
-
-🎨 **媒体类型:**
-  • 🖼 图片 / 🎬 视频 / 🎤 语音
-  • 📎 文件 / 🎨 贴纸 / 🎬 GIF
-
-⚙️ **高级功能:**
-  • 消息范围筛选 (1-100)
-  • 断点续传
-  • 跳过已下载文件
-  • HTML/JSON 双格式输出
-
-💡 **示例:**
-`/export -1001234567890` - 导出该频道全部
-`/export -1001234567890 1-50` - 导出前50条消息
+**常用流程：**
+1. `/list` 找到 chat_id
+2. `/export <chat_id> 1-0` 先全量导一次
+3. `/tasks` 看进度，失败用 `/retry <task_id>`
         """
         keyboard = InlineKeyboardMarkup([
             [
