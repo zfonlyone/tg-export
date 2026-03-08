@@ -11,7 +11,6 @@ import time
 from pathlib import Path
 from typing import Optional, List, AsyncGenerator, Union, Dict, Any
 from pyrogram import Client
-from pyrogram.handlers import RawUpdateHandler
 from pyrogram import raw
 from pyrogram.session import Session
 from pyrogram.session.auth import Auth
@@ -21,7 +20,7 @@ from pyrogram.enums import ChatType as PyChatType
 from pyrogram.errors import (
     SessionPasswordNeeded, FloodWait, PhoneCodeInvalid, 
     PhoneCodeExpired, PhoneNumberInvalid, Unauthorized,
-    UserDeactivated, UserMigrate
+    UserDeactivated
 )
 
 from ..config import settings
@@ -48,8 +47,6 @@ class TelegramClient:
         self._qr_login_tokens: Dict[str, Dict[str, Any]] = {}
         self._qr_password_session: Optional[Session] = None
         self._qr_password_dc_id: Optional[int] = None
-        self._qr_login_event = asyncio.Event()
-        self._raw_update_handler_registered = False
 
     async def _close_qr_password_session(self):
         if self._qr_password_session:
@@ -59,37 +56,6 @@ class TelegramClient:
                 pass
         self._qr_password_session = None
         self._qr_password_dc_id = None
-
-    async def _on_raw_update(self, client, update, users, chats):
-        try:
-            if isinstance(update, raw.types.UpdateLoginToken):
-                logger.info("[TG][QR] received UpdateLoginToken")
-                self._qr_login_event.set()
-        except Exception as e:
-            logger.warning("[TG][QR] raw update handler error: %s", e)
-
-    async def _ensure_raw_update_handler(self):
-        if self._client and not self._raw_update_handler_registered:
-            self._client.add_handler(RawUpdateHandler(self._on_raw_update), group=-999)
-            self._raw_update_handler_registered = True
-
-    async def _confirm_qr_login_after_accept(self) -> Dict[str, Any]:
-        """Telegram 官方流程：扫码端 accept 后，本端收到 UpdateLoginToken，再次 export 完成登录。"""
-        try:
-            self._qr_login_event.clear()
-            try:
-                await asyncio.wait_for(self._qr_login_event.wait(), timeout=45)
-            except asyncio.TimeoutError:
-                return {"status": "pending"}
-
-            exported = await self._export_qr_token()
-            if exported.get("status") == "authorized":
-                return exported
-            if exported.get("status") == "password_required":
-                return {"status": "password_required"}
-            return {"status": "pending"}
-        except SessionPasswordNeeded:
-            return {"status": "password_required"}
 
     async def _sync_auth_from_session(self, session: Session):
         """将已授权的 QR 会话授权导入主会话，确保后续统一使用 self._client。"""
@@ -332,7 +298,6 @@ class TelegramClient:
             raise
 
     def _encode_qr_login_url(self, token_bytes: bytes) -> str:
-        # 使用标准 base64url 编码，保留 '=' padding，尽量贴近 Telegram 官方描述。
         token_b64 = base64.urlsafe_b64encode(token_bytes).decode("ascii")
         return f"tg://login?token={token_b64}"
 
@@ -455,7 +420,6 @@ class TelegramClient:
     async def start_qr_login(self) -> Dict[str, Any]:
         """启动二维码登录，返回扫码链接和 token_id"""
         await self._ensure_connected()
-        await self._ensure_raw_update_handler()
         await self._close_qr_password_session()
         if not self._client:
             raise RuntimeError("客户端未初始化")
@@ -508,25 +472,10 @@ class TelegramClient:
         if not token_state:
             return {"status": "expired", "message": "二维码已过期，请刷新"}
 
-        # 优先检查当前主会话是否已经因扫码而完成授权；这个检查不会消耗 QR token。
-        try:
-            me = await self._client.get_me() if self._client else None
-            if me:
-                me_info = await self._mark_session_authorized()
-                self._qr_login_tokens.pop(token_id, None)
-                return {"status": "authorized", "user": me_info}
-        except Unauthorized:
-            self._is_authorized = False
-        except Exception:
-            pass
-
-        confirm_result = await self._confirm_qr_login_after_accept()
-        if confirm_result.get("status") in {"authorized", "password_required"}:
-            if confirm_result.get("status") == "authorized":
-                self._qr_login_tokens.pop(token_id, None)
-            else:
-                token_state["status"] = "password_required"
-            return confirm_result
+        if self._is_authorized:
+            self._qr_login_tokens.pop(token_id, None)
+            me = await self.get_me()
+            return {"status": "authorized", "user": me}
 
         # 一旦已准备好 2FA 会话，前端可直接输入密码，不再继续触碰二维码 token。
         if self._qr_password_session:
@@ -544,7 +493,7 @@ class TelegramClient:
         if now < int(token_state.get("next_check_at", 0)):
             return {"status": "pending", "retry_after": int(token_state["next_check_at"] - now)}
 
-        # 被动轮询：绝不在 status 轮询里 import/export token，避免把二维码自己轮失效。
+        # 被动轮询：不调用 Telegram 的 import/export，避免二维码在扫码前被轮询失效。
         token_state["next_check_at"] = now + 5
         return {"status": "pending"}
     
@@ -557,27 +506,7 @@ class TelegramClient:
             # 尝试获取当前用户，如果成功说明已登录
             me = await self._client.get_me()
             if me:
-                await self._mark_session_authorized()
-                print(f"[TG] 已登录: {me.first_name} (@{me.username})")
-                return True
-        except UserMigrate as e:
-            print(f"[TG] 检测到会话迁移到 DC{e.value}，正在自动切换...")
-            target_api_id = int(self._api_id or 0)
-            target_api_hash = str(self._api_hash or "")
-            try:
-                if self._client and self._client.is_connected:
-                    await self._client.disconnect()
-            except Exception:
-                pass
-            self._client = None
-            self._api_id = None
-            self._api_hash = None
-            await self.init(target_api_id, target_api_hash)
-            await self._client.storage.dc_id(int(e.value))
-            await self._ensure_connected()
-            me = await self._client.get_me()
-            if me:
-                await self._mark_session_authorized()
+                self._is_authorized = True
                 print(f"[TG] 已登录: {me.first_name} (@{me.username})")
                 return True
         except Unauthorized:
@@ -636,7 +565,7 @@ class TelegramClient:
         except Exception as e:
             print(f"[TG] 获取用户信息失败: {e}")
             return {}
-    
+
     def _convert_chat_type(self, chat: Chat) -> ChatType:
         """转换聊天类型"""
         if chat.type == PyChatType.PRIVATE:
@@ -650,12 +579,12 @@ class TelegramClient:
         elif chat.type == PyChatType.CHANNEL:
             return ChatType.CHANNEL
         return ChatType.PRIVATE
-    
+
     def get_media_type(self, msg: Message) -> Optional[MediaType]:
         """获取消息中的媒体类型"""
         if not msg:
             return None
-            
+
         if msg.photo:
             return MediaType.PHOTO
         elif msg.video:
@@ -672,9 +601,9 @@ class TelegramClient:
             return MediaType.STICKER
         elif msg.animation:
             return MediaType.ANIMATION
-            
+
         return None
-    
+
     async def get_chat(self, chat_id: Union[int, str]) -> ChatInfo:
         """获取单个对话信息 (v2.4.2)"""
         await self._ensure_connected()
@@ -697,390 +626,60 @@ class TelegramClient:
                     logger.warning(f"[TG] 遇到 Peer 报错，正在执行 Peer 预热 (全量拉取对话)...")
                     await self._warm_up_peer_cache()
                     # 预热后再次尝试原始 ID
-                    try: 
+                    try:
                         return await try_get(chat_id)
-                    except: 
+                    except:
                         pass
 
                 # B. 智能回退: 尝试常见的 ID 变体
-                # 提取基础 ID (去掉符号和 -100 前缀)
                 str_id = str(abs(chat_id)) if isinstance(chat_id, int) else ""
                 if str_id.startswith("100") and len(str_id) > 10:
                     base_id = int(str_id[3:])
                 else:
                     base_id = int(str_id) if str_id.isdigit() else None
-                
+
                 if base_id:
-                    # 尝试超级群组格式 (-100...)
                     if len(str(base_id)) >= 9:
                         try:
                             tid = int(f"-100{base_id}")
                             if tid != chat_id:
                                 logger.info(f"[TG] 尝试超级群组回退 ID: {tid}")
                                 return await try_get(tid)
-                        except: pass
-                    
-                    # 尝试普通群组格式 (-...)
+                        except:
+                            pass
+                    try:
+                        if base_id != chat_id:
+                            logger.info(f"[TG] 尝试基础 ID 回退: {base_id}")
+                            return await try_get(base_id)
+                    except:
+                        pass
                     try:
                         tid = -base_id
                         if tid != chat_id:
-                            logger.info(f"[TG] 尝试普通群组回退 ID: {tid}")
+                            logger.info(f"[TG] 尝试负数 ID 回退: {tid}")
                             return await try_get(tid)
-                    except: pass
-                    
-                    # 尝试个人用户格式 (正数)
-                    try:
-                        if base_id != chat_id:
-                            logger.info(f"[TG] 尝试用户回退 ID: {base_id}")
-                            return await try_get(base_id)
-                    except: pass
+                    except:
+                        pass
+            raise RuntimeError(f"获取对话失败: {e}")
 
-            logger.error(f"[TG] 获取对话 {chat_id} 彻底失败: {e}")
-            raise
-
-    async def _warm_up_peer_cache(self):
-        """
-        拉取所有对话以填充 Pyrogram Session 数据库 (v2.4.2)
-        这是解决 PEER_ID_INVALID 的最可靠方式
-        """
-        if not self._is_authorized: return
-        try:
-            count = 0
-            async for _ in self._client.get_dialogs():
-                count += 1
-            self._peers_warmed = True
-            logger.info(f"[TG] Peer 预热完成，共拉取 {count} 个对话")
-        except Exception as e:
-            logger.error(f"[TG] Peer 预热失败: {e}")
-
-    def _convert_to_chat_info(self, chat) -> ChatInfo:
-        """模型转换工具"""
+    def _convert_to_chat_info(self, chat: Chat) -> ChatInfo:
+        title = chat.title or getattr(chat, 'first_name', None) or getattr(chat, 'username', None) or str(chat.id)
         return ChatInfo(
             id=chat.id,
-            title=chat.title or chat.first_name or "Unknown",
+            title=title,
             type=self._convert_chat_type(chat),
-            username=chat.username,
+            username=getattr(chat, 'username', None),
             members_count=getattr(chat, 'members_count', None)
         )
 
-    async def get_dialogs(self, limit: int = 100) -> List[ChatInfo]:
-        """获取最近对话列表 (增加缓存优化)"""
-        await self._ensure_connected()
-        if not self._is_authorized:
-            return []
-        
-        # 简单缓存机制 (30秒内不再重复拉取)
-        import time
-        if hasattr(self, '_dialogs_cache') and (time.time() - self._dialogs_last_fetch < 30):
-            return self._dialogs_cache
-
-        chats = []
+    async def _warm_up_peer_cache(self):
         try:
-            async for dialog in self._client.get_dialogs(limit=limit):
-                chat = dialog.chat
-                chats.append(ChatInfo(
-                    id=chat.id,
-                    title=chat.title or chat.first_name or "Unknown",
-                    type=ChatType(chat.type.value),
-                    username=chat.username,
-                    members_count=chat.members_count
-                ))
-            
-            self._dialogs_cache = chats
-            self._dialogs_last_fetch = time.time()
-            return chats
+            logger.info("[TG] 开始预热 Peer 缓存...")
+            async for _ in self._client.get_dialogs(limit=200):
+                pass
+            self._peers_warmed = True
+            logger.info("[TG] Peer 缓存预热完成")
         except Exception as e:
-            print(f"[TG] 获取对话列表出错: {e}")
-            return []
-    
-    def get_message_link(self, chat_id: int, message_id: int, username: Optional[str] = None) -> str:
-        """
-        生成消息直链 (参考 telegram_media_downloader)
-        1. 公开群组/频道: https://t.me/username/123
-        2. 私密群组/频道: https://t.me/c/1234567890/123
-        """
-        if username:
-            return f"https://t.me/{username}/{message_id}"
-        
-        # 私密链接需要去掉 -100 前缀
-        clean_id = str(chat_id)
-        if clean_id.startswith("-100"):
-            clean_id = clean_id[4:]
-        elif clean_id.startswith("-"):
-            clean_id = clean_id[1:]
-            
-        return f"https://t.me/c/{clean_id}/{message_id}"
+            logger.warning(f"[TG] Peer 缓存预热失败: {e}")
 
-    def resolve_chat_id(self, chat_id_input: str) -> int:
-        """
-        解析并标准化 Chat ID (参考 telegram_media_downloader)
-        确保私密频道/超级群组带有 -100 前缀
-        """
-        try:
-            if not chat_id_input:
-                return 0
-            
-            # 如果是链接，提取最后一部分
-            if "t.me/" in str(chat_id_input):
-                # 区分公开(t.me/username)和私密(t.me/c/12345/678)
-                parts = str(chat_id_input).strip().split("/")
-                if len(parts) >= 2 and parts[-2] == "c":
-                    # 私密链接，倒数第二部分是 c，倒数第一部分可能是 message_id，倒数第三部分可能是 chat_id
-                    # 比如 https://t.me/c/12345678/999 -> chat_id 为 12345678
-                    chat_id_part = parts[-2] # 默认为 c
-                    for i, p in enumerate(parts):
-                        if p == "c" and i + 1 < len(parts):
-                            chat_id_input = parts[i+1] # 获取 c 后面那一项
-                            break
-                else:
-                    chat_id_input = parts[-1]
-                
-                if chat_id_input.isdigit():
-                    pass # 继续数字处理
-                else:
-                    return chat_id_input # 返回用户名
-
-            # 如果已经是数字，或者甚至是带负号的字符串
-            str_id = str(chat_id_input).strip()
-            
-            # 这里的逻辑是：如果用户输的是 1234567890 (10位+)，很大可能是超级群组 ID
-            # 注意：新版 ID 可能是 10 位，以 5/6 开头也可能是超级群组
-            if str_id.lstrip("-").isdigit():
-                val = int(str_id)
-                # 如果是正数且长度足够，尝试标准化为超级群组 ID (-100...)
-                if val > 0 and len(str_id) >= 9:
-                    return int(f"-100{str_id}")
-                return val
-            
-            # 处理带 - 但不带 -100 的情况
-            if str_id.startswith("-") and not str_id.startswith("-100") and len(str_id) > 10:
-                 # 已经是负数但没加 -100 的 10 位以上 ID 通常也要补全
-                 return int(f"-100{str_id[1:]}")
-
-            return int(str_id)
-        except (ValueError, TypeError):
-            # 如果无法转为数字，可能是用户名，由 Pyrogram 自行解析
-            return str(chat_id_input).strip()
-    
-    async def get_chat_history(
-        self,
-        chat_id: int,
-        limit: int = 0,
-        offset_id: int = 0,
-        min_id: int = 0,
-        max_id: int = 0,
-        reverse: bool = False
-    ) -> AsyncGenerator[Message, None]:
-        """获取聊天历史 (v2.4.3 - 修复 reverse)"""
-        await self._ensure_connected()
-        if not self._is_authorized:
-            return
-        
-        try:
-            # Pyrogram 的 get_chat_history 默认是从新到旧
-            # 如果需要从旧到新 (reverse=True)，收集后反转
-            if reverse:
-                messages = []
-                async for message in self._client.get_chat_history(
-                    chat_id,
-                    limit=limit if limit > 0 else 0,
-                    offset_id=offset_id
-                ):
-                    if max_id and message.id > max_id:
-                        continue
-                    if min_id and message.id < min_id:
-                        break
-                    messages.append(message)
-                
-                # 反转后按 ID 从小到大 yield
-                for msg in reversed(messages):
-                    yield msg
-            else:
-                async for message in self._client.get_chat_history(
-                    chat_id,
-                    limit=limit if limit > 0 else 0,
-                    offset_id=offset_id
-                ):
-                    if max_id and message.id > max_id:
-                        continue
-                    if min_id and message.id < min_id:
-                        break
-                    yield message
-        except Exception as e:
-            logger.error(f"[TG] 获取聊天历史出错: {e}")
-    
-    async def get_message_by_id(self, chat_id: int, message_id: int) -> Optional[Message]:
-        """获取单条消息（用于刷新 file_reference，增加缓存避免 API 损耗）"""
-        await self._ensure_connected()
-        if not self._is_authorized:
-            return None
-            
-        cache_key = (chat_id, message_id)
-        import time
-        
-        # 1. 检查缓存 (1小时内有效，因为 file_reference 至少维持一段时间)
-        async with self._cache_lock:
-            if cache_key in self._message_cache:
-                msg, ts = self._message_cache[cache_key]
-                if time.time() - ts < 3600:
-                    return msg
-        
-        try:
-            # 2. 尝试解析 Peer 问题 (Peer id invalid 等)
-            # 尝试直接获取
-            messages = await self._client.get_messages(chat_id, message_id)
-            msg = messages if isinstance(messages, Message) else None
-            
-            # 3. 写入缓存
-            if msg:
-                async with self._cache_lock:
-                    self._message_cache[cache_key] = (msg, time.time())
-                return msg
-            
-            return None
-        except Exception as e:
-            error_str = str(e)
-            # 如果遇到 Peer id invalid，尝试先获取一次 Chat 以强制解析并缓存 Peer
-            if "Peer id invalid" in error_str or "Could not find the input entity" in error_str:
-                logger.warning(f"获取消息遇到 Peer 问题，尝试强制解析 Chat ID: {chat_id}")
-                try:
-                    logger.info(f"直接解析失败，尝试获取 Chat ID: {chat_id}")
-                    await self._client.get_chat(chat_id)
-                    # 再次尝试获取消息
-                    messages = await self._client.get_messages(chat_id, message_id)
-                    return messages if isinstance(messages, Message) else None
-                except Exception as ex:
-                    logger.warning(f"强制 get_chat 失败 ({ex})，尝试终极方案：遍历对话列表...")
-                    # 终极方案：获取最近的对话列表，这会强制下载所有 Peer 实体
-                    try:
-                        async for dialog in self._client.get_dialogs(limit=50):
-                            if dialog.chat.id == chat_id:
-                                logger.info(f"通过对话列表成功定位 Peer: {chat_id}")
-                        # 定位后再次尝试
-                        messages = await self._client.get_messages(chat_id, message_id)
-                        return messages if isinstance(messages, Message) else None
-                    except Exception as final_ex:
-                        logger.error(f"终极方案解析仍无法获取消息: {final_ex}")
-            else:
-                logger.error(f"获取消息失败: {e}")
-            return None
-    
-    async def download_media(
-        self,
-        message: Message,
-        file_path: str,
-        progress_callback=None
-    ) -> Optional[str]:
-        """下载媒体文件"""
-        await self._ensure_connected()
-        if not self._client:
-            return None
-        
-        try:
-            result = await self._client.download_media(
-                message,
-                file_name=file_path,
-                progress=progress_callback
-            )
-            return result
-        except Exception as e:
-            # [Fast Response] 不在这里捕获 FloodWait，直接抛出，让 exporter 层的自适应逻辑第一时间响应
-            raise
-
-    async def download_media_parallel(
-        self,
-        message: Message,
-        file_path: str,
-        file_size: int,
-        parallel_connections: int = 4,
-        progress_callback=None,
-        cancel_check=None,
-        task_semaphore: Optional[asyncio.Semaphore] = None,
-        enable_parallel: bool = True
-    ) -> Optional[str]:
-        """
-        高性能并行分块下载 (v1.5.0)
-        
-        对于大文件 (>10MB) 使用多连接并发下载，
-        突破 Telegram 单连接限速，速度提升 3-8 倍。
-        
-        Args:
-            message: 消息对象
-            file_path: 目标文件路径
-            file_size: 文件大小 (字节)
-            parallel_connections: 并行连接数 (免费账号建议 3-4)
-            progress_callback: 进度回调 (current, total)
-            cancel_check: 取消检查函数
-            task_semaphore: 全局任务信号量 (可选)
-            
-        Returns:
-            成功返回文件路径，失败返回 None
-        """
-        await self._ensure_connected()
-        if not self._client:
-            return None
-        
-        from pathlib import Path
-        from .parallel_downloader import ParallelChunkDownloader
-        
-        try:
-            downloader = ParallelChunkDownloader(
-                client=self._client,
-                parallel_connections=parallel_connections,
-                task_semaphore=task_semaphore,
-                enable_parallel=enable_parallel
-            )
-            
-            success, error = await downloader.download(
-                message=message,
-                file_path=Path(file_path),
-                file_size=file_size,
-                progress_callback=progress_callback,
-                cancel_check=cancel_check
-            )
-            
-            if success:
-                logger.info(f"并行下载成功: {file_path}")
-                return file_path
-            else:
-                # 并行下载失败或文件过小，回退到常规下载 (v1.6.7.3 日志优化)
-                error_str = error or ""
-                if "未启用" in error_str or "文件过小" in error_str:
-                    logger.debug(f"并行下载由于策略回退: {error_str}, 使用常规下载: {file_path}")
-                else:
-                    logger.warning(f"并行下载失败 ({error_str})，回退到常规下载")
-                
-                return await self.download_media(message, file_path, progress_callback)
-                    
-        except Exception as e:
-            logger.error(f"并行下载异常: {e}")
-            # 异常时也回退到常规下载
-            return await self.download_media(message, file_path, progress_callback)
-
-
-def apply_pyrogram_patch():
-    """
-    深度补丁：强行拦截 Pyrogram 内部限速睡眠逻辑。
-    即使 sleep_threshold=0，某些情况下 Pyrogram Session 仍可能触发内部 sleep。
-    此补丁直接重写 Session.handle_flood，确保一旦触发 FloodWait 立即向上层抛出异常，
-    从而激活 ExportManager 的自适应降压逻辑。
-    """
-    import pyrogram.session.session as pyrogram_session
-    from pyrogram.errors import FloodWait
-    
-    # 记录原始方法以便参考 (可选)
-    # _original_handle_flood = pyrogram_session.Session.handle_flood
-
-    async def patched_handle_flood(self, flood_wait):
-        # 拒绝进入任何内部睡眠，直接把锅甩级上层业务逻辑处理
-        logger.warning(f"硬拦截补丁拦截到限速信号 ({flood_wait.value}s)，强制抛出异常以激活降速引擎。")
-        raise flood_wait
-
-    pyrogram_session.Session.handle_flood = patched_handle_flood
-    logger.info("已应用 Pyrogram Session.handle_flood 深度限速拦截补丁")
-
-# 全局实例
 telegram_client = TelegramClient()
-
-# 应用补丁
-apply_pyrogram_patch()
