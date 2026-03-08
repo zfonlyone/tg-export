@@ -80,6 +80,42 @@ class TelegramClient:
                 await self._client.dispatcher.start()
                 logger.info("[TG][QR] dispatcher workers started for raw updates")
 
+    async def _switch_client_to_dc(self, dc_id: int):
+        """参考现成 Pyrogram QR 登录实现：确保会话切到 nearest/auth DC 再导出二维码 token。"""
+        if not self._client:
+            raise RuntimeError("客户端未初始化")
+        try:
+            if getattr(self._client, "session", None):
+                await self._client.session.stop()
+        except Exception:
+            pass
+        await self._client.storage.dc_id(dc_id)
+        await self._client.storage.auth_key(
+            await Auth(
+                self._client,
+                await self._client.storage.dc_id(),
+                await self._client.storage.test_mode()
+            ).create()
+        )
+        self._client.session = Session(
+            self._client,
+            await self._client.storage.dc_id(),
+            await self._client.storage.auth_key(),
+            await self._client.storage.test_mode()
+        )
+        await self._client.session.start()
+        logger.info("[TG][QR] switched client session to dc_id=%s", dc_id)
+
+    async def _ensure_nearest_dc_for_qr(self):
+        if not self._client:
+            raise RuntimeError("客户端未初始化")
+        nearest = await self._client.invoke(raw.functions.help.GetNearestDc())
+        current_dc = await self._client.storage.dc_id()
+        target_dc = getattr(nearest, "nearest_dc", None) or current_dc
+        logger.info("[TG][QR] current_dc=%s nearest_dc=%s this_dc=%s", current_dc, getattr(nearest, "nearest_dc", None), getattr(nearest, "this_dc", None))
+        if target_dc and target_dc != current_dc:
+            await self._switch_client_to_dc(int(target_dc))
+
     async def _sync_auth_from_session(self, session: Session):
         """将已授权的 QR 会话授权导入主会话，确保后续统一使用 self._client。"""
         if not self._client:
@@ -444,6 +480,7 @@ class TelegramClient:
         """启动二维码登录，返回扫码链接和 token_id"""
         await self._ensure_connected()
         await self._ensure_raw_update_handler()
+        await self._ensure_nearest_dc_for_qr()
         await self._close_qr_password_session()
         if not self._client:
             raise RuntimeError("客户端未初始化")
