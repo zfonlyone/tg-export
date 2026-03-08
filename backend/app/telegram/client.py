@@ -332,8 +332,8 @@ class TelegramClient:
             raise
 
     def _encode_qr_login_url(self, token_bytes: bytes) -> str:
-        # Telegram QR token 使用 URL-safe Base64，去掉尾部 '=' 更稳定
-        token_b64 = base64.urlsafe_b64encode(token_bytes).decode("ascii").rstrip("=")
+        # 使用标准 base64url 编码，保留 '=' padding，尽量贴近 Telegram 官方描述。
+        token_b64 = base64.urlsafe_b64encode(token_bytes).decode("ascii")
         return f"tg://login?token={token_b64}"
 
     async def _process_qr_login_result(self, result) -> Dict[str, Any]:
