@@ -555,9 +555,14 @@ class TelegramClient:
                 return True
         except UserMigrate as e:
             print(f"[TG] 检测到会话迁移到 DC{e.value}，正在自动切换...")
-            await self._client.disconnect()
+            try:
+                if self._client.is_connected:
+                    await self._client.disconnect()
+            except Exception:
+                pass
+            await self.init(int(self._api_id), str(self._api_hash))
             await self._client.storage.dc_id(int(e.value))
-            await self._client.connect()
+            await self._ensure_connected()
             me = await self._client.get_me()
             if me:
                 await self._mark_session_authorized()
