@@ -71,11 +71,14 @@ class TelegramClient:
     async def _ensure_raw_update_handler(self):
         if self._client and not self._raw_update_handler_registered:
             self._client.add_handler(RawUpdateHandler(self._on_raw_update), group=-999)
-            # 关键：仅 connect() 不够，必须确保 dispatcher 在跑，RawUpdateHandler 才能收到 updateLoginToken。
-            if not self._client.is_initialized:
-                await self._client.dispatcher.start()
-                self._client.is_initialized = True
             self._raw_update_handler_registered = True
+
+        if self._client:
+            worker_tasks = getattr(self._client.dispatcher, "handler_worker_tasks", None) or []
+            alive = any(not t.done() for t in worker_tasks)
+            if not alive:
+                await self._client.dispatcher.start()
+                logger.info("[TG][QR] dispatcher workers started for raw updates")
 
     async def _sync_auth_from_session(self, session: Session):
         """将已授权的 QR 会话授权导入主会话，确保后续统一使用 self._client。"""
