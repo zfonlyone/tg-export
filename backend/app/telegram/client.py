@@ -449,7 +449,7 @@ class TelegramClient:
                 await self._client.storage.test_mode()
             ).create(),
             await self._client.storage.test_mode(),
-            is_media=True
+            is_media=False
         )
         keep_session = False
         try:
