@@ -76,7 +76,7 @@
           <span style="font-weight: 600;">📊 消息范围</span>
         </label>
         <div v-if="enableMessageRange" style="margin-top: 12px;">
-          <p style="color: #666; margin-bottom: 8px; font-size: 13px;">"1-0" 全部，"1-100" 前100条</p>
+          <p style="color: #666; margin-bottom: 8px; font-size: 13px;">支持精确范围，例如 <strong>1354-1354</strong> 只导出单条消息；<strong>1-0</strong> 表示从第 1 条到最新</p>
           <div style="display: flex; gap: 15px; align-items: center;">
             <input v-model.number="options.message_from" type="number" class="form-input" style="width: 120px;" placeholder="起始" min="1">
             <span>-</span>
@@ -326,10 +326,42 @@ const enableMessageFilter = ref(false)
 const parsedChatIds = ref([])
 const parsedMessageIds = ref([])
 
-// 智能解析: 从任何文本中提取数字
+// 智能解析: 聊天 ID 可提取所有数字；消息过滤只提取消息 ID（优先取 t.me/c 链接最后一段）
 function parseNumbers(text) {
   const matches = text.match(/-?\d+/g)
   return matches ? [...new Set(matches.map(n => parseInt(n)))].filter(n => !isNaN(n)) : []
+}
+
+function parseMessageIds(text) {
+  const ids = []
+  const seen = new Set()
+
+  // 1) 优先解析 Telegram 消息链接，只取最后一段消息 ID，避免把群组 ID 当成消息 ID
+  const tgLinkRegex = /https?:\/\/t\.me\/(?:c\/\d+\/|[A-Za-z0-9_]+\/)(\d+)/g
+  let m
+  while ((m = tgLinkRegex.exec(text)) !== null) {
+    const id = parseInt(m[1], 10)
+    if (!isNaN(id) && id > 0 && !seen.has(id)) {
+      seen.add(id)
+      ids.push(id)
+    }
+  }
+
+  // 2) 再解析纯数字/逗号/空格/换行输入；如果某一行包含 t.me 链接，则跳过该行的数字兜底，避免误收群组 ID
+  const lines = text.split(/\r?\n/)
+  for (const line of lines) {
+    if (/https?:\/\/t\.me\//.test(line)) continue
+    const nums = line.match(/\b\d+\b/g) || []
+    for (const raw of nums) {
+      const id = parseInt(raw, 10)
+      if (!isNaN(id) && id > 0 && !seen.has(id)) {
+        seen.add(id)
+        ids.push(id)
+      }
+    }
+  }
+
+  return ids
 }
 
 function parseSpecificChats() {
@@ -337,7 +369,7 @@ function parseSpecificChats() {
 }
 
 function parseFilterMessages() {
-  parsedMessageIds.value = parseNumbers(filterMessagesInput.value).filter(n => n > 0)
+  parsedMessageIds.value = parseMessageIds(filterMessagesInput.value)
 }
 
 function removeChatId(idx) {
@@ -444,6 +476,19 @@ async function startExport() {
     if (!enableMessageRange.value) {
       options.message_from = 1
       options.message_to = 0
+    } else {
+      // 精确单条消息范围（如 1354-1354）应原样提交
+      if (!options.message_from || options.message_from < 1) {
+        options.message_from = 1
+      }
+      if (options.message_to == null || options.message_to < 0) {
+        options.message_to = 0
+      }
+      if (options.message_to > 0 && options.message_to < options.message_from) {
+        error.value = '消息范围无效：结束消息 ID 不能小于起始消息 ID'
+        loading.value = false
+        return
+      }
     }
     
     // 处理日期
