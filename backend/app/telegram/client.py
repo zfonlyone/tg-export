@@ -555,15 +555,17 @@ class TelegramClient:
                 return True
         except UserMigrate as e:
             print(f"[TG] 检测到会话迁移到 DC{e.value}，正在自动切换...")
+            target_api_id = int(self._api_id or 0)
+            target_api_hash = str(self._api_hash or "")
             try:
-                if self._client.is_connected:
+                if self._client and self._client.is_connected:
                     await self._client.disconnect()
             except Exception:
                 pass
             self._client = None
             self._api_id = None
             self._api_hash = None
-            await self.init(int(api_id := self._api_id or 0) if False else int(os.environ.get('API_ID', '0') or 0), os.environ.get('API_HASH', '') or str(self._api_hash or ''))
+            await self.init(target_api_id, target_api_hash)
             await self._client.storage.dc_id(int(e.value))
             await self._ensure_connected()
             me = await self._client.get_me()
