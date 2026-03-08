@@ -8,6 +8,7 @@ import logging
 import base64
 import secrets
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, AsyncGenerator, Union, Dict, Any
 from pyrogram import Client
@@ -742,6 +743,7 @@ class TelegramClient:
     async def get_chat_history(self, chat_id: Union[int, str], limit: int = 0, min_id: int = 0, max_id: int = 0, reverse: bool = False):
         """兼容当前扫描器参数，内部适配 Pyrogram 2.0.106 的 get_chat_history。"""
         await self._ensure_connected()
+        zero_dt = datetime.fromtimestamp(0, tz=timezone.utc)
 
         if not reverse:
             async for msg in self._client.get_chat_history(
@@ -749,7 +751,7 @@ class TelegramClient:
                 limit=limit,
                 offset=0,
                 offset_id=0,
-                offset_date=0
+                offset_date=zero_dt
             ):
                 if max_id and msg.id >= max_id:
                     continue
@@ -765,7 +767,7 @@ class TelegramClient:
             limit=limit,
             offset=0,
             offset_id=0,
-            offset_date=0
+            offset_date=zero_dt
         ):
             if max_id and msg.id >= max_id:
                 continue
