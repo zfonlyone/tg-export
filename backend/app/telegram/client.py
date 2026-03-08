@@ -51,6 +51,15 @@ class TelegramClient:
         self._qr_login_event = asyncio.Event()
         self._raw_update_handler_registered = False
 
+    async def _close_qr_password_session(self):
+        if self._qr_password_session:
+            try:
+                await self._qr_password_session.stop()
+            except Exception:
+                pass
+        self._qr_password_session = None
+        self._qr_password_dc_id = None
+
     async def _on_raw_update(self, client, update, users, chats):
         try:
             if isinstance(update, raw.types.UpdateLoginToken):
