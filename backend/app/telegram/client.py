@@ -740,18 +740,39 @@ class TelegramClient:
             raise RuntimeError(f"获取对话列表失败: {e}")
 
     async def get_chat_history(self, chat_id: Union[int, str], limit: int = 0, min_id: int = 0, max_id: int = 0, reverse: bool = False):
-        """透传 Pyrogram get_chat_history，供扫描器使用（返回异步生成器）。"""
+        """兼容当前扫描器参数，内部适配 Pyrogram 2.0.106 的 get_chat_history。"""
         await self._ensure_connected()
+
+        if not reverse:
+            async for msg in self._client.get_chat_history(
+                chat_id,
+                limit=limit,
+                offset=0,
+                offset_id=0,
+                offset_date=0
+            ):
+                if max_id and msg.id >= max_id:
+                    continue
+                if min_id and msg.id <= min_id:
+                    continue
+                yield msg
+            return
+
+        # Pyrogram 原生返回是从新到旧，这里为兼容扫描器的 reverse=True 语义，先过滤后反转输出。
+        collected = []
         async for msg in self._client.get_chat_history(
             chat_id,
             limit=limit,
-            offset_id=0,
-            offset_date=0,
             offset=0,
-            max_id=max_id,
-            min_id=min_id,
-            reverse=reverse
+            offset_id=0,
+            offset_date=0
         ):
+            if max_id and msg.id >= max_id:
+                continue
+            if min_id and msg.id <= min_id:
+                continue
+            collected.append(msg)
+        for msg in reversed(collected):
             yield msg
 
     async def get_chat(self, chat_id: Union[int, str]) -> ChatInfo:
