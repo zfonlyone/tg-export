@@ -20,7 +20,7 @@ from pyrogram.enums import ChatType as PyChatType
 from pyrogram.errors import (
     SessionPasswordNeeded, FloodWait, PhoneCodeInvalid, 
     PhoneCodeExpired, PhoneNumberInvalid, Unauthorized,
-    UserDeactivated
+    UserDeactivated, UserMigrate
 )
 
 from ..config import settings
@@ -550,7 +550,17 @@ class TelegramClient:
             # 尝试获取当前用户，如果成功说明已登录
             me = await self._client.get_me()
             if me:
-                self._is_authorized = True
+                await self._mark_session_authorized()
+                print(f"[TG] 已登录: {me.first_name} (@{me.username})")
+                return True
+        except UserMigrate as e:
+            print(f"[TG] 检测到会话迁移到 DC{e.value}，正在自动切换...")
+            await self._client.disconnect()
+            await self._client.storage.dc_id(int(e.value))
+            await self._client.connect()
+            me = await self._client.get_me()
+            if me:
+                await self._mark_session_authorized()
                 print(f"[TG] 已登录: {me.first_name} (@{me.username})")
                 return True
         except Unauthorized:
