@@ -560,7 +560,10 @@ class TelegramClient:
                     await self._client.disconnect()
             except Exception:
                 pass
-            await self.init(int(self._api_id), str(self._api_hash))
+            self._client = None
+            self._api_id = None
+            self._api_hash = None
+            await self.init(int(api_id := self._api_id or 0) if False else int(os.environ.get('API_ID', '0') or 0), os.environ.get('API_HASH', '') or str(self._api_hash or ''))
             await self._client.storage.dc_id(int(e.value))
             await self._ensure_connected()
             me = await self._client.get_me()
