@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 from typing import Optional, List, AsyncGenerator, Union, Dict, Any
 from pyrogram import Client
+from pyrogram.handlers import RawUpdateHandler
 from pyrogram import raw
 from pyrogram.session import Session
 from pyrogram.session.auth import Auth
@@ -47,6 +48,8 @@ class TelegramClient:
         self._qr_login_tokens: Dict[str, Dict[str, Any]] = {}
         self._qr_password_session: Optional[Session] = None
         self._qr_password_dc_id: Optional[int] = None
+        self._qr_login_event = asyncio.Event()
+        self._raw_update_handler_registered = False
 
     async def _close_qr_password_session(self):
         if self._qr_password_session:
@@ -56,6 +59,23 @@ class TelegramClient:
                 pass
         self._qr_password_session = None
         self._qr_password_dc_id = None
+
+    async def _on_raw_update(self, client, update, users, chats):
+        try:
+            if isinstance(update, raw.types.UpdateLoginToken):
+                logger.info("[TG][QR] received UpdateLoginToken")
+                self._qr_login_event.set()
+        except Exception as e:
+            logger.warning("[TG][QR] raw update handler error: %s", e)
+
+    async def _ensure_raw_update_handler(self):
+        if self._client and not self._raw_update_handler_registered:
+            self._client.add_handler(RawUpdateHandler(self._on_raw_update), group=-999)
+            # 关键：仅 connect() 不够，必须确保 dispatcher 在跑，RawUpdateHandler 才能收到 updateLoginToken。
+            if not self._client.is_initialized:
+                await self._client.dispatcher.start()
+                self._client.is_initialized = True
+            self._raw_update_handler_registered = True
 
     async def _sync_auth_from_session(self, session: Session):
         """将已授权的 QR 会话授权导入主会话，确保后续统一使用 self._client。"""
@@ -420,6 +440,7 @@ class TelegramClient:
     async def start_qr_login(self) -> Dict[str, Any]:
         """启动二维码登录，返回扫码链接和 token_id"""
         await self._ensure_connected()
+        await self._ensure_raw_update_handler()
         await self._close_qr_password_session()
         if not self._client:
             raise RuntimeError("客户端未初始化")
@@ -476,6 +497,35 @@ class TelegramClient:
             self._qr_login_tokens.pop(token_id, None)
             me = await self.get_me()
             return {"status": "authorized", "user": me}
+
+        # 若扫码端已 accept，本端会收到 UpdateLoginToken；然后再次 export 才会得到 Success/MigrateTo。
+        if self._qr_login_event.is_set():
+            self._qr_login_event.clear()
+            try:
+                exported = await self._export_qr_token()
+                if exported.get("status") == "authorized":
+                    self._qr_login_tokens.pop(token_id, None)
+                    return exported
+                if exported.get("status") == "password_required":
+                    token_state["status"] = "password_required"
+                    return {"status": "password_required"}
+                if exported.get("status") == "pending" and exported.get("token"):
+                    new_token = exported["token"]
+                    old_url = self._encode_qr_login_url(token_state["token"])
+                    new_url = self._encode_qr_login_url(new_token)
+                    token_state["token"] = new_token
+                    token_state["created_at"] = int(time.time())
+                    return {
+                        "status": "pending",
+                        "token_id": token_id,
+                        "login_url": new_url,
+                        "refresh": new_url != old_url
+                    }
+            except SessionPasswordNeeded:
+                token_state["status"] = "password_required"
+                return {"status": "password_required"}
+            except Exception as e:
+                logger.warning("[TG][QR] confirm after UpdateLoginToken failed: %s", e)
 
         # 一旦已准备好 2FA 会话，前端可直接输入密码，不再继续触碰二维码 token。
         if self._qr_password_session:
