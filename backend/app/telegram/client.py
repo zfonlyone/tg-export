@@ -135,11 +135,32 @@ class TelegramClient:
         """将指定 Session 的 DC/AuthKey 接管到主客户端，避免 USER_MIGRATE 卡住。"""
         if not self._client:
             raise RuntimeError("客户端未初始化")
-        if self._client.is_connected:
-            await self._client.disconnect()
-        await self._client.storage.dc_id(session.dc_id)
-        await self._client.storage.auth_key(session.auth_key)
-        await self._client.connect()
+
+        async def apply_auth_key():
+            if self._client.is_connected:
+                await self._client.disconnect()
+            await self._client.storage.dc_id(session.dc_id)
+            await self._client.storage.auth_key(session.auth_key)
+            await self._client.connect()
+
+        try:
+            await apply_auth_key()
+        except Exception as e:
+            if "closed database" not in str(e).lower():
+                raise
+            logger.warning("[TG][QR] main client storage closed, recreating client before adopt")
+            api_id = int(self._api_id or 0)
+            api_hash = str(self._api_hash or "")
+            try:
+                if self._client and self._client.is_connected:
+                    await self._client.disconnect()
+            except Exception:
+                pass
+            self._client = None
+            self._is_authorized = False
+            await self.init(api_id, api_hash)
+            await self._ensure_connected()
+            await apply_auth_key()
 
     async def _mark_session_authorized(self) -> Dict[str, Any]:
         """统一标记会话为已登录，确保扫码与手机号登录都能持久复用会话。"""
