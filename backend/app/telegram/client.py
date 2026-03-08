@@ -740,9 +740,9 @@ class TelegramClient:
             raise RuntimeError(f"获取对话列表失败: {e}")
 
     async def get_chat_history(self, chat_id: Union[int, str], limit: int = 0, min_id: int = 0, max_id: int = 0, reverse: bool = False):
-        """透传 Pyrogram get_chat_history，供扫描器使用。"""
+        """透传 Pyrogram get_chat_history，供扫描器使用（返回异步生成器）。"""
         await self._ensure_connected()
-        return self._client.get_chat_history(
+        async for msg in self._client.get_chat_history(
             chat_id,
             limit=limit,
             offset_id=0,
@@ -751,7 +751,8 @@ class TelegramClient:
             max_id=max_id,
             min_id=min_id,
             reverse=reverse
-        )
+        ):
+            yield msg
 
     async def get_chat(self, chat_id: Union[int, str]) -> ChatInfo:
         """获取单个对话信息 (v2.4.2)"""
