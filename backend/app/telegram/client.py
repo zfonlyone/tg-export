@@ -131,7 +131,7 @@ class TelegramClient:
             await self._client.storage.user_id(imported.user.id)
             await self._client.storage.is_bot(False)
 
-    async def _adopt_session_as_main(self, session: Session):
+    async def _adopt_session_as_main(self, session: Session, user_id: int):
         """将指定 Session 的 DC/AuthKey 接管到主客户端，避免 USER_MIGRATE 卡住。"""
         if not self._client:
             raise RuntimeError("客户端未初始化")
@@ -156,7 +156,7 @@ class TelegramClient:
         await self._client.storage.open()
         await self._client.storage.dc_id(session.dc_id)
         await self._client.storage.auth_key(session.auth_key)
-        await self._client.storage.user_id(None)
+        await self._client.storage.user_id(user_id)
         await self._client.storage.is_bot(False)
         await self._client.storage.save()
         await self._client.storage.close()
@@ -358,12 +358,15 @@ class TelegramClient:
                     return prep
             if self._qr_password_session:
                 pwd = await self._qr_password_session.invoke(raw.functions.account.GetPassword())
-                await self._qr_password_session.invoke(
+                auth = await self._qr_password_session.invoke(
                     raw.functions.auth.CheckPassword(
                         password=compute_password_check(pwd, password)
                     )
                 )
-                await self._adopt_session_as_main(self._qr_password_session)
+                user_id = getattr(getattr(auth, "user", None), "id", None)
+                if not user_id:
+                    raise RuntimeError("二维码 2FA 成功，但未能获取用户 ID")
+                await self._adopt_session_as_main(self._qr_password_session, user_id)
                 await self._close_qr_password_session()
             else:
                 await self._client.check_password(password)
