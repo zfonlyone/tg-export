@@ -722,6 +722,23 @@ class TelegramClient:
 
         return None
 
+    async def get_dialogs(self, limit: int = 200) -> List[ChatInfo]:
+        """获取对话列表，并顺手预热 peer 缓存。"""
+        await self._ensure_connected()
+        chats: List[ChatInfo] = []
+        try:
+            async for dialog in self._client.get_dialogs(limit=limit):
+                try:
+                    chats.append(self._convert_to_chat_info(dialog.chat))
+                except Exception:
+                    continue
+            self._peers_warmed = True
+            logger.info(f"[TG] get_dialogs 完成，获取 {len(chats)} 个对话并完成 peer 预热")
+            return chats
+        except Exception as e:
+            logger.warning(f"[TG] 获取对话列表失败: {e}")
+            raise RuntimeError(f"获取对话列表失败: {e}")
+
     async def get_chat(self, chat_id: Union[int, str]) -> ChatInfo:
         """获取单个对话信息 (v2.4.2)"""
         await self._ensure_connected()
