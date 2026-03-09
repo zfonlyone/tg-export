@@ -17,6 +17,11 @@
       <div class="card-header">
         <h2>历史记录导出设置</h2>
       </div>
+
+      <div style="display: flex; gap: 10px; margin-bottom: 16px;">
+        <button class="btn" :class="exportMode === 'quick' ? 'btn-primary' : 'btn-outline'" @click="exportMode = 'quick'">⚡ 快速模式</button>
+        <button class="btn" :class="exportMode === 'advanced' ? 'btn-primary' : 'btn-outline'" @click="exportMode = 'advanced'">🛠️ 高级模式</button>
+      </div>
       
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
         <label class="form-checkbox">
@@ -341,6 +346,7 @@ const dateTo = ref('')
 const enableSpecificChats = ref(false)
 const enableMessageRange = ref(false)
 const enableMessageFilter = ref(false)
+const exportMode = ref('quick')
 
 // 解析后的 ID 列表
 const parsedChatIds = ref([])
