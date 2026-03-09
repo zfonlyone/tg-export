@@ -73,7 +73,7 @@
           <button @click="applyBatchPreset('window100')" class="btn btn-outline" style="padding: 6px 10px;">前后各 50 条</button>
         </div>
         <div v-if="exactMessageId && exactChatId" style="margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap;">
-          <button @click="quickStartFromLink" class="btn btn-success">🚀 立即创建下载任务</button>
+          <button @click="quickStartFromLink" class="btn btn-success">🚀 立即创建当前消息下载任务</button>
           <button @click="step = 2" class="btn btn-outline">继续微调媒体与下载设置</button>
         </div>
       </div>
@@ -423,6 +423,36 @@ async function resolveExactMessagePreview(chatId, messageId) {
   }
 }
 
+function applyQuickDefaults(chatId, messageId) {
+  // 快速模式默认进入“只下载当前这条消息里的文件”
+  options.private_chats = false
+  options.bot_chats = false
+  options.private_groups = false
+  options.private_channels = false
+  options.public_groups = false
+  options.public_channels = false
+  options.only_my_messages = false
+
+  enableSpecificChats.value = true
+  enableMessageRange.value = true
+  specificChatsInput.value = String(chatId)
+  parsedChatIds.value = [chatId]
+  options.message_from = messageId
+  options.message_to = messageId
+
+  options.photos = false
+  options.videos = false
+  options.voice_messages = false
+  options.video_messages = false
+  options.stickers = false
+  options.gifs = false
+  options.files = true
+
+  enableMessageFilter.value = false
+  options.filter_mode = 'none'
+  options.filter_messages = []
+}
+
 function parseSpecificChats() {
   parsedChatIds.value = parseNumbers(specificChatsInput.value)
 }
@@ -464,22 +494,8 @@ function applyExactMessageLink() {
   exactChatTitle.value = ''
   exactMessagePreview.value = null
   exactMessageId.value = messageId
-  enableSpecificChats.value = true
-  enableMessageRange.value = true
-  specificChatsInput.value = String(chatId)
-  parsedChatIds.value = [chatId]
-  options.message_from = messageId
-  options.message_to = messageId
+  applyQuickDefaults(chatId, messageId)
   exactMessageLinkInput.value = text
-
-  // 快速模式下默认只下载文件，减少误操作
-  options.photos = false
-  options.videos = false
-  options.voice_messages = false
-  options.video_messages = false
-  options.stickers = false
-  options.gifs = false
-  options.files = true
 
   // 自动生成一个顺手的任务名
   taskName.value = `tg-${rawChatId}-${messageId}`
@@ -498,6 +514,12 @@ function applyBatchPreset(mode) {
   enableMessageRange.value = true
   specificChatsInput.value = String(exactChatId.value)
   parsedChatIds.value = [exactChatId.value]
+  options.private_chats = false
+  options.bot_chats = false
+  options.private_groups = false
+  options.private_channels = false
+  options.public_groups = false
+  options.public_channels = false
 
   if (mode === 'single') {
     options.message_from = exactMessageId.value
