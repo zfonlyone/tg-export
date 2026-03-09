@@ -25,6 +25,11 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+class InitTelegramRequest(BaseModel):
+    api_id: int
+    api_hash: str
+
+
 class SendCodeRequest(BaseModel):
     phone: str
 
@@ -81,15 +86,14 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 @router.post("/telegram/init")
 async def init_telegram(
-    api_id: int,
-    api_hash: str,
+    payload: InitTelegramRequest,
     current_user: User = Depends(get_current_user)
 ):
     """初始化 Telegram 客户端"""
     try:
-        await telegram_client.init(api_id, api_hash)
+        await telegram_client.init(payload.api_id, payload.api_hash)
         try:
-            upsert_env_values({"API_ID": str(api_id), "API_HASH": api_hash})
+            upsert_env_values({"API_ID": str(payload.api_id), "API_HASH": payload.api_hash})
         except Exception:
             pass
         return {"status": "ok", "message": "客户端已初始化"}
@@ -171,7 +175,6 @@ async def qr_submit_password(
     """二维码登录后提交两步验证密码"""
     try:
         await _ensure_tg_client_initialized()
-        logger.info("[TG][QR] password submit received (len=%s)", len(password or ""))
         return await telegram_client.verify_2fa_password(password)
     except Exception as e:
         logger.exception("[TG][QR] password submit failed: %s", e)

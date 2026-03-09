@@ -215,7 +215,10 @@ function cancelEditApi() {
 async function saveApiConfig() {
   loading.value = true
   try {
-    await axios.post(`/api/telegram/init?api_id=${apiId.value}&api_hash=${apiHash.value}`, {}, { headers: getAuthHeader() })
+    await axios.post('/api/telegram/init', {
+      api_id: Number(apiId.value),
+      api_hash: apiHash.value
+    }, { headers: getAuthHeader() })
     editingApi.value = false
     showMessage('API 配置已保存', 'success')
   } catch (err) {
