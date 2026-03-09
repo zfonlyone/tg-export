@@ -228,7 +228,9 @@ async function saveApiConfig() {
 async function sendCode() {
   loading.value = true
   try {
-    const res = await axios.post(`/api/telegram/send-code?phone=${encodeURIComponent(phone.value)}`, {}, { headers: getAuthHeader() })
+    const res = await axios.post('/api/telegram/send-code', {
+      phone: phone.value
+    }, { headers: getAuthHeader() })
     phoneCodeHash.value = res.data.phone_code_hash
     loginStep.value = 2
     showMessage('验证码已发送，请查看 Telegram 应用', 'success')
@@ -242,9 +244,13 @@ async function sendCode() {
 async function signIn() {
   loading.value = true
   try {
-    await axios.post('/api/telegram/sign-in', null, {
-      headers: getAuthHeader(),
-      params: { phone: phone.value, code: code.value, phone_code_hash: phoneCodeHash.value, password: password.value || undefined }
+    await axios.post('/api/telegram/sign-in', {
+      phone: phone.value,
+      code: code.value,
+      phone_code_hash: phoneCodeHash.value,
+      password: password.value || undefined
+    }, {
+      headers: getAuthHeader()
     })
     showMessage('🎉 登录成功!', 'success')
     loginStep.value = 4

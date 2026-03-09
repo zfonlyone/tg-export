@@ -6,6 +6,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, status, Body
 from fastapi.security import OAuth2PasswordRequestForm
 import logging
+from pydantic import BaseModel
 
 from ..config import settings
 from ..models import (
@@ -22,6 +23,17 @@ from .env_utils import upsert_env_values
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+class SendCodeRequest(BaseModel):
+    phone: str
+
+
+class SignInRequest(BaseModel):
+    phone: str
+    code: str
+    phone_code_hash: str
+    password: Optional[str] = None
 
 
 async def _ensure_tg_client_initialized():
@@ -87,13 +99,13 @@ async def init_telegram(
 
 @router.post("/telegram/send-code")
 async def send_code(
-    phone: str,
+    payload: SendCodeRequest,
     current_user: User = Depends(get_current_user)
 ):
     """发送验证码"""
     try:
         await _ensure_tg_client_initialized()
-        phone_code_hash = await telegram_client.send_code(phone)
+        phone_code_hash = await telegram_client.send_code(payload.phone)
         return {"status": "ok", "phone_code_hash": phone_code_hash}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -101,15 +113,12 @@ async def send_code(
 
 @router.post("/telegram/sign-in")
 async def sign_in(
-    phone: str,
-    code: str,
-    phone_code_hash: str,
-    password: Optional[str] = None,
+    payload: SignInRequest,
     current_user: User = Depends(get_current_user)
 ):
     """登录验证"""
     try:
-        success = await telegram_client.sign_in(phone, code, phone_code_hash, password)
+        success = await telegram_client.sign_in(payload.phone, payload.code, payload.phone_code_hash, payload.password)
         if success:
             return {"status": "ok", "message": "登录成功"}
         raise RuntimeError("登录异常终止")
