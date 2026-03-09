@@ -1,14 +1,19 @@
 <template>
-  <div class="fade-in">
-    <div class="page-header">
+  <div class="fade-in detail-page">
+    <div class="page-header detail-header">
       <div class="header-text">
+        <div class="eyebrow">Task detail</div>
         <h1 class="task-title-main">📊 {{ task.name || '加载中...' }}</h1>
-        <p class="subtitle">实时监控下载进度与文件状态</p>
+        <p class="subtitle">实时监控下载进度、错误状态与文件队列。</p>
       </div>
-      <div class="header-actions">
+      <div class="header-actions header-pills">
         <div class="global-stats-pill">
           <span class="speed-value">{{ formatSpeed(task.download_speed) }}</span>
           <span class="speed-label">总速度</span>
+        </div>
+        <div class="global-stats-pill soft">
+          <span class="speed-value">{{ (task.progress || 0).toFixed(0) }}%</span>
+          <span class="speed-label">整体进度</span>
         </div>
       </div>
     </div>
@@ -52,7 +57,7 @@
     </div>
 
     <!-- 顶部操作栏 (增强手机端适配) -->
-    <div class="premium-card actions-panel">
+    <div class="premium-card actions-panel enhanced-actions-panel">
       <div class="progress-info">
         <div class="p-main">
           <span class="p-percent">{{ (task.progress || 0).toFixed(1) }}%</span>
@@ -545,6 +550,15 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.detail-page { display: flex; flex-direction: column; gap: 18px; }
+.detail-header { align-items: flex-start; gap: 16px; margin-bottom: 0; }
+.eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--primary-dark); font-weight: 700; margin-bottom: 6px; }
+.header-pills { display: flex; gap: 12px; flex-wrap: wrap; }
+.global-stats-pill.soft { background: #f8fafc; color: #334155; }
+.enhanced-actions-panel { border: 1px solid #eef2f7; box-shadow: 0 10px 20px -14px rgba(15, 23, 42, 0.25); }
+.verify-result-alert { box-shadow: inset 0 1px 0 rgba(255,255,255,0.5); }
+.queue-tabs { position: sticky; top: 0; z-index: 5; }
+@media (max-width: 900px) { .detail-header { flex-direction: column; align-items: stretch; } .header-pills { width: 100%; } .global-stats-pill { flex: 1; min-width: 0; } }
 .task-title-main { font-size: 1.75rem; font-weight: 800; color: #18181b; }
 .header-actions { display: flex; align-items: center; }
 
@@ -1211,10 +1225,13 @@ onUnmounted(() => {
 
 @media (max-width: 640px) {
   .actions-panel { flex-direction: column; align-items: stretch; gap: 20px; }
-  .summary-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .summary-grid, .task-summary-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
   .queue-item { flex-direction: column; gap: 12px; }
   .item-actions { justify-content: flex-end; border-top: 1px dashed #f4f4f5; padding-top: 10px; }
-  .list-toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
-  .filter-tabs { overflow-x: auto; }
+  .list-toolbar, .toolbar-row, .toolbar-three-section { flex-direction: column; align-items: stretch; gap: 12px; }
+  .filter-tabs, .queue-tabs { overflow-x: auto; flex-wrap: nowrap; }
+  .main-actions { width: 100%; display: flex; flex-wrap: wrap; }
+  .main-actions > * { flex: 1 1 calc(50% - 8px); }
+  .p-main { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
 }
 </style>
