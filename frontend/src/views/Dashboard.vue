@@ -89,9 +89,16 @@
           <h3>🕒 最近活动</h3>
           <router-link to="/tasks" class="text-link">查看全部任务 →</router-link>
         </div>
+
+        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px;">
+          <button class="btn btn-outline" :class="{ 'btn-primary': taskFilter === 'all' }" @click="taskFilter = 'all'">全部</button>
+          <button class="btn btn-outline" :class="{ 'btn-primary': taskFilter === 'single' }" @click="taskFilter = 'single'">🎯 单文件</button>
+          <button class="btn btn-outline" :class="{ 'btn-primary': taskFilter === 'batch' }" @click="taskFilter = 'batch'">📦 批量</button>
+          <button class="btn btn-outline" :class="{ 'btn-primary': taskFilter === 'failed' }" @click="taskFilter = 'failed'">❌ 失败</button>
+        </div>
         
-        <div v-if="recentTasks.length === 0" class="empty-table">
-          <p>暂无任务历史</p>
+        <div v-if="filteredRecentTasks.length === 0" class="empty-table">
+          <p>暂无符合条件的任务</p>
         </div>
         
         <div v-else class="table-wrapper">
@@ -105,7 +112,7 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="task in recentTasks" :key="task.id" class="table-row clickable" @click="goToDetail(task.id)">
+              <tr v-for="task in filteredRecentTasks" :key="task.id" class="table-row clickable" @click="goToDetail(task.id)">
                 <td class="td-name">
                   <div>{{ task.name }}</div>
                   <div class="td-sub">{{ formatTaskIntent(task) }}</div>
@@ -143,6 +150,7 @@ const router = useRouter()
 const loading = ref(true)
 const telegramStatus = ref({ authorized: false, user: null })
 const recentTasks = ref([])
+const taskFilter = ref('all')
 const stats = ref({
   totalTasks: 0,
   completedTasks: 0,
@@ -158,6 +166,20 @@ const statusText = {
   failed: '失败',
   cancelled: '已停止'
 }
+
+const filteredRecentTasks = computed(() => {
+  if (taskFilter.value === 'all') return recentTasks.value
+  if (taskFilter.value === 'single') {
+    return recentTasks.value.filter(t => (t.options?.message_to > 0 && t.options?.message_from === t.options?.message_to))
+  }
+  if (taskFilter.value === 'batch') {
+    return recentTasks.value.filter(t => !(t.options?.message_to > 0 && t.options?.message_from === t.options?.message_to))
+  }
+  if (taskFilter.value === 'failed') {
+    return recentTasks.value.filter(t => t.status === 'failed')
+  }
+  return recentTasks.value
+})
 
 function getAuthHeader() {
   return { Authorization: `Bearer ${localStorage.getItem('token')}` }

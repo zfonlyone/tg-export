@@ -76,6 +76,10 @@
           <span class="v-icon">ℹ️</span>
           <span class="v-text">{{ task.last_verify_result }}</span>
         </div>
+        <div v-if="task.error" class="verify-result-alert fade-in" style="margin-top: 10px; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b;">
+          <span class="v-icon">⚠️</span>
+          <span class="v-text">{{ task.error }}</span>
+        </div>
       </div>
       
       <div class="button-group main-actions">
