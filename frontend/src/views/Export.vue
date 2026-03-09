@@ -171,57 +171,101 @@
             </div>
           </div>
 
-          <div class="card section-card">
+          <div v-if="exportMode === 'quick'" class="card section-card quick-mode-card">
             <div class="section-head">
               <div>
-                <h3>🧭 聊天范围</h3>
-                <p>先决定自动扫描哪些对话类型，或者切到指定聊天模式只导出你关心的目标。</p>
+                <h3>⚡ 快速模式：更少步骤，更快开始</h3>
+                <p>推荐流程是“贴链接 → 自动识别消息 → 直接创建任务”。如果不贴链接，也可以只指定单个聊天快速拉取。</p>
+              </div>
+              <span class="section-badge">引导式</span>
+            </div>
+
+            <div class="quick-guide-grid">
+              <div class="quick-guide-tile">
+                <strong>1. 贴消息链接</strong>
+                <span>自动生成单消息或附近范围下载配置</span>
+              </div>
+              <div class="quick-guide-tile">
+                <strong>2. 确认媒体类型</strong>
+                <span>默认更偏向文件下载，也可在下一步微调</span>
+              </div>
+              <div class="quick-guide-tile">
+                <strong>3. 直接创建任务</strong>
+                <span>减少复杂筛选，适合移动端快速操作</span>
               </div>
             </div>
 
-            <div class="selection-grid">
-              <label class="selection-card" :class="{ active: options.private_chats }">
-                <input type="checkbox" v-model="options.private_chats">
-                <span class="title">👤 私聊</span>
-                <span class="desc">个人聊天记录</span>
-              </label>
-              <label class="selection-card" :class="{ active: options.bot_chats }">
-                <input type="checkbox" v-model="options.bot_chats">
-                <span class="title">🤖 机器人对话</span>
-                <span class="desc">Bot 相关聊天</span>
-              </label>
-              <label class="selection-card" :class="{ active: options.private_groups }">
-                <input type="checkbox" v-model="options.private_groups">
-                <span class="title">👥 私密群组</span>
-                <span class="desc">受邀请加入的群</span>
-              </label>
-              <label class="selection-card" :class="{ active: options.private_channels }">
-                <input type="checkbox" v-model="options.private_channels">
-                <span class="title">📢 私密频道</span>
-                <span class="desc">私有频道历史</span>
-              </label>
-              <label class="selection-card" :class="{ active: options.public_groups }">
-                <input type="checkbox" v-model="options.public_groups">
-                <span class="title">🌐 公开群组</span>
-                <span class="desc">公开加入的群</span>
-              </label>
-              <label class="selection-card" :class="{ active: options.public_channels }">
-                <input type="checkbox" v-model="options.public_channels">
-                <span class="title">📣 公开频道</span>
-                <span class="desc">公开频道消息</span>
+            <div class="card soft-section">
+              <div class="toggle-head">
+                <label class="inline-toggle">
+                  <input type="checkbox" v-model="enableSpecificChats">
+                  <span>
+                    <strong>📌 快速指定聊天</strong>
+                    <small>不走全量聊天类型筛选，只导出你输入的目标聊天。</small>
+                  </span>
+                </label>
+              </div>
+              <div v-if="enableSpecificChats" class="stack-gap">
+                <input v-model="specificChatsInput" @input="parseSpecificChats" class="form-input" placeholder="例如: -10012345678 或 12345678">
+                <div v-if="parsedChatIds.length > 0" class="tag-list">
+                  <button v-for="(id, idx) in parsedChatIds" :key="idx" class="id-tag" @click="removeChatId(idx)">{{ id }} ×</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <template v-else>
+            <div class="card section-card">
+              <div class="section-head">
+                <div>
+                  <h3>🧭 聊天范围</h3>
+                  <p>高级模式下先决定自动扫描哪些对话类型，再通过消息过滤控制历史范围与精细筛选。</p>
+                </div>
+                <span class="section-badge">完整控制</span>
+              </div>
+
+              <div class="selection-grid">
+                <label class="selection-card" :class="{ active: options.private_chats }">
+                  <input type="checkbox" v-model="options.private_chats">
+                  <span class="title">👤 私聊</span>
+                  <span class="desc">个人聊天记录</span>
+                </label>
+                <label class="selection-card" :class="{ active: options.bot_chats }">
+                  <input type="checkbox" v-model="options.bot_chats">
+                  <span class="title">🤖 机器人对话</span>
+                  <span class="desc">Bot 相关聊天</span>
+                </label>
+                <label class="selection-card" :class="{ active: options.private_groups }">
+                  <input type="checkbox" v-model="options.private_groups">
+                  <span class="title">👥 私密群组</span>
+                  <span class="desc">受邀请加入的群</span>
+                </label>
+                <label class="selection-card" :class="{ active: options.private_channels }">
+                  <input type="checkbox" v-model="options.private_channels">
+                  <span class="title">📢 私密频道</span>
+                  <span class="desc">私有频道历史</span>
+                </label>
+                <label class="selection-card" :class="{ active: options.public_groups }">
+                  <input type="checkbox" v-model="options.public_groups">
+                  <span class="title">🌐 公开群组</span>
+                  <span class="desc">公开加入的群</span>
+                </label>
+                <label class="selection-card" :class="{ active: options.public_channels }">
+                  <input type="checkbox" v-model="options.public_channels">
+                  <span class="title">📣 公开频道</span>
+                  <span class="desc">公开频道消息</span>
+                </label>
+              </div>
+
+              <label class="inline-toggle soft-panel">
+                <input type="checkbox" v-model="options.only_my_messages">
+                <span>
+                  <strong>只导出我的消息</strong>
+                  <small>适合做个人发言归档，避免把整个群历史都拉下来。</small>
+                </span>
               </label>
             </div>
 
-            <label class="inline-toggle soft-panel">
-              <input type="checkbox" v-model="options.only_my_messages">
-              <span>
-                <strong>只导出我的消息</strong>
-                <small>适合做个人发言归档，避免把整个群历史都拉下来。</small>
-              </span>
-            </label>
-          </div>
-
-          <div class="section-split">
             <div class="card section-card">
               <div class="toggle-head">
                 <label class="inline-toggle">
@@ -240,42 +284,42 @@
                 <p class="helper-text compact">后台会尝试自动补全缺少的 `-100` 前缀。</p>
               </div>
             </div>
+          </template>
 
-            <div class="card section-card">
-              <div class="toggle-head">
-                <label class="inline-toggle">
-                  <input type="checkbox" v-model="enableMessageRange">
-                  <span>
-                    <strong>📊 消息范围</strong>
-                    <small>支持精确范围，比如 `1354 - 1354` 仅导出单条消息。</small>
-                  </span>
-                </label>
-              </div>
-              <div v-if="enableMessageRange" class="range-grid">
-                <div>
-                  <label class="field-label">起始消息 ID</label>
-                  <input v-model.number="options.message_from" type="number" class="form-input" min="1" placeholder="起始">
-                </div>
-                <div>
-                  <label class="field-label">结束消息 ID</label>
-                  <input v-model.number="options.message_to" type="number" class="form-input" min="0" placeholder="0 = 最新">
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="card section-card">
+          <div class="card section-card" :class="{ 'advanced-emphasis': exportMode === 'advanced' }">
             <div class="toggle-head">
               <label class="inline-toggle">
                 <input type="checkbox" v-model="enableMessageFilter">
                 <span>
                   <strong>🎯 消息过滤</strong>
-                  <small>只下载指定消息，或者跳过某些消息。适合避开无关内容。</small>
+                  <small>{{ exportMode === 'quick' ? '在快速模式里，只有需要精确范围时再打开它。' : '高级模式里，消息范围与指定/跳过消息都集中放在这里。' }}</small>
                 </span>
               </label>
             </div>
 
             <div v-if="enableMessageFilter" class="stack-gap">
+              <div class="card soft-section">
+                <div class="toggle-head">
+                  <label class="inline-toggle">
+                    <input type="checkbox" v-model="enableMessageRange">
+                    <span>
+                      <strong>📊 消息范围</strong>
+                      <small>支持精确范围，比如 `1354 - 1354` 仅导出单条消息。</small>
+                    </span>
+                  </label>
+                </div>
+                <div v-if="enableMessageRange" class="range-grid">
+                  <div>
+                    <label class="field-label">起始消息 ID</label>
+                    <input v-model.number="options.message_from" type="number" class="form-input" min="1" placeholder="起始">
+                  </div>
+                  <div>
+                    <label class="field-label">结束消息 ID</label>
+                    <input v-model.number="options.message_to" type="number" class="form-input" min="0" placeholder="0 = 最新">
+                  </div>
+                </div>
+              </div>
+
               <div class="radio-group">
                 <label class="radio-pill" :class="{ active: options.filter_mode === 'skip' }">
                   <input type="radio" v-model="options.filter_mode" value="skip">
@@ -618,6 +662,7 @@ async function resolveExactMessagePreview(chatId, messageId) {
 }
 
 function applyQuickDefaults(chatId, messageId) {
+  exportMode.value = 'quick'
   options.private_chats = false
   options.bot_chats = false
   options.private_groups = false
@@ -627,6 +672,7 @@ function applyQuickDefaults(chatId, messageId) {
   options.only_my_messages = false
 
   enableSpecificChats.value = true
+  enableMessageFilter.value = true
   enableMessageRange.value = true
   specificChatsInput.value = String(chatId)
   parsedChatIds.value = [chatId]
@@ -641,9 +687,32 @@ function applyQuickDefaults(chatId, messageId) {
   options.gifs = false
   options.files = true
 
-  enableMessageFilter.value = false
-  options.filter_mode = 'none'
+  options.filter_mode = 'specify'
   options.filter_messages = []
+}
+
+function applyModeDefaults(mode) {
+  if (mode === 'quick') {
+    options.private_chats = false
+    options.bot_chats = false
+    options.private_groups = false
+    options.private_channels = false
+    options.public_groups = false
+    options.public_channels = false
+    options.only_my_messages = false
+    enableSpecificChats.value = true
+    enableMessageFilter.value = false
+    enableMessageRange.value = false
+    if (!taskName.value) taskName.value = '快速导出任务'
+  } else {
+    options.private_chats = true
+    options.private_groups = true
+    options.private_channels = true
+    enableSpecificChats.value = false
+    enableMessageFilter.value = true
+    enableMessageRange.value = false
+    if (taskName.value === '快速导出任务') taskName.value = ''
+  }
 }
 
 function parseSpecificChats() {
@@ -698,6 +767,7 @@ function applyBatchPreset(mode) {
   if (!exactChatId.value || !exactMessageId.value) return showInlineError('请先粘贴并应用消息链接')
 
   enableSpecificChats.value = true
+  enableMessageFilter.value = true
   enableMessageRange.value = true
   specificChatsInput.value = String(exactChatId.value)
   parsedChatIds.value = [exactChatId.value]
@@ -721,9 +791,11 @@ function applyBatchPreset(mode) {
 
 function setExportMode(mode) {
   exportMode.value = mode
-  if (mode === 'quick' && !exactMessageId.value) {
-    enableMessageFilter.value = false
+  if (exactMessageId.value && mode === 'quick') {
+    applyQuickDefaults(exactChatId.value, exactMessageId.value)
+    return
   }
+  applyModeDefaults(mode)
 }
 
 function resetToQuickMode() {
@@ -740,13 +812,14 @@ function resetToQuickMode() {
   exactMessagePreview.value = null
   dateFrom.value = ''
   dateTo.value = ''
-  enableSpecificChats.value = false
+  enableSpecificChats.value = true
   enableMessageRange.value = false
   enableMessageFilter.value = false
   parsedChatIds.value = []
   parsedMessageIds.value = []
 
   Object.assign(options, defaultOptions())
+  applyModeDefaults('quick')
 }
 
 function defaultOptions() {
@@ -835,20 +908,20 @@ const summaryChatScope = computed(() => {
 })
 
 const summaryMessageRange = computed(() => {
-  if (!enableMessageRange.value) return '全部历史'
+  if (!enableMessageFilter.value || !enableMessageRange.value) return exportMode.value === 'quick' ? '未启用精确消息范围' : '全部历史'
   return options.message_to > 0 ? `${options.message_from} - ${options.message_to}` : `${options.message_from} - 最新`
 })
 
 const summaryMedia = computed(() => getSummaryText('media'))
 const exportIntentLabel = computed(() => {
   if (exactMessageId.value && exactChatId.value) return '精确消息下载'
-  if (enableSpecificChats.value && parsedChatIds.value.length > 0) return '指定聊天导出'
+  if (enableSpecificChats.value && parsedChatIds.value.length > 0) return exportMode.value === 'quick' ? '快速定向导出' : '指定聊天导出'
   return exportMode.value === 'quick' ? '快速导出' : '高级归档导出'
 })
 
 const currentStepLabel = computed(() => steps.find(item => item.id === step.value)?.label || '范围')
 const currentStepHint = computed(() => {
-  if (step.value === 1) return '决定聊天范围、消息范围和过滤规则'
+  if (step.value === 1) return exportMode.value === 'quick' ? '先锁定目标聊天或消息，再决定是否做精确消息过滤' : '决定聊天范围，并在消息过滤内设置历史范围与精细规则'
   if (step.value === 2) return '选择真正需要下载的媒体类型'
   if (step.value === 3) return '配置格式、下载策略与性能参数'
   return '确认摘要并创建导出任务'
@@ -1375,6 +1448,42 @@ async function startExport() {
   cursor: pointer;
 }
 
+
+.quick-mode-card {
+  border: 1px solid rgba(24, 144, 255, 0.2);
+  background: linear-gradient(180deg, rgba(24, 144, 255, 0.05), #fff 55%);
+}
+
+.quick-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.quick-guide-tile {
+  border: 1px solid #e8eef6;
+  border-radius: 16px;
+  padding: 14px;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.quick-guide-tile strong {
+  color: var(--text);
+}
+
+.quick-guide-tile span {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.advanced-emphasis {
+  border: 1px solid rgba(250, 173, 20, 0.22);
+  background: linear-gradient(180deg, rgba(250, 173, 20, 0.05), #fff 55%);
+}
+
 @media (max-width: 1100px) {
   .export-shell {
     grid-template-columns: 1fr;
@@ -1407,7 +1516,8 @@ async function startExport() {
   .hero-grid,
   .radio-grid,
   .range-grid,
-  .preset-grid {
+  .preset-grid,
+  .quick-guide-grid {
     grid-template-columns: 1fr;
   }
 
