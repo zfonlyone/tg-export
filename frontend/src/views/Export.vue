@@ -52,6 +52,16 @@
         </label>
       </div>
       
+      <!-- 精确单条消息/文件下载 -->
+      <div style="margin-top: 15px; padding: 15px; border: 1px solid var(--border); border-radius: 8px; background: rgba(59,130,246,0.04);">
+        <div style="font-weight: 600; margin-bottom: 8px;">🎯 精确单条消息/文件下载</div>
+        <p style="color: #666; margin-bottom: 8px; font-size: 13px;">直接粘贴 Telegram 消息链接，自动填充“指定聊天 + 单条消息范围”。适合只下载某个频道里的某一个文件。</p>
+        <div style="display: flex; gap: 12px; align-items: center;">
+          <input v-model="exactMessageLinkInput" class="form-input" style="flex: 1;" placeholder="例如: https://t.me/c/3450385408/1354">
+          <button @click="applyExactMessageLink" class="btn btn-outline">一键填充</button>
+        </div>
+      </div>
+
       <!-- 指定聊天 -->
       <div style="margin-top: 20px; padding: 15px; border: 1px solid var(--border); border-radius: 8px;">
         <label class="form-checkbox" style="margin-bottom: 0;">
@@ -314,6 +324,7 @@ const error = ref('')
 const taskName = ref('')
 const specificChatsInput = ref('')
 const filterMessagesInput = ref('')
+const exactMessageLinkInput = ref('')
 const dateFrom = ref('')
 const dateTo = ref('')
 
@@ -378,6 +389,44 @@ function removeChatId(idx) {
 
 function removeMessageId(idx) {
   parsedMessageIds.value.splice(idx, 1)
+}
+
+function applyExactMessageLink() {
+  const text = exactMessageLinkInput.value.trim()
+  if (!text) {
+    showInlineError('请先粘贴 Telegram 消息链接')
+    return
+  }
+
+  const m = text.match(/https?:\/\/t\.me\/c\/(\d+)\/(\d+)/)
+  if (!m) {
+    showInlineError('目前只支持 https://t.me/c/<群组ID>/<消息ID> 这种链接')
+    return
+  }
+
+  const rawChatId = parseInt(m[1], 10)
+  const messageId = parseInt(m[2], 10)
+  if (isNaN(rawChatId) || isNaN(messageId) || messageId <= 0) {
+    showInlineError('链接解析失败，请检查后重试')
+    return
+  }
+
+  const chatId = parseInt(`-100${rawChatId}`, 10)
+  enableSpecificChats.value = true
+  enableMessageRange.value = true
+  specificChatsInput.value = String(chatId)
+  parsedChatIds.value = [chatId]
+  options.message_from = messageId
+  options.message_to = messageId
+  exactMessageLinkInput.value = text
+  error.value = ''
+}
+
+function showInlineError(msg) {
+  error.value = msg
+  setTimeout(() => {
+    if (error.value === msg) error.value = ''
+  }, 4000)
 }
 
 const options = reactive({
