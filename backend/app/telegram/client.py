@@ -780,6 +780,10 @@ class TelegramClient:
     async def get_message_by_id(self, chat_id: Union[int, str], message_id: int):
         """精确获取单条消息，供指定范围/指定文件下载使用。"""
         await self._ensure_connected()
+        if not self._peers_warmed:
+            await self._warm_up_peer_cache()
+        # 再主动解析一次 chat，确保 peer 已经被当前 client 接受。
+        await self._client.get_chat(chat_id)
         return await self._client.get_messages(chat_id, message_id)
 
     async def get_chat(self, chat_id: Union[int, str]) -> ChatInfo:

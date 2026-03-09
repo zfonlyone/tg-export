@@ -404,26 +404,33 @@ class TaskManagerMixin:
     async def _get_chats_to_export(self, options: ExportOptions) -> List[ChatInfo]:
         """获取需要导出的对话列表 (v2.4.0)"""
         logger.info(f"[Scanner] 正在检索对话列表 (specific_chats: {len(options.specific_chats)})")
-        
+
+        # 无论是否指定聊天，都先拉一遍 dialogs 预热 peer 缓存。
+        all_chats = await telegram_client.get_dialogs(limit=300)
+
         if not options.specific_chats:
              # 如果没有指定，则拉取最近对话并过滤
-             all_chats = await telegram_client.get_dialogs(limit=200)
              filtered = [
-                 c for c in all_chats 
-                 if (c.type == ChatType.PRIVATE and options.private_chats) or 
-                    (c.type in [ChatType.CHANNEL, ChatType.SUPERGROUP, ChatType.GROUP] and options.private_channels)
+                 c for c in all_chats
+                 if (c.type == ChatType.PRIVATE and options.private_chats) or
+                    (c.type in [ChatType.CHANNEL, ChatType.SUPERGROUP, ChatType.GROUP] and (options.private_channels or options.public_channels or options.private_groups or options.public_groups))
              ]
              logger.info(f"[Scanner] 自动筛选完成，匹配到 {len(filtered)} / {len(all_chats)} 个对话")
              return filtered
-        
-        # 如果指定了，则逐个获取
-        target_ids = options.specific_chats
-        chats = []
-        for cid in target_ids:
+
+        # 如果指定了，则先尝试从已预热 dialogs 中命中，命不中再逐个 get_chat。
+        target_ids = set(options.specific_chats)
+        chats = [c for c in all_chats if c.id in target_ids]
+        resolved_ids = {c.id for c in chats}
+
+        for cid in options.specific_chats:
+            if cid in resolved_ids:
+                continue
             try:
                 logger.info(f"[Scanner] 正在解析指定对话: {cid}")
                 chat_info = await telegram_client.get_chat(cid)
                 chats.append(chat_info)
+                resolved_ids.add(chat_info.id)
                 logger.info(f"[Scanner] 成功解析对话: {chat_info.title} (ID: {chat_info.id})")
             except Exception as e:
                 logger.warning(f"[Scanner] 无法获取指定对话 {cid}: {e}")
