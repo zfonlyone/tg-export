@@ -1,17 +1,17 @@
 <template>
-  <div class="fade-in">
-    <div class="page-header">
-      <div class="header-text">
+  <div class="fade-in dashboard-page">
+    <div class="page-header dashboard-header">
+      <div>
+        <div class="eyebrow">Overview</div>
         <h1>📊 仪表盘</h1>
-        <p class="subtitle">Telegram 导出任务概览</p>
+        <p class="subtitle">Telegram 导出任务概览，优先显示连接状态、最近任务与下一步操作。</p>
       </div>
       <div class="connection-pill" :class="{ connected: telegramStatus.authorized }">
         <span class="indicator"></span>
         {{ telegramStatus.authorized ? 'Telegram 已连接' : '未连接' }}
       </div>
     </div>
-    
-    <!-- 核心统计部分 -->
+
     <div class="stats-container">
       <div class="stat-glass-card primary">
         <div class="s-icon">📦</div>
@@ -35,107 +35,108 @@
         </div>
       </div>
     </div>
-    
-    <div class="dashboard-grid">
-      <!-- 会话卡片 -->
-      <div class="premium-card session-card">
-        <div class="p-card-head">
-          <h3>👤 会话详情</h3>
-          <button @click="refreshStatus" class="btn-icon-only">🔄</button>
-        </div>
-        
-        <div v-if="loading" class="card-loading">
-          <div class="skeleton-avatar"></div>
-          <div class="skeleton-text"></div>
-        </div>
-        
-        <div v-else-if="telegramStatus.authorized" class="user-profile animate-slide">
-          <div class="user-avatar">
-            {{ telegramStatus.user?.first_name?.[0] || '?' }}
+
+    <div class="dashboard-shell">
+      <div class="dashboard-main">
+        <div class="premium-card recent-card">
+          <div class="p-card-head compact-head">
+            <div>
+              <div class="eyebrow">Recent activity</div>
+              <h3>🕒 最近活动</h3>
+            </div>
+            <router-link to="/tasks" class="text-link">查看全部任务 →</router-link>
           </div>
-          <div class="user-info">
-            <div class="u-name">{{ telegramStatus.user?.first_name }} {{ telegramStatus.user?.last_name }}</div>
-            <div class="u-handle">@{{ telegramStatus.user?.username || '无用户名' }}</div>
-            <div class="u-id">UID: {{ telegramStatus.user?.id }}</div>
+
+          <div class="filter-bar">
+            <button class="filter-chip" :class="{ active: taskFilter === 'all' }" @click="taskFilter = 'all'">全部</button>
+            <button class="filter-chip" :class="{ active: taskFilter === 'single' }" @click="taskFilter = 'single'">🎯 单文件</button>
+            <button class="filter-chip" :class="{ active: taskFilter === 'batch' }" @click="taskFilter = 'batch'">📦 批量</button>
+            <button class="filter-chip" :class="{ active: taskFilter === 'failed' }" @click="taskFilter = 'failed'">❌ 失败</button>
           </div>
-          <div class="u-verified-badge">✓ 已验证会话</div>
-        </div>
-        
-        <div v-else class="auth-required">
-          <div class="empty-mini-icon">🚫</div>
-          <p>请先登录您的 Telegram 账号以开始导出任务。</p>
-          <router-link to="/settings" class="btn-premium sm">前往设置</router-link>
+
+          <div v-if="filteredRecentTasks.length === 0" class="empty-table enhanced-empty">
+            <div class="empty-icon">🫧</div>
+            <p>暂无符合条件的任务</p>
+          </div>
+
+          <div v-else class="task-list-grid">
+            <button v-for="task in filteredRecentTasks" :key="task.id" class="task-list-card" @click="goToDetail(task.id)">
+              <div class="task-card-head">
+                <div>
+                  <div class="task-name">{{ task.name }}</div>
+                  <div class="task-intent">{{ formatTaskIntent(task) }}</div>
+                </div>
+                <span :class="['status-pill', task.status]">{{ statusText[task.status] || task.status }}</span>
+              </div>
+              <div class="task-progress-row">
+                <div class="row-progress-bar">
+                  <div class="row-fill" :style="{ width: task.progress + '%' }" :class="task.status"></div>
+                </div>
+                <span class="row-percent">{{ (task.progress || 0).toFixed(0) }}%</span>
+              </div>
+              <div class="task-footer-meta">{{ formatDate(task.created_at) }}</div>
+            </button>
+          </div>
         </div>
       </div>
 
-      <!-- 快速操作 -->
-      <div class="premium-card actions-card">
-        <div class="p-card-head"><h3>⚡ 快速操作</h3></div>
-        <div class="action-tiles">
-          <router-link to="/export" class="action-tile purple">
-            <span class="t-icon">📥</span>
-            <span class="t-label">新建导出</span>
-          </router-link>
-          <router-link to="/tasks" class="action-tile blue">
-            <span class="t-icon">📋</span>
-            <span class="t-label">下载管理</span>
-          </router-link>
-        </div>
-      </div>
+      <aside class="dashboard-side">
+        <div class="premium-card session-card">
+          <div class="p-card-head compact-head">
+            <div>
+              <div class="eyebrow">Session</div>
+              <h3>👤 会话详情</h3>
+            </div>
+            <button @click="refreshStatus" class="btn-icon-only">🔄</button>
+          </div>
 
-      <!-- 最近活动 -->
-      <div class="premium-card table-card full-width">
-        <div class="p-card-head">
-          <h3>🕒 最近活动</h3>
-          <router-link to="/tasks" class="text-link">查看全部任务 →</router-link>
+          <div v-if="loading" class="card-loading">
+            <div class="skeleton-avatar"></div>
+            <div class="skeleton-text"></div>
+          </div>
+
+          <div v-else-if="telegramStatus.authorized" class="user-profile animate-slide">
+            <div class="user-avatar">{{ telegramStatus.user?.first_name?.[0] || '?' }}</div>
+            <div class="user-info">
+              <div class="u-name">{{ telegramStatus.user?.first_name }} {{ telegramStatus.user?.last_name }}</div>
+              <div class="u-handle">@{{ telegramStatus.user?.username || '无用户名' }}</div>
+              <div class="u-id">UID: {{ telegramStatus.user?.id }}</div>
+            </div>
+            <div class="u-verified-badge">✓ 已验证会话</div>
+          </div>
+
+          <div v-else class="auth-required enhanced-empty small-empty">
+            <div class="empty-mini-icon">🚫</div>
+            <p>请先登录您的 Telegram 账号以开始导出任务。</p>
+            <router-link to="/settings" class="btn-premium sm">前往设置</router-link>
+          </div>
         </div>
 
-        <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px;">
-          <button class="btn btn-outline" :class="{ 'btn-primary': taskFilter === 'all' }" @click="taskFilter = 'all'">全部</button>
-          <button class="btn btn-outline" :class="{ 'btn-primary': taskFilter === 'single' }" @click="taskFilter = 'single'">🎯 单文件</button>
-          <button class="btn btn-outline" :class="{ 'btn-primary': taskFilter === 'batch' }" @click="taskFilter = 'batch'">📦 批量</button>
-          <button class="btn btn-outline" :class="{ 'btn-primary': taskFilter === 'failed' }" @click="taskFilter = 'failed'">❌ 失败</button>
+        <div class="premium-card actions-card">
+          <div class="p-card-head compact-head">
+            <div>
+              <div class="eyebrow">Actions</div>
+              <h3>⚡ 快速操作</h3>
+            </div>
+          </div>
+          <div class="action-tiles vertical-tiles">
+            <router-link to="/export" class="action-tile purple">
+              <span class="t-icon">📥</span>
+              <span class="tile-copy">
+                <strong>新建导出</strong>
+                <small>开始新的历史记录或文件导出任务</small>
+              </span>
+            </router-link>
+            <router-link to="/tasks" class="action-tile blue">
+              <span class="t-icon">📋</span>
+              <span class="tile-copy">
+                <strong>下载管理</strong>
+                <small>查看失败任务、进度和最近导出</small>
+              </span>
+            </router-link>
+          </div>
         </div>
-        
-        <div v-if="filteredRecentTasks.length === 0" class="empty-table">
-          <p>暂无符合条件的任务</p>
-        </div>
-        
-        <div v-else class="table-wrapper">
-          <table class="modern-table">
-            <thead>
-              <tr>
-                <th>任务名称</th>
-                <th>状态</th>
-                <th>进度</th>
-                <th>创建时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="task in filteredRecentTasks" :key="task.id" class="table-row clickable" @click="goToDetail(task.id)">
-                <td class="td-name">
-                  <div>{{ task.name }}</div>
-                  <div class="td-sub">{{ formatTaskIntent(task) }}</div>
-                </td>
-                <td>
-                  <span :class="['status-pill', task.status]">
-                    {{ statusText[task.status] || task.status }}
-                  </span>
-                </td>
-                <td>
-                  <div class="row-progress-container">
-                    <div class="row-progress-bar">
-                      <div class="row-fill" :style="{ width: task.progress + '%' }" :class="task.status"></div>
-                    </div>
-                    <span class="row-percent">{{ (task.progress || 0).toFixed(0) }}%</span>
-                  </div>
-                </td>
-                <td class="td-time">{{ formatDate(task.created_at) }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+      </aside>
     </div>
   </div>
 </template>
@@ -146,17 +147,11 @@ import { useRouter } from 'vue-router'
 import axios from 'axios'
 
 const router = useRouter()
-
 const loading = ref(true)
 const telegramStatus = ref({ authorized: false, user: null })
 const recentTasks = ref([])
 const taskFilter = ref('all')
-const stats = ref({
-  totalTasks: 0,
-  completedTasks: 0,
-  runningTasks: 0,
-  totalSize: 0
-})
+const stats = ref({ totalTasks: 0, completedTasks: 0, runningTasks: 0, totalSize: 0 })
 
 const statusText = {
   extracting: '正在扫描',
@@ -169,15 +164,9 @@ const statusText = {
 
 const filteredRecentTasks = computed(() => {
   if (taskFilter.value === 'all') return recentTasks.value
-  if (taskFilter.value === 'single') {
-    return recentTasks.value.filter(t => (t.options?.message_to > 0 && t.options?.message_from === t.options?.message_to))
-  }
-  if (taskFilter.value === 'batch') {
-    return recentTasks.value.filter(t => !(t.options?.message_to > 0 && t.options?.message_from === t.options?.message_to))
-  }
-  if (taskFilter.value === 'failed') {
-    return recentTasks.value.filter(t => t.status === 'failed')
-  }
+  if (taskFilter.value === 'single') return recentTasks.value.filter(t => (t.options?.message_to > 0 && t.options?.message_from === t.options?.message_to))
+  if (taskFilter.value === 'batch') return recentTasks.value.filter(t => !(t.options?.message_to > 0 && t.options?.message_from === t.options?.message_to))
+  if (taskFilter.value === 'failed') return recentTasks.value.filter(t => t.status === 'failed')
   return recentTasks.value
 })
 
@@ -192,10 +181,9 @@ async function refreshStatus() {
       axios.get('/api/telegram/status', { headers: getAuthHeader() }),
       axios.get('/api/export/tasks', { headers: getAuthHeader() })
     ])
-    
+
     telegramStatus.value = statusRes.data
     recentTasks.value = tasksRes.data.slice(-5).reverse()
-    
     const tasks = tasksRes.data
     stats.value = {
       totalTasks: tasks.length,
@@ -208,14 +196,6 @@ async function refreshStatus() {
   } finally {
     loading.value = false
   }
-}
-
-function formatSize(bytes) {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let i = 0
-  while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++ }
-  return bytes.toFixed(1) + ' ' + units[i]
 }
 
 function formatDate(dateStr) {
@@ -235,14 +215,8 @@ function formatTaskIntent(task) {
       ? `指定 ${opts.specific_chats.length} 个聊天`
       : '自动范围'
 
-  const rangePart = opts.message_to > 0
-    ? `${opts.message_from}-${opts.message_to}`
-    : `${opts.message_from}-最新`
-
-  const modePart = opts.message_to > 0 && opts.message_from === opts.message_to
-    ? '🎯 单消息任务'
-    : '📦 批量任务'
-
+  const rangePart = opts.message_to > 0 ? `${opts.message_from}-${opts.message_to}` : `${opts.message_from}-最新`
+  const modePart = opts.message_to > 0 && opts.message_from === opts.message_to ? '🎯 单消息任务' : '📦 批量任务'
   return `${modePart} · ${chatPart} · ${rangePart}`
 }
 
@@ -250,214 +224,68 @@ onMounted(refreshStatus)
 </script>
 
 <style scoped>
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 40px;
-}
-
-.header-text h1 { font-size: 2.5rem; font-weight: 800; margin-bottom: 8px; }
-.subtitle { color: #71717a; font-size: 1.1rem; }
-
-.connection-pill {
-  padding: 8px 16px;
-  background: #f4f4f5;
-  border-radius: 50px;
-  font-size: 0.85rem;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #71717a;
-}
-
+.dashboard-page { display: flex; flex-direction: column; gap: 18px; }
+.dashboard-header { align-items: flex-start; gap: 16px; margin-bottom: 0; }
+.eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--primary-dark); font-weight: 700; margin-bottom: 6px; }
+.subtitle { color: #71717a; font-size: 1rem; }
+.connection-pill { padding: 8px 16px; background: #f4f4f5; border-radius: 50px; font-size: 0.85rem; font-weight: 700; display: flex; align-items: center; gap: 8px; color: #71717a; }
 .connection-pill.connected { background: #dcfce7; color: #166534; }
 .connection-pill .indicator { width: 8px; height: 8px; border-radius: 50%; background: #a1a1aa; }
 .connection-pill.connected .indicator { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
-
-/* Stats Container */
-.stats-container {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 20px;
-  margin-bottom: 30px;
-}
-
-@media (max-width: 1000px) {
-  .stats-container { grid-template-columns: repeat(2, 1fr); }
-}
-
-.stat-glass-card {
-  padding: 24px;
-  border-radius: 24px;
-  background: white;
-  border: 1px solid #f4f4f5;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);
-}
-
-.s-icon {
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.5rem;
-  background: #f4f4f5;
-}
-
+.stats-container { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.stat-glass-card { padding: 24px; border-radius: 24px; background: white; border: 1px solid #f4f4f5; display: flex; align-items: center; gap: 18px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+.s-icon { width: 56px; height: 56px; border-radius: 16px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; background: #f4f4f5; }
 .stat-glass-card.primary .s-icon { background: #eff6ff; }
 .stat-glass-card.success .s-icon { background: #f0fdf4; }
 .stat-glass-card.info .s-icon { background: #fdf4ff; }
-.stat-glass-card.warning .s-icon { background: #fffbeb; }
-
 .s-value { font-size: 1.75rem; font-weight: 800; color: #18181b; line-height: 1.2; }
 .s-label { font-size: 0.85rem; color: #71717a; font-weight: 600; }
-
-/* Dashboard Grid */
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 24px;
-}
-
-.full-width { grid-column: span 2; }
-
-@media (max-width: 800px) {
-  .dashboard-grid { grid-template-columns: 1fr; }
-  .full-width { grid-column: span 1; }
-}
-
-.premium-card {
-  background: white;
-  border-radius: 24px;
-  padding: 30px;
-  border: 1px solid #f4f4f5;
-  box-shadow: 0 10px 15px -3px rgba(0,0,0,0.04);
-}
-
-.p-card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 24px;
-}
-
-.p-card-head h3 { font-size: 1.1rem; font-weight: 700; color: #18181b; }
-
-/* Session Profile */
-.user-profile {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 16px;
-  background: #fafafa;
-  border-radius: 20px;
-  position: relative;
-}
-
-.user-avatar {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--primary), #a855f7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-size: 1.5rem;
-  font-weight: 800;
-  box-shadow: 0 8px 16px -4px rgba(168, 85, 247, 0.4);
-}
-
+.dashboard-shell { display: grid; grid-template-columns: minmax(0, 1.4fr) 360px; gap: 20px; align-items: start; }
+.dashboard-side { display: flex; flex-direction: column; gap: 20px; }
+.premium-card { background: white; border-radius: 24px; padding: 24px; border: 1px solid #f4f4f5; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.04); }
+.compact-head { margin-bottom: 18px; }
+.p-card-head { display: flex; justify-content: space-between; align-items: center; }
+.task-list-grid { display: grid; gap: 14px; }
+.task-list-card { text-align: left; border: 1px solid #eef2f7; background: #fff; border-radius: 18px; padding: 16px; cursor: pointer; transition: 0.2s; }
+.task-list-card:hover { transform: translateY(-2px); box-shadow: 0 10px 18px -12px rgba(0,0,0,0.25); }
+.task-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+.task-name { font-weight: 800; color: #18181b; margin-bottom: 4px; }
+.task-intent { color: #64748b; font-size: 13px; }
+.task-progress-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.row-progress-bar { flex: 1; height: 8px; background: #f1f5f9; border-radius: 999px; overflow: hidden; }
+.row-fill { height: 100%; background: #3b82f6; }
+.row-fill.completed { background: #22c55e; }
+.row-fill.failed { background: #ef4444; }
+.row-fill.cancelled { background: #94a3b8; }
+.row-percent, .task-footer-meta { color: #64748b; font-size: 12px; }
+.filter-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.filter-chip { border: 1px solid #e2e8f0; background: #fff; border-radius: 999px; padding: 8px 14px; cursor: pointer; font-weight: 600; }
+.filter-chip.active { background: #111827; color: #fff; border-color: #111827; }
+.user-profile { display: flex; align-items: center; gap: 18px; padding: 16px; background: #fafafa; border-radius: 20px; position: relative; }
+.user-avatar { width: 64px; height: 64px; border-radius: 50%; background: linear-gradient(135deg, var(--primary), #a855f7); display: flex; align-items: center; justify-content: center; color: white; font-size: 1.5rem; font-weight: 800; box-shadow: 0 8px 16px -4px rgba(168, 85, 247, 0.4); }
 .user-info { flex: 1; }
 .u-name { font-weight: 700; font-size: 1.1rem; }
 .u-handle { color: var(--primary); font-weight: 600; font-size: 0.9rem; }
 .u-id { color: #a1a1aa; font-size: 0.75rem; margin-top: 4px; }
-
-.u-verified-badge {
-  position: absolute;
-  top: -10px;
-  right: 16px;
-  background: #22c55e;
-  color: white;
-  padding: 4px 10px;
-  border-radius: 50px;
-  font-size: 0.7rem;
-  font-weight: 800;
-  box-shadow: 0 4px 10px rgba(34, 197, 94, 0.3);
-}
-
-/* Action Tiles */
-.action-tiles {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-}
-
-.action-tile {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  padding: 20px;
-  border-radius: 20px;
-  text-decoration: none;
-  transition: all 0.2s;
-}
-
-.action-tile:hover { transform: translateY(-4px); }
-
+.u-verified-badge { position: absolute; top: -10px; right: 16px; background: #22c55e; color: white; padding: 4px 10px; border-radius: 50px; font-size: 0.7rem; font-weight: 800; }
+.vertical-tiles { grid-template-columns: 1fr; }
+.action-tiles { display: grid; gap: 12px; }
+.action-tile { display: flex; align-items: center; gap: 14px; padding: 18px; border-radius: 20px; text-decoration: none; transition: all 0.2s; }
+.action-tile:hover { transform: translateY(-2px); }
 .action-tile.purple { background: #fdf4ff; color: #701a75; }
 .action-tile.blue { background: #eff6ff; color: #1e40af; }
-.action-tile.green { background: #f0fdf4; color: #166534; }
-
+.tile-copy { display: flex; flex-direction: column; }
+.tile-copy small { opacity: 0.8; }
 .t-icon { font-size: 1.5rem; }
-.t-label { font-size: 0.85rem; font-weight: 700; }
-
-/* Minimal Table */
-.table-wrapper { overflow-x: auto; }
-.modern-table { width: 100%; border-collapse: separate; border-spacing: 0; }
-.modern-table th { text-align: left; padding: 12px 16px; color: #71717a; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-.modern-table td { padding: 16px; border-top: 1px solid #f4f4f5; font-size: 0.9rem; }
-
-.table-row.clickable { cursor: pointer; transition: background 0.2s; }
-.table-row.clickable:hover { background: #fafafa; }
-
-.td-name { font-weight: 700; color: #18181b; }
-.td-sub { margin-top: 4px; font-size: 0.78rem; color: #71717a; font-weight: 500; }
-.td-time { color: #a1a1aa; font-size: 0.8rem; }
-
-.status-pill {
-  padding: 4px 10px;
-  border-radius: 50px;
-  font-size: 0.75rem;
-  font-weight: 700;
-  white-space: nowrap;
+.enhanced-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 16px; color: #64748b; }
+.empty-icon { font-size: 2rem; margin-bottom: 10px; }
+.small-empty { text-align: center; }
+@media (max-width: 1100px) {
+  .dashboard-shell { grid-template-columns: 1fr; }
 }
-
-.status-pill.completed { background: #e8f5e9; color: #2e7d32; }
-.status-pill.running, .status-pill.extracting { background: #e3f2fd; color: #1976d2; }
-.status-pill.failed { background: #ffebee; color: #c62828; }
-
-.row-progress-container { display: flex; align-items: center; gap: 10px; width: 140px; }
-.row-progress-bar { flex: 1; height: 6px; background: #f4f4f5; border-radius: 3px; overflow: hidden; }
-.row-fill { height: 100%; transition: width 0.3s; background: #3b82f6; }
-.row-fill.completed { background: #22c55e; }
-.row-percent { font-size: 0.75rem; font-weight: 700; color: #71717a; width: 35px; }
-
-.text-link { color: var(--primary); font-weight: 600; text-decoration: none; font-size: 0.85rem; }
-
-.btn-icon-only {
-  background: none; border: none; cursor: pointer; font-size: 1.2rem;
-  transition: transform 0.3s;
+@media (max-width: 768px) {
+  .dashboard-header, .task-card-head { flex-direction: column; align-items: stretch; }
+  .stats-container { grid-template-columns: 1fr; }
+  .premium-card, .stat-glass-card { padding: 18px; }
 }
-.btn-icon-only:hover { transform: rotate(180deg); }
-
-.animate-slide { animation: slideUp 0.4s ease-out; }
-@keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 </style>
