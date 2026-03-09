@@ -80,6 +80,10 @@
           <span class="v-icon">⚠️</span>
           <span class="v-text">{{ task.error }}</span>
         </div>
+        <div v-if="task.error" style="margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap;">
+          <button @click="scanMessages(true)" class="btn-premium warning sm">🔍 重新全量扫描</button>
+          <button @click="verifyIntegrity" class="btn-premium primary sm">📊 再次校验</button>
+        </div>
       </div>
       
       <div class="button-group main-actions">
