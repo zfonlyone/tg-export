@@ -36,6 +36,21 @@
       </div>
     </div>
 
+    <!-- 单消息任务目标文件卡片 -->
+    <div v-if="isSingleMessageTask && firstTargetFile" class="premium-card" style="margin-bottom: 20px;">
+      <div class="p-card-head" style="margin-bottom: 12px;"><h3>🎯 目标文件</h3></div>
+      <div class="summary-chip" style="background: rgba(59,130,246,0.05); border-color: rgba(59,130,246,0.15);">
+        <span class="label">文件名</span>
+        <span class="value">{{ firstTargetFile.file_name }}</span>
+        <div style="font-size: 0.85rem; color: #64748b; margin-top: 6px; display: flex; flex-wrap: wrap; gap: 12px;">
+          <span>消息 ID：{{ firstTargetFile.message_id }}</span>
+          <span>聊天 ID：{{ firstTargetFile.chat_id }}</span>
+          <span>大小：{{ formatSize(firstTargetFile.file_size) }}</span>
+          <span>类型：{{ getFileIcon(firstTargetFile.media_type) }} {{ firstTargetFile.media_type }}</span>
+        </div>
+      </div>
+    </div>
+
     <!-- 顶部操作栏 (增强手机端适配) -->
     <div class="premium-card actions-panel">
       <div class="progress-info">
@@ -264,6 +279,16 @@ const filteredList = computed(() => {
 const isSingleMessageTask = computed(() => {
   const opts = task.value?.options || {}
   return opts.message_to > 0 && opts.message_from === opts.message_to
+})
+
+const firstTargetFile = computed(() => {
+  const candidates = [
+    ...(queue.value.waiting || []),
+    ...(queue.value.downloading || []),
+    ...(queue.value.completed || []),
+    ...(queue.value.failed || [])
+  ]
+  return candidates[0] || null
 })
 
 async function fetchData() {

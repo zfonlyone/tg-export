@@ -218,8 +218,8 @@ function formatTaskIntent(task) {
     : `${opts.message_from}-最新`
 
   const modePart = opts.message_to > 0 && opts.message_from === opts.message_to
-    ? '单消息任务'
-    : '批量任务'
+    ? '🎯 单消息任务'
+    : '📦 批量任务'
 
   return `${modePart} · ${chatPart} · ${rangePart}`
 }
