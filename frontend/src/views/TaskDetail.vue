@@ -453,8 +453,10 @@ async function verifyIntegrity() {
 async function toggleProxy() {
   locks.proxy = Date.now() // 加锁
   try {
-    const res = await axios.post(`/api/export/${taskId}/proxy`, null, {
-      params: { enabled: proxyEnabled.value, url: proxyUrl.value },
+    const res = await axios.post(`/api/export/${taskId}/proxy`, {
+      enabled: proxyEnabled.value,
+      url: proxyUrl.value
+    }, {
       headers: getAuthHeader()
     })
     if (res.data.status !== 'ok') {
@@ -473,8 +475,10 @@ async function updateProxyUrl() {
   if (proxyEnabled.value && proxyUrl.value) {
     locks.proxy = Date.now() // 修改地址也加锁
     try {
-      await axios.post(`/api/export/${taskId}/proxy`, null, {
-        params: { enabled: true, url: proxyUrl.value },
+      await axios.post(`/api/export/${taskId}/proxy`, {
+        enabled: true,
+        url: proxyUrl.value
+      }, {
         headers: getAuthHeader()
       })
     } catch (err) {

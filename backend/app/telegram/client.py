@@ -298,12 +298,12 @@ class TelegramClient:
         await self._ensure_connected()
         
         self._phone = phone
-        print(f"[TG] 发送验证码到 {phone}...")
+        logger.info("[TG] sending login code")
         
         try:
             sent_code = await self._client.send_code(phone)
             self._phone_code_hash = sent_code.phone_code_hash
-            print(f"[TG] 验证码已发送，hash: {self._phone_code_hash[:10]}...")
+            logger.info("[TG] login code sent")
             return self._phone_code_hash
         except FloodWait as e:
             print(f"[TG] 需要等待 {e.value} 秒后再操作")
@@ -321,11 +321,11 @@ class TelegramClient:
         try:
             if password:
                 # 两步验证
-                print(f"[TG] 使用两步验证密码登录...")
+                logger.info("[TG] signing in with 2FA password")
                 await self._client.check_password(password)
             else:
                 # 验证码登录
-                print(f"[TG] 使用验证码登录: {code}")
+                logger.info("[TG] signing in with phone code")
                 await self._client.sign_in(phone, phone_code_hash, code)
             
             self._is_authorized = True
