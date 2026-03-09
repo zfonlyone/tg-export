@@ -343,6 +343,7 @@ const filterMessagesInput = ref('')
 const exactMessageLinkInput = ref('')
 const exactMessageId = ref(null)
 const exactChatId = ref(null)
+const exactChatTitle = ref('')
 const dateFrom = ref('')
 const dateTo = ref('')
 
@@ -394,6 +395,17 @@ function parseMessageIds(text) {
   return ids
 }
 
+async function resolveExactChatTitle(chatId) {
+  try {
+    const res = await axios.get('/api/telegram/dialogs', { headers: getAuthHeader() })
+    const hit = (res.data || []).find(c => c.id === chatId)
+    exactChatTitle.value = hit?.title || ''
+  } catch (err) {
+    console.error('获取频道名称失败:', err)
+    exactChatTitle.value = ''
+  }
+}
+
 function parseSpecificChats() {
   parsedChatIds.value = parseNumbers(specificChatsInput.value)
 }
@@ -432,6 +444,7 @@ function applyExactMessageLink() {
 
   const chatId = parseInt(`-100${rawChatId}`, 10)
   exactChatId.value = chatId
+  exactChatTitle.value = ''
   exactMessageId.value = messageId
   enableSpecificChats.value = true
   enableMessageRange.value = true
@@ -453,6 +466,7 @@ function applyExactMessageLink() {
   // 自动生成一个顺手的任务名
   taskName.value = `tg-${rawChatId}-${messageId}`
   error.value = ''
+  resolveExactChatTitle(chatId)
 }
 
 function applyBatchPreset(mode) {
