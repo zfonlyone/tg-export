@@ -72,6 +72,10 @@
           <button @click="applyBatchPreset('backward')" class="btn btn-outline" style="padding: 6px 10px;">从 1 到此消息</button>
           <button @click="applyBatchPreset('window100')" class="btn btn-outline" style="padding: 6px 10px;">前后各 50 条</button>
         </div>
+        <div v-if="exactMessageId && exactChatId" style="margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap;">
+          <button @click="quickStartFromLink" class="btn btn-success">🚀 立即创建下载任务</button>
+          <button @click="step = 2" class="btn btn-outline">继续微调媒体与下载设置</button>
+        </div>
       </div>
 
       <!-- 指定聊天 -->
@@ -436,6 +440,18 @@ function applyExactMessageLink() {
   options.message_from = messageId
   options.message_to = messageId
   exactMessageLinkInput.value = text
+
+  // 快速模式下默认只下载文件，减少误操作
+  options.photos = false
+  options.videos = false
+  options.voice_messages = false
+  options.video_messages = false
+  options.stickers = false
+  options.gifs = false
+  options.files = true
+
+  // 自动生成一个顺手的任务名
+  taskName.value = `tg-${rawChatId}-${messageId}`
   error.value = ''
 }
 
@@ -549,6 +565,18 @@ function getSummaryText(type) {
     return items.join(', ') || '无'
   }
   return ''
+}
+
+async function quickStartFromLink() {
+  if (!exactChatId.value || !exactMessageId.value) {
+    showInlineError('请先粘贴并应用消息链接')
+    return
+  }
+  if (!taskName.value) {
+    taskName.value = `tg-${String(exactChatId.value).replace('-100', '')}-${exactMessageId.value}`
+  }
+  step.value = 4
+  await startExport()
 }
 
 async function startExport() {
