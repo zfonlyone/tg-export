@@ -292,6 +292,37 @@ class TaskManagerMixin:
         }
         for d in media_dirs.values(): d.mkdir(parents=True, exist_ok=True)
 
+        # 精确单条消息范围：直接取 message_id，避免走整段历史扫描导致 1354-1354 命不中。
+        if options.message_to > 0 and options.message_from == options.message_to:
+            target_id = options.message_from
+            logger.info(f"任务 {task.id[:8]}: [Scanner] 执行精确单条消息扫描: {chat.title} ({chat.id}) msg_id={target_id}")
+            try:
+                msg = await telegram_client.get_message_by_id(chat.id, target_id)
+            except Exception as e:
+                logger.warning(f"任务 {task.id[:8]}: [Scanner] 获取指定消息失败 msg_id={target_id}: {e}")
+                return messages, highest_id_this_scan
+
+            if msg:
+                highest_id_this_scan = max(highest_id_this_scan, msg.id)
+                task.total_messages += 1
+                task.processed_messages += 1
+                media_type = telegram_client.get_media_type(msg)
+                if media_type:
+                    task.total_media += 1
+                    if self._should_download_media(media_type, options):
+                        item = task.get_download_item(msg.id, chat.id)
+                        if not item:
+                            unified_filename = self._get_media_filename(msg, media_type)
+                            item = DownloadItem(
+                                id=f"{chat.id}_{msg.id}", message_id=msg.id, chat_id=chat.id,
+                                file_name=unified_filename, file_size=self._get_file_size(msg) or 0,
+                                media_type=media_type,
+                                file_path=str((media_dirs.get(media_type, chat_dir/"other") / unified_filename).relative_to(export_path))
+                            )
+                            self.enqueue_item(task, item)
+                logger.info(f"任务 {task.id[:8]}: [Scanner] 单条消息扫描完成 msg_id={target_id}, media_type={media_type}")
+            return messages, highest_id_this_scan
+
         # 全量扫描定义：从用户设置的起始点开始
         if getattr(task, '_force_full_scan', False):
             start_id = options.message_from
