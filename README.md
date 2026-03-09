@@ -26,6 +26,63 @@
 
 ## 🛠️ 安装与部署
 
+### 本机开发仓库 vs 生产运行目录（重要）
+
+如果这套服务部署在当前机器上，请注意：
+
+- **开发仓库**：`/root/code/docker/tg-export`
+- **实际生产目录**：`/etc/tg-export`
+- **线上容器**：`tg-export`
+
+也就是说：
+
+> 只修改 `/root/code/docker/tg-export` 并不代表线上已经更新。
+
+必须把代码同步到 `/etc/tg-export`，然后在那里重新 `docker compose up -d --build`，线上才会真正生效。
+
+### 推荐更新流程（本机部署）
+
+```bash
+# 1) 在开发仓库改代码
+cd /root/code/docker/tg-export
+
+# 2) 先验证前端能构建
+cd frontend && npm run build && cd ..
+
+# 3) 提交代码
+git add .
+git commit -m "your change"
+
+# 4) 同步到生产目录
+rsync -a --delete \
+  --exclude '.git/' \
+  --exclude '__pycache__/' \
+  --exclude '*.pyc' \
+  --exclude '.env' \
+  --exclude 'data/' \
+  /root/code/docker/tg-export/ /etc/tg-export/
+
+# 5) 在生产目录重建
+cd /etc/tg-export
+docker compose up -d --build
+
+# 6) 验证是否真的更新
+docker compose ps
+docker inspect tg-export --format 'started={{.State.StartedAt}} image={{.Image}}'
+docker exec tg-export sh -lc 'sed -n "1,20p" /app/frontend/dist/index.html'
+curl -sS http://127.0.0.1:9528/ | sed -n '1,20p'
+curl -sS https://tg-export.181028.xyz/ | sed -n '1,20p'
+```
+
+### 白屏排查提示
+
+如果页面白屏：
+
+1. 先看公网返回的 `index-*.js` / 页面 chunk 是不是旧 hash
+2. 再看容器内 `/app/frontend/dist/index.html` 是不是同一套 hash
+3. 如果容器内还是旧 hash：说明根本没重建成功
+4. 如果容器内已新、公网仍旧：再怀疑 Cloudflare 缓存或代理缓存
+
 ### 标准 Docker Compose 部署（不依赖 `tg-export.sh`）
 ```bash
 git clone https://github.com/zfonlyone/tg-export.git
