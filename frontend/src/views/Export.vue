@@ -60,6 +60,13 @@
           <input v-model="exactMessageLinkInput" class="form-input" style="flex: 1;" placeholder="例如: https://t.me/c/3450385408/1354">
           <button @click="applyExactMessageLink" class="btn btn-outline">一键填充</button>
         </div>
+        <div v-if="exactMessageId && exactChatId" style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+          <span style="font-size: 12px; color: #666;">批量快捷范围：</span>
+          <button @click="applyBatchPreset('single')" class="btn btn-outline" style="padding: 6px 10px;">仅此消息</button>
+          <button @click="applyBatchPreset('forward')" class="btn btn-outline" style="padding: 6px 10px;">从此消息到最新</button>
+          <button @click="applyBatchPreset('backward')" class="btn btn-outline" style="padding: 6px 10px;">从 1 到此消息</button>
+          <button @click="applyBatchPreset('window100')" class="btn btn-outline" style="padding: 6px 10px;">前后各 50 条</button>
+        </div>
       </div>
 
       <!-- 指定聊天 -->
@@ -325,6 +332,8 @@ const taskName = ref('')
 const specificChatsInput = ref('')
 const filterMessagesInput = ref('')
 const exactMessageLinkInput = ref('')
+const exactMessageId = ref(null)
+const exactChatId = ref(null)
 const dateFrom = ref('')
 const dateTo = ref('')
 
@@ -412,6 +421,8 @@ function applyExactMessageLink() {
   }
 
   const chatId = parseInt(`-100${rawChatId}`, 10)
+  exactChatId.value = chatId
+  exactMessageId.value = messageId
   enableSpecificChats.value = true
   enableMessageRange.value = true
   specificChatsInput.value = String(chatId)
@@ -419,6 +430,34 @@ function applyExactMessageLink() {
   options.message_from = messageId
   options.message_to = messageId
   exactMessageLinkInput.value = text
+  error.value = ''
+}
+
+function applyBatchPreset(mode) {
+  if (!exactChatId.value || !exactMessageId.value) {
+    showInlineError('请先粘贴并应用消息链接')
+    return
+  }
+
+  enableSpecificChats.value = true
+  enableMessageRange.value = true
+  specificChatsInput.value = String(exactChatId.value)
+  parsedChatIds.value = [exactChatId.value]
+
+  if (mode === 'single') {
+    options.message_from = exactMessageId.value
+    options.message_to = exactMessageId.value
+  } else if (mode === 'forward') {
+    options.message_from = exactMessageId.value
+    options.message_to = 0
+  } else if (mode === 'backward') {
+    options.message_from = 1
+    options.message_to = exactMessageId.value
+  } else if (mode === 'window100') {
+    options.message_from = Math.max(1, exactMessageId.value - 50)
+    options.message_to = exactMessageId.value + 50
+  }
+
   error.value = ''
 }
 
