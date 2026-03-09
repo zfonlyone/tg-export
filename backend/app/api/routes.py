@@ -137,17 +137,20 @@ async def start_qr_login(current_user: User = Depends(get_current_user)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/telegram/qr/status")
+@router.post("/telegram/qr/status")
 async def qr_login_status(
-    token_id: str,
+    payload: dict = Body(...),
     current_user: User = Depends(get_current_user)
 ):
     """轮询二维码登录状态"""
+    token_id = payload.get("token_id")
+    if not token_id or not isinstance(token_id, str):
+        raise HTTPException(status_code=400, detail="缺少 token_id")
     try:
         await _ensure_tg_client_initialized()
         return await telegram_client.check_qr_login(token_id)
     except Exception as e:
-        logger.exception("[TG][QR] status failed token_id=%s: %s", token_id, e)
+        logger.exception("[TG][QR] status failed: %s", e)
         raise HTTPException(status_code=400, detail=str(e))
 
 

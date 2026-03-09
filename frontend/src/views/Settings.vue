@@ -308,9 +308,10 @@ function startQrPolling() {
       return
     }
     try {
-      const res = await axios.get('/api/telegram/qr/status', {
-        headers: getAuthHeader(),
-        params: { token_id: qrTokenId.value }
+      const res = await axios.post('/api/telegram/qr/status', {
+        token_id: qrTokenId.value
+      }, {
+        headers: getAuthHeader()
       })
       if (res.data.status === 'authorized') {
         stopQrPolling()
