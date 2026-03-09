@@ -13,6 +13,29 @@
       </div>
     </div>
 
+    <!-- 任务意图摘要 -->
+    <div class="premium-card" style="margin-bottom: 20px;">
+      <div class="p-card-head" style="margin-bottom: 12px;"><h3>🧭 任务摘要</h3></div>
+      <div class="task-summary-grid">
+        <div class="summary-chip">
+          <span class="label">任务类型</span>
+          <span class="value">{{ isSingleMessageTask ? '单消息/单文件任务' : '批量任务' }}</span>
+        </div>
+        <div class="summary-chip">
+          <span class="label">目标聊天</span>
+          <span class="value">{{ task.options?.specific_chats?.length ? task.options.specific_chats.join(', ') : '自动筛选' }}</span>
+        </div>
+        <div class="summary-chip">
+          <span class="label">消息范围</span>
+          <span class="value">{{ formatMessageRange(task.options) }}</span>
+        </div>
+        <div class="summary-chip">
+          <span class="label">媒体类型</span>
+          <span class="value">{{ formatMediaSummary(task.options) }}</span>
+        </div>
+      </div>
+    </div>
+
     <!-- 顶部操作栏 (增强手机端适配) -->
     <div class="premium-card actions-panel">
       <div class="progress-info">
@@ -238,6 +261,11 @@ const filteredList = computed(() => {
   return []
 })
 
+const isSingleMessageTask = computed(() => {
+  const opts = task.value?.options || {}
+  return opts.message_to > 0 && opts.message_from === opts.message_to
+})
+
 async function fetchData() {
   try {
     const currentLimit = viewAll.value ? 0 : 50
@@ -439,6 +467,23 @@ function formatSpeed(bps) {
   return bps.toFixed(1) + ' ' + units[i]
 }
 
+function formatMessageRange(opts = {}) {
+  if (!opts) return '-'
+  return opts.message_to > 0 ? `${opts.message_from} - ${opts.message_to}` : `${opts.message_from} - 最新`
+}
+
+function formatMediaSummary(opts = {}) {
+  const items = []
+  if (opts.files) items.push('文件')
+  if (opts.photos) items.push('图片')
+  if (opts.videos) items.push('视频')
+  if (opts.voice_messages) items.push('语音')
+  if (opts.video_messages) items.push('视频消息')
+  if (opts.gifs) items.push('GIF')
+  if (opts.stickers) items.push('贴纸')
+  return items.join(' / ') || '未选择'
+}
+
 function getStatusLabel(status) {
   const labels = {
     waiting: '等待',
@@ -495,6 +540,34 @@ onUnmounted(() => {
 .p-bar-fill { height: 100%; transition: width 0.5s ease; background: #3b82f6; }
 .p-bar-fill.completed { background: #22c55e; }
 .p-bar-fill.paused { background: #f59e0b; }
+
+.task-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.summary-chip {
+  background: #fafafa;
+  border: 1px solid #f1f5f9;
+  border-radius: 16px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.summary-chip .label {
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.summary-chip .value {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #0f172a;
+  word-break: break-word;
+}
 
 /* 统一工具栏布局 (v1.6.7.2) */
 .list-toolbar {

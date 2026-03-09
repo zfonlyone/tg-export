@@ -106,7 +106,10 @@
             </thead>
             <tbody>
               <tr v-for="task in recentTasks" :key="task.id" class="table-row clickable" @click="goToDetail(task.id)">
-                <td class="td-name">{{ task.name }}</td>
+                <td class="td-name">
+                  <div>{{ task.name }}</div>
+                  <div class="td-sub">{{ formatTaskIntent(task) }}</div>
+                </td>
                 <td>
                   <span :class="['status-pill', task.status]">
                     {{ statusText[task.status] || task.status }}
@@ -200,6 +203,25 @@ function formatDate(dateStr) {
 
 function goToDetail(id) {
   router.push(`/tasks/${id}`)
+}
+
+function formatTaskIntent(task) {
+  const opts = task.options || {}
+  const chatPart = (opts.specific_chats && opts.specific_chats.length === 1)
+    ? `频道 ${opts.specific_chats[0]}`
+    : (opts.specific_chats && opts.specific_chats.length > 1)
+      ? `指定 ${opts.specific_chats.length} 个聊天`
+      : '自动范围'
+
+  const rangePart = opts.message_to > 0
+    ? `${opts.message_from}-${opts.message_to}`
+    : `${opts.message_from}-最新`
+
+  const modePart = opts.message_to > 0 && opts.message_from === opts.message_to
+    ? '单消息任务'
+    : '批量任务'
+
+  return `${modePart} · ${chatPart} · ${rangePart}`
 }
 
 onMounted(refreshStatus)
@@ -385,6 +407,7 @@ onMounted(refreshStatus)
 .table-row.clickable:hover { background: #fafafa; }
 
 .td-name { font-weight: 700; color: #18181b; }
+.td-sub { margin-top: 4px; font-size: 0.78rem; color: #71717a; font-weight: 500; }
 .td-time { color: #a1a1aa; font-size: 0.8rem; }
 
 .status-pill {
