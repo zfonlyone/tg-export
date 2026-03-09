@@ -344,6 +344,7 @@ const exactMessageLinkInput = ref('')
 const exactMessageId = ref(null)
 const exactChatId = ref(null)
 const exactChatTitle = ref('')
+const exactMessagePreview = ref(null)
 const dateFrom = ref('')
 const dateTo = ref('')
 
@@ -406,6 +407,22 @@ async function resolveExactChatTitle(chatId) {
   }
 }
 
+async function resolveExactMessagePreview(chatId, messageId) {
+  try {
+    const res = await axios.get('/api/telegram/message-preview', {
+      headers: getAuthHeader(),
+      params: { chat_id: chatId, message_id: messageId }
+    })
+    exactMessagePreview.value = res.data
+    if (res.data?.chat?.title) {
+      exactChatTitle.value = res.data.chat.title
+    }
+  } catch (err) {
+    console.error('获取消息预览失败:', err)
+    exactMessagePreview.value = null
+  }
+}
+
 function parseSpecificChats() {
   parsedChatIds.value = parseNumbers(specificChatsInput.value)
 }
@@ -445,6 +462,7 @@ function applyExactMessageLink() {
   const chatId = parseInt(`-100${rawChatId}`, 10)
   exactChatId.value = chatId
   exactChatTitle.value = ''
+  exactMessagePreview.value = null
   exactMessageId.value = messageId
   enableSpecificChats.value = true
   enableMessageRange.value = true
@@ -467,6 +485,7 @@ function applyExactMessageLink() {
   taskName.value = `tg-${rawChatId}-${messageId}`
   error.value = ''
   resolveExactChatTitle(chatId)
+  resolveExactMessagePreview(chatId, messageId)
 }
 
 function applyBatchPreset(mode) {
@@ -554,6 +573,18 @@ const formatText = {
   html: '人类可读的 HTML',
   json: '机器可读的 JSON',
   both: 'HTML + JSON'
+}
+
+function formatBytes(size) {
+  if (!size || size <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let idx = 0
+  let num = size
+  while (num >= 1024 && idx < units.length - 1) {
+    num /= 1024
+    idx += 1
+  }
+  return `${num.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`
 }
 
 function getSummaryText(type) {

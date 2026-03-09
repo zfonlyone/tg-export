@@ -166,6 +166,62 @@ async def qr_submit_password(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/telegram/message-preview")
+async def telegram_message_preview(
+    chat_id: int,
+    message_id: int,
+    current_user: User = Depends(get_current_user)
+):
+    """预览某条 Telegram 消息的基础信息，供快速下载 UI 使用。"""
+    try:
+        await _ensure_tg_client_initialized()
+        if not telegram_client.is_authorized:
+            raise HTTPException(status_code=401, detail="请先登录 Telegram")
+
+        chat = await telegram_client.get_chat(chat_id)
+        msg = await telegram_client.get_message_by_id(chat_id, message_id)
+        if not msg:
+            raise HTTPException(status_code=404, detail="消息不存在")
+
+        media_type = telegram_client.get_media_type(msg)
+        file_name = None
+        file_size = None
+        if getattr(msg, 'document', None):
+            file_name = getattr(msg.document, 'file_name', None)
+            file_size = getattr(msg.document, 'file_size', None)
+        elif getattr(msg, 'video', None):
+            file_name = getattr(msg.video, 'file_name', None)
+            file_size = getattr(msg.video, 'file_size', None)
+        elif getattr(msg, 'audio', None):
+            file_name = getattr(msg.audio, 'file_name', None)
+            file_size = getattr(msg.audio, 'file_size', None)
+        elif getattr(msg, 'animation', None):
+            file_name = getattr(msg.animation, 'file_name', None)
+            file_size = getattr(msg.animation, 'file_size', None)
+        elif getattr(msg, 'photo', None):
+            file_size = getattr(msg.photo, 'file_size', None)
+
+        return {
+            "chat": {
+                "id": chat.id,
+                "title": chat.title,
+                "type": chat.type,
+                "username": chat.username
+            },
+            "message": {
+                "id": msg.id,
+                "text": msg.text or msg.caption,
+                "media_type": media_type,
+                "file_name": file_name,
+                "file_size": file_size
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/telegram/disconnect")
 async def disconnect_telegram(current_user: User = Depends(get_current_user)):
     """断开 Telegram 连接"""
