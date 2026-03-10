@@ -61,6 +61,8 @@ a:hover {
 .app-container {
   display: flex;
   min-height: 100vh;
+  /* 顶部导航高度变量，用于移动端避免内容被遮挡/错位 */
+  --topbar-h: 0px;
 }
 
 /* ========== 侧边栏 ========== */
@@ -712,6 +714,7 @@ a:hover {
     top: 0;
     z-index: 200;
     overflow: hidden; /* 允许 collapsed 时真正收纳 */
+    backdrop-filter: saturate(180%) blur(10px);
   }
 
   .sidebar.collapsed {
@@ -750,7 +753,7 @@ a:hover {
 
   .sidebar-nav li a {
     border-left: none;
-    border-radius: 10px;
+    border-radius: 999px;
     padding: 10px 12px;
     background: rgba(255, 255, 255, 0.06);
   }
@@ -766,7 +769,8 @@ a:hover {
 
   .main-content {
     margin-left: 0;
-    padding: 14px;
+    /* 使用动态测量的顶部条高度，避免字体缩放/横竖屏导致内容被盖住 */
+    padding: calc(14px + var(--topbar-h, 0px)) 14px 14px;
     min-height: 0;
   }
 

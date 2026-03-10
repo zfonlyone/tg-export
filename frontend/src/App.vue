@@ -1,9 +1,9 @@
 <template>
   <div v-if="isLoggedIn" class="app-container">
-    <!-- 侧边栏 -->
-    <aside class="sidebar" :class="{ 'collapsed': isSidebarCollapsed }">
+    <!-- 侧边栏 / 顶部导航 -->
+    <aside ref="sidebarEl" class="sidebar" :class="{ 'collapsed': isCollapsed }">
       <div class="sidebar-logo">
-        <h1 v-if="!isSidebarCollapsed || isMobile">📥 TG Export</h1>
+        <h1 v-if="!isDesktopCollapsed || isMobile">📥 TG Export</h1>
         <h1 v-else>📥</h1>
         <button @click="toggleSidebar" class="sidebar-toggle-btn" :title="toggleTitle">
           {{ toggleIcon }}
@@ -13,40 +13,40 @@
         <li>
           <router-link to="/dashboard" active-class="active">
             <span class="icon">🏠</span>
-            <span v-if="!isSidebarCollapsed">首页</span>
+            <span v-if="!isCollapsed">首页</span>
           </router-link>
         </li>
         <li>
           <router-link to="/export" active-class="active">
             <span class="icon">📥</span>
-            <span v-if="!isSidebarCollapsed">导出数据</span>
+            <span v-if="!isCollapsed">导出数据</span>
           </router-link>
         </li>
         <li>
           <router-link to="/tasks" active-class="active">
             <span class="icon">📋</span>
-            <span v-if="!isSidebarCollapsed">任务管理</span>
+            <span v-if="!isCollapsed">任务管理</span>
           </router-link>
         </li>
         <li>
           <router-link to="/settings" active-class="active">
             <span class="icon">⚙️</span>
-            <span v-if="!isSidebarCollapsed">设置</span>
+            <span v-if="!isCollapsed">设置</span>
           </router-link>
         </li>
       </ul>
       <div class="sidebar-footer">
         <button @click="logout" class="btn btn-outline" style="width: 100%; color: rgba(255,255,255,0.8); border-color: rgba(255,255,255,0.3); padding: 8px 5px;">
           <span class="icon">🚪</span>
-          <span v-if="!isSidebarCollapsed">退出登录</span>
+          <span v-if="!isCollapsed">退出登录</span>
         </button>
       </div>
     </aside>
 
     <!-- 主内容 -->
-    <main class="main-content" :class="{ 'expanded': isSidebarCollapsed }">
+    <main class="main-content" :class="{ 'expanded': isDesktopCollapsed }">
       <div class="main-inner">
-        <!-- 顶部导航栏 -->
+        <!-- 顶部导航栏（页面返回） -->
         <div class="top-bar" v-if="showBackButton">
           <button @click="goBack" class="btn btn-outline btn-sm">
             ← 返回
@@ -65,7 +65,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, onBeforeUnmount } from 'vue'
+import { ref, onMounted, computed, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 
 const router = useRouter()
@@ -73,29 +73,57 @@ const route = useRoute()
 
 // 使用 ref 确保响应性
 const isLoggedIn = ref(false)
-const isSidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
 
-// 移动端识别：用于顶部模式下的“上下收纳”按钮
+// 断点：移动端顶部导航 / 桌面侧边栏
 const isMobile = ref(false)
 let mq = null
+
+// 分离：桌面侧边栏折叠 vs 移动端顶部导航收纳（避免切换设备/缩放导致错位）
+const isDesktopCollapsed = ref(localStorage.getItem('sidebarCollapsedDesktop') === 'true')
+const isTopNavCollapsed = ref(localStorage.getItem('topNavCollapsed') === 'true')
+
+const isCollapsed = computed(() => (isMobile.value ? isTopNavCollapsed.value : isDesktopCollapsed.value))
+
+// DOM 引用：用于动态测量顶部条高度，防止缩放/字体变化导致错位
+const sidebarEl = ref(null)
 
 function updateMobileFlag() {
   isMobile.value = !!(mq && mq.matches)
 }
 
+function updateTopbarHeightVar() {
+  // 只在移动端设置变量；桌面不需要
+  if (!isMobile.value || !sidebarEl.value) {
+    document.documentElement.style.removeProperty('--topbar-h')
+    return
+  }
+  // 等待 DOM 更新后再测量，避免高度抖动
+  requestAnimationFrame(() => {
+    if (!sidebarEl.value) return
+    const h = sidebarEl.value.getBoundingClientRect().height
+    document.documentElement.style.setProperty('--topbar-h', `${Math.ceil(h)}px`)
+  })
+}
+
 const toggleIcon = computed(() => {
-  if (isMobile.value) return isSidebarCollapsed.value ? '▼' : '▲'
-  return isSidebarCollapsed.value ? '▶' : '◀'
+  if (isMobile.value) return isTopNavCollapsed.value ? '▼' : '▲'
+  return isDesktopCollapsed.value ? '▶' : '◀'
 })
 
 const toggleTitle = computed(() => {
-  if (isMobile.value) return isSidebarCollapsed.value ? '展开' : '收起'
-  return isSidebarCollapsed.value ? '展开' : '收起'
+  if (isMobile.value) return isTopNavCollapsed.value ? '展开导航' : '收起导航'
+  return isDesktopCollapsed.value ? '展开侧边栏' : '收起侧边栏'
 })
 
 function toggleSidebar() {
-  isSidebarCollapsed.value = !isSidebarCollapsed.value
-  localStorage.setItem('sidebarCollapsed', isSidebarCollapsed.value)
+  if (isMobile.value) {
+    isTopNavCollapsed.value = !isTopNavCollapsed.value
+    localStorage.setItem('topNavCollapsed', isTopNavCollapsed.value)
+  } else {
+    isDesktopCollapsed.value = !isDesktopCollapsed.value
+    localStorage.setItem('sidebarCollapsedDesktop', isDesktopCollapsed.value)
+  }
+  nextTick(() => updateTopbarHeightVar())
 }
 
 // 检查登录状态
@@ -110,6 +138,7 @@ const showBackButton = ref(false)
 router.afterEach((to) => {
   showBackButton.value = to.path !== '/dashboard' && to.path !== '/'
   checkLoginStatus()
+  nextTick(() => updateTopbarHeightVar())
 })
 
 function goBack() {
@@ -122,9 +151,12 @@ function goBack() {
 
 function logout() {
   localStorage.removeItem('token')
-  isLoggedIn.value = false  // 立即更新状态
+  isLoggedIn.value = false // 立即更新状态
   router.push('/login')
 }
+
+// 任何会改变顶部条高度的状态变化，都触发重算
+watch([isMobile, isTopNavCollapsed], () => nextTick(() => updateTopbarHeightVar()))
 
 onMounted(() => {
   checkLoginStatus()
@@ -132,15 +164,20 @@ onMounted(() => {
 
   mq = window.matchMedia('(max-width: 768px)')
   updateMobileFlag()
-  // 兼容新旧浏览器
   if (mq.addEventListener) mq.addEventListener('change', updateMobileFlag)
   else mq.addListener(updateMobileFlag)
+
+  window.addEventListener('resize', updateTopbarHeightVar, { passive: true })
+  updateTopbarHeightVar()
 })
 
 onBeforeUnmount(() => {
-  if (!mq) return
-  if (mq.removeEventListener) mq.removeEventListener('change', updateMobileFlag)
-  else mq.removeListener(updateMobileFlag)
+  if (mq) {
+    if (mq.removeEventListener) mq.removeEventListener('change', updateMobileFlag)
+    else mq.removeListener(updateMobileFlag)
+  }
+  window.removeEventListener('resize', updateTopbarHeightVar)
+  document.documentElement.style.removeProperty('--topbar-h')
 })
 </script>
 
