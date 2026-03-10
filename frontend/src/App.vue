@@ -3,10 +3,10 @@
     <!-- 侧边栏 -->
     <aside class="sidebar" :class="{ 'collapsed': isSidebarCollapsed }">
       <div class="sidebar-logo">
-        <h1 v-if="!isSidebarCollapsed">📥 TG Export</h1>
+        <h1 v-if="!isSidebarCollapsed || isMobile">📥 TG Export</h1>
         <h1 v-else>📥</h1>
-        <button @click="toggleSidebar" class="sidebar-toggle-btn" :title="isSidebarCollapsed ? '展开' : '收起'">
-          {{ isSidebarCollapsed ? '▶' : '◀' }}
+        <button @click="toggleSidebar" class="sidebar-toggle-btn" :title="toggleTitle">
+          {{ toggleIcon }}
         </button>
       </div>
       <ul class="sidebar-nav">
@@ -65,7 +65,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 
 const router = useRouter()
@@ -74,6 +74,24 @@ const route = useRoute()
 // 使用 ref 确保响应性
 const isLoggedIn = ref(false)
 const isSidebarCollapsed = ref(localStorage.getItem('sidebarCollapsed') === 'true')
+
+// 移动端识别：用于顶部模式下的“上下收纳”按钮
+const isMobile = ref(false)
+let mq = null
+
+function updateMobileFlag() {
+  isMobile.value = !!(mq && mq.matches)
+}
+
+const toggleIcon = computed(() => {
+  if (isMobile.value) return isSidebarCollapsed.value ? '▼' : '▲'
+  return isSidebarCollapsed.value ? '▶' : '◀'
+})
+
+const toggleTitle = computed(() => {
+  if (isMobile.value) return isSidebarCollapsed.value ? '展开' : '收起'
+  return isSidebarCollapsed.value ? '展开' : '收起'
+})
 
 function toggleSidebar() {
   isSidebarCollapsed.value = !isSidebarCollapsed.value
@@ -111,6 +129,18 @@ function logout() {
 onMounted(() => {
   checkLoginStatus()
   showBackButton.value = route.path !== '/dashboard' && route.path !== '/'
+
+  mq = window.matchMedia('(max-width: 768px)')
+  updateMobileFlag()
+  // 兼容新旧浏览器
+  if (mq.addEventListener) mq.addEventListener('change', updateMobileFlag)
+  else mq.addListener(updateMobileFlag)
+})
+
+onBeforeUnmount(() => {
+  if (!mq) return
+  if (mq.removeEventListener) mq.removeEventListener('change', updateMobileFlag)
+  else mq.removeListener(updateMobileFlag)
 })
 </script>
 

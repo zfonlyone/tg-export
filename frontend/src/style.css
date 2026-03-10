@@ -711,12 +711,21 @@ a:hover {
     position: sticky;
     top: 0;
     z-index: 200;
-    overflow: visible;
+    overflow: hidden; /* 允许 collapsed 时真正收纳 */
+  }
+
+  .sidebar.collapsed {
+    width: 100%;
   }
 
   .sidebar-logo {
-    padding: 12px 14px;
+    padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
     min-height: 52px;
+  }
+
+  /* 顶部模式下的收纳：隐藏导航条，只留 logo+按钮 */
+  .sidebar.collapsed .sidebar-nav {
+    display: none;
   }
 
   .sidebar-nav {
