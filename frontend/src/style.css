@@ -916,9 +916,26 @@ a:hover {
 
 /* ========== 顶部导航栏 ========== */
 .top-bar {
-  margin-bottom: 20px;
-  padding-bottom: 15px;
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  backdrop-filter: saturate(180%) blur(14px);
+  box-shadow: 0 18px 40px -28px rgba(15, 23, 42, 0.35);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* mobile: use safe areas and match top-nav height spacing */
+@media (max-width: 768px) {
+  .top-bar {
+    padding: 10px 12px;
+    border-radius: 16px;
+  }
 }
 
 /* ========== 表格样式 ========== */
