@@ -438,7 +438,7 @@ onUnmounted(() => stopQrPolling())
 .settings-header { align-items: flex-start; gap: 16px; margin-bottom: 0; }
 .eyebrow { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--primary-dark); font-weight: 700; margin-bottom: 6px; }
 .subtitle, .helper-text { color: #64748b; }
-.settings-status-pill { padding: 8px 14px; border-radius: 999px; background: #f3f4f6; color: #475569; font-weight: 700; }
+.settings-status-pill { padding: 8px 14px; border-radius: 999px; background: rgba(255,255,255,0.65); color: #475569; font-weight: 800; border: 1px solid rgba(17,24,39,0.08); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 .settings-status-pill.connected { background: #dcfce7; color: #166534; }
 .settings-shell { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px; align-items: start; }
 .settings-rail { position: sticky; top: 20px; display: flex; flex-direction: column; gap: 16px; }
@@ -447,13 +447,13 @@ onUnmounted(() => stopQrPolling())
 .summary-item { display: flex; flex-direction: column; gap: 2px; }
 .summary-item .label { color: #64748b; font-size: 12px; }
 .summary-item .value { font-weight: 700; }
-.tip-block { background: #f8fafc; border-radius: 18px; padding: 14px; }
+.tip-block { background: rgba(255,255,255,0.55); border-radius: 18px; padding: 14px; border: 1px solid rgba(17,24,39,0.08); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 .tip-list { padding-left: 18px; color: #475569; display: flex; flex-direction: column; gap: 8px; }
 .message-box { padding: 12px 14px; border-radius: 14px; font-weight: 600; }
 .message-box.success { background: #ecfdf3; color: #166534; }
 .message-box.error { background: #fff1f2; color: #be123c; }
 .settings-main { display: flex; flex-direction: column; gap: 18px; }
-.feature-card { padding: 24px; border-radius: 24px; }
+.feature-card { padding: 24px; border-radius: 24px; background: rgba(255,255,255,0.82); border: 1px solid rgba(17,24,39,0.08); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: 0 18px 40px -26px rgba(15,23,42,0.35); }
 .feature-head { align-items: flex-start; }
 .feature-badge { padding: 6px 10px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 12px; font-weight: 700; }
 .feature-badge.ready { background: #dcfce7; color: #166534; }
@@ -463,7 +463,7 @@ onUnmounted(() => stopQrPolling())
 .centered-row { justify-content: center; }
 .success-inline { margin-top: 10px; color: #16a34a; font-size: 13px; }
 .connected-panel { display: flex; flex-direction: column; gap: 16px; }
-.connected-user { display: flex; align-items: center; gap: 16px; padding: 16px; background: #f0fdf4; border-radius: 18px; }
+.connected-user { display: flex; align-items: center; gap: 16px; padding: 16px; background: rgba(34,197,94,0.10); border-radius: 18px; border: 1px solid rgba(34,197,94,0.18); }
 .avatar-bubble { width: 54px; height: 54px; border-radius: 50%; background: linear-gradient(135deg, var(--primary), #8b5cf6); color: white; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: 800; }
 .account-copy { flex: 1; }
 .account-copy .name { font-weight: 800; }
@@ -471,19 +471,20 @@ onUnmounted(() => stopQrPolling())
 .account-copy .id { font-size: 12px; color: #94a3b8; }
 .danger-outline { color: var(--danger); border-color: var(--danger); }
 .login-layout { display: flex; flex-direction: column; gap: 18px; }
-.login-mode-switch { display: inline-flex; gap: 8px; background: #f8fafc; padding: 6px; border-radius: 14px; width: fit-content; }
-.switch-btn { border: none; background: transparent; padding: 10px 14px; border-radius: 12px; cursor: pointer; font-weight: 700; }
+.login-mode-switch { display: inline-flex; gap: 6px; background: rgba(255,255,255,0.55); padding: 6px; border-radius: 16px; width: fit-content; border: 1px solid rgba(17,24,39,0.08); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
+.switch-btn { border: none; background: transparent; padding: 10px 14px; border-radius: 14px; cursor: pointer; font-weight: 800; transition: transform 0.12s ease, background 0.18s ease, box-shadow 0.18s ease; }
+.switch-btn:active { transform: scale(0.99); }
 .switch-btn.active { background: white; box-shadow: 0 1px 4px rgba(0,0,0,0.08); }
 .qr-layout { display: flex; flex-direction: column; gap: 16px; }
 .qr-card { display: flex; flex-direction: column; gap: 14px; align-items: center; }
 .center-text { text-align: center; }
-.qr-frame { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 280px; height: 280px; border: 1px solid #eee; border-radius: 18px; background: #fff; overflow: hidden; }
+.qr-frame { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 280px; height: 280px; border: 1px solid rgba(17,24,39,0.10); border-radius: 22px; background: rgba(255,255,255,0.82); overflow: hidden; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: 0 18px 40px -28px rgba(15,23,42,0.38); }
 .qr-image { max-width: 260px; max-height: 260px; }
 .qr-placeholder { color: #94a3b8; font-size: 13px; }
 .qr-overlay { position: absolute; inset: 0; background: rgba(34, 197, 94, 0.35); display: flex; align-items: center; justify-content: center; color: #14532d; font-weight: 700; font-size: 16px; }
-.inline-card { padding: 18px; border-radius: 18px; margin-bottom: 0; }
+.inline-card { padding: 18px; border-radius: 22px; margin-bottom: 0; background: rgba(255,255,255,0.82); border: 1px solid rgba(17,24,39,0.08); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: 0 18px 40px -30px rgba(15,23,42,0.32); }
 .phone-stepper { display: flex; gap: 10px; flex-wrap: wrap; }
-.login-step { padding: 8px 16px; background: var(--border); border-radius: 20px; color: #666; font-size: 13px; white-space: nowrap; }
+.login-step { padding: 8px 14px; background: rgba(255,255,255,0.60); border: 1px solid rgba(17,24,39,0.08); border-radius: 999px; color: #64748b; font-size: 12px; font-weight: 800; white-space: nowrap; -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 .login-step.active { background: var(--primary); color: white; }
 @media (max-width: 1024px) { .settings-shell { grid-template-columns: 1fr; } .settings-rail { position: static; } }
 @media (max-width: 768px) { .api-grid { grid-template-columns: 1fr; } .settings-header, .feature-head, .connected-user { flex-direction: column; align-items: stretch; } .login-mode-switch { width: 100%; } .switch-btn { flex: 1; } .qr-frame { width: 100%; max-width: 280px; } }
