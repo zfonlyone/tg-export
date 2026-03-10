@@ -1,11 +1,12 @@
 """
 TG Export - FastAPI 主入口
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import os
 
 from .config import settings
 from .api import router, init_admin_user, websocket_endpoint
@@ -56,12 +57,19 @@ app = FastAPI(
 )
 
 # CORS 配置
+# 默认只允许同源；如需从其它域访问，请通过环境变量显式配置。
+allow_origins = [
+    o.strip() for o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if o.strip()
+]
+if not allow_origins:
+    allow_origins = []  # no cross-site CORS by default
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=allow_origins,
+    allow_credentials=bool(allow_origins),
+    allow_methods=["*"] if allow_origins else ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"] if allow_origins else ["Authorization", "Content-Type"],
 )
 
 # API 路由
@@ -80,24 +88,64 @@ if not frontend_path.exists():
 # 导出文件访问
 exports_path = settings.EXPORT_DIR
 
+# ---- Security hardening for catch-all/static serving ----
+# Never serve sensitive dotfiles or backend sources via the frontend catch-all.
+BLOCKED_BASENAMES = {
+    ".env",
+    ".env.local",
+    ".env.production",
+    ".env.development",
+    ".git",
+    ".gitignore",
+    "docker-compose.yml",
+    "Dockerfile",
+}
+BLOCKED_SUFFIXES = {".py", ".pyc", ".sqlite", ".db", ".log"}
+
+
+def is_blocked_path(p: str) -> bool:
+    """Return True if the requested path should never be served by the SPA catch-all."""
+    # Normalize and strip any path tricks.
+    p = str(PurePosixPath("/" + (p or "")).as_posix()).lstrip("/")
+    if not p or p in {"/", ""}:
+        return False
+
+    base = os.path.basename(p)
+
+    # block dotfiles / known sensitive files
+    if base in BLOCKED_BASENAMES or base.startswith("."):
+        return True
+
+    # block backend-ish files by suffix
+    for s in BLOCKED_SUFFIXES:
+        if base.endswith(s):
+            return True
+
+    return False
+
+
 if frontend_path.exists():
     app.mount("/assets", StaticFiles(directory=frontend_path / "assets"), name="assets")
-    
+
     # exports 路由必须在 catch-all 之前
     if exports_path.exists():
         app.mount("/exports", StaticFiles(directory=exports_path, html=True), name="exports")
-    
+
     @app.get("/")
     async def serve_frontend():
         return FileResponse(frontend_path / "index.html")
-    
+
     # 这个 catch-all 路由最后定义，但 mount 的优先级更高
     @app.get("/{path:path}")
     async def serve_frontend_routes(path: str):
+        # Block sensitive files (e.g. /.env)
+        if is_blocked_path(path):
+            raise HTTPException(status_code=404)
+
         # 对于 exports 开头的路径，返回 404 让 mount 处理（实际上不会执行到这里）
         if path.startswith("exports"):
-            from fastapi import HTTPException
             raise HTTPException(status_code=404)
+
         file_path = frontend_path / path
         if file_path.exists() and file_path.is_file():
             return FileResponse(file_path)
@@ -117,9 +165,8 @@ async def startup_event():
     """)
     # 初始化管理员用户
     init_admin_user()
-    
+
     # 尝试自动恢复 Telegram 会话
-    import os
     from .telegram import telegram_client, telegram_bot
 
     api_id = os.environ.get("API_ID") or settings.API_ID
@@ -154,31 +201,37 @@ async def startup_event():
         print("[TG] 未配置 API_ID/API_HASH，请在设置页面配置")
 
     # [Permission Fix] 自动修复权限 (v2.3.2)
-    def fix_recursive_permissions(path_obj: Path):
-        """递归修复目录权限为 777"""
-        import os
-        if not path_obj.exists():
-            print(f"[System] ⚠️ 路径不存在，跳过权限修复: {path_obj}")
-            return
-        print(f"[System] 正在强制修复路径权限 (777): {path_obj}")
-        try:
-            # 修改根目录
-            os.chmod(path_obj, 0o777)
-            # 递归修改子文件和子目录
-            for root, dirs, files in os.walk(path_obj):
-                for d in dirs:
-                    try: os.chmod(os.path.join(root, d), 0o777)
-                    except: pass
-                for f in files:
-                    try: os.chmod(os.path.join(root, f), 0o777)
-                    except: pass
-        except Exception as e:
-            print(f"[System] 权限修复出错 ({path_obj}): {e}")
+    # ⚠️ 安全修复：不要再把目录递归 chmod 777。
+    # 生产环境请用正确的用户/组与最小权限。
+    if os.getenv("DISABLE_PERMISSION_FIX", "true").lower() != "false":
+        print("[System] 权限自动修复已禁用 (DISABLE_PERMISSION_FIX=true)")
+    else:
+        def fix_recursive_permissions(path_obj: Path):
+            """递归修复目录权限为 777（不推荐，仅用于临时排障）"""
+            if not path_obj.exists():
+                print(f"[System] ⚠️ 路径不存在，跳过权限修复: {path_obj}")
+                return
+            print(f"[System] 正在强制修复路径权限 (777): {path_obj}")
+            try:
+                os.chmod(path_obj, 0o777)
+                for root, dirs, files in os.walk(path_obj):
+                    for d in dirs:
+                        try:
+                            os.chmod(os.path.join(root, d), 0o777)
+                        except Exception:
+                            pass
+                    for f in files:
+                        try:
+                            os.chmod(os.path.join(root, f), 0o777)
+                        except Exception:
+                            pass
+            except Exception as e:
+                print(f"[System] 权限修复出错 ({path_obj}): {e}")
 
-    # 修复目标目录
-    target_dirs = [str(settings.EXPORT_DIR), str(settings.DATA_DIR), "/app"]
-    for d_path in target_dirs:
-        fix_recursive_permissions(Path(d_path))
+        # 修复目标目录
+        target_dirs = [str(settings.EXPORT_DIR), str(settings.DATA_DIR), "/app"]
+        for d_path in target_dirs:
+            fix_recursive_permissions(Path(d_path))
 
 
 @app.on_event("shutdown")
