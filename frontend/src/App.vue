@@ -3,8 +3,14 @@
     <!-- 侧边栏 / 顶部导航 -->
     <aside ref="sidebarEl" class="sidebar" :class="{ 'collapsed': isCollapsed }">
       <div class="sidebar-logo">
-        <h1 v-if="!isDesktopCollapsed || isMobile">📥 TG Export</h1>
-        <h1 v-else>📥</h1>
+        <div class="brand-wrap">
+          <h1 v-if="!isDesktopCollapsed || isMobile">📥 TG Export</h1>
+          <h1 v-else>📥</h1>
+          <!-- 移动端：显示当前页面标题（收纳态也保留），避免迷路 -->
+          <div v-if="isMobile" class="nav-title" :title="navTitle">
+            {{ navTitle }}
+          </div>
+        </div>
         <button @click="toggleSidebar" class="sidebar-toggle-btn" :title="toggleTitle">
           {{ toggleIcon }}
         </button>
@@ -84,6 +90,18 @@ const isTopNavCollapsed = ref(localStorage.getItem('topNavCollapsed') === 'true'
 
 const isCollapsed = computed(() => (isMobile.value ? isTopNavCollapsed.value : isDesktopCollapsed.value))
 
+// 当前页标题（移动端顶部显示）
+const navTitle = computed(() => {
+  const p = route.path
+  if (p.startsWith('/tasks/')) return '任务详情'
+  if (p === '/tasks') return '任务管理'
+  if (p === '/export') return '导出数据'
+  if (p === '/settings') return '设置'
+  if (p === '/dashboard' || p === '/') return '仪表盘'
+  if (p === '/login') return '登录'
+  return 'TG Export'
+})
+
 // DOM 引用：用于动态测量顶部条高度，防止缩放/字体变化导致错位
 const sidebarEl = ref(null)
 
@@ -97,7 +115,6 @@ function updateTopbarHeightVar() {
     document.documentElement.style.removeProperty('--topbar-h')
     return
   }
-  // 等待 DOM 更新后再测量，避免高度抖动
   requestAnimationFrame(() => {
     if (!sidebarEl.value) return
     const h = sidebarEl.value.getBoundingClientRect().height
@@ -182,6 +199,24 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.brand-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.nav-title {
+  color: rgba(255, 255, 255, 0.78);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+  max-width: 40vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sidebar-footer .btn:hover {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.5);
