@@ -42,22 +42,24 @@
         </button>
       </div>
     </aside>
-    
+
     <!-- 主内容 -->
     <main class="main-content" :class="{ 'expanded': isSidebarCollapsed }">
-      <!-- 顶部导航栏 -->
-      <div class="top-bar" v-if="showBackButton">
-        <button @click="goBack" class="btn btn-outline btn-sm">
-          ← 返回
-        </button>
-        <router-link to="/dashboard" class="btn btn-outline btn-sm" style="margin-left: 10px;">
-          🏠 首页
-        </router-link>
+      <div class="main-inner">
+        <!-- 顶部导航栏 -->
+        <div class="top-bar" v-if="showBackButton">
+          <button @click="goBack" class="btn btn-outline btn-sm">
+            ← 返回
+          </button>
+          <router-link to="/dashboard" class="btn btn-outline btn-sm" style="margin-left: 10px;">
+            🏠 首页
+          </router-link>
+        </div>
+        <router-view />
       </div>
-      <router-view />
     </main>
   </div>
-  
+
   <!-- 未登录时直接显示路由 -->
   <router-view v-else />
 </template>
@@ -113,11 +115,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.sidebar-footer {
-  padding: 20px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
-}
-
 .sidebar-footer .btn:hover {
   background: rgba(255, 255, 255, 0.1);
   border-color: rgba(255, 255, 255, 0.5);

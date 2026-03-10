@@ -172,6 +172,12 @@ a:hover {
   margin-left: 80px;
 }
 
+/* 主内容内层：用于大屏限宽（16:9 更舒服） */
+.main-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
 /* ========== 页面标题 ========== */
 .page-header {
   display: flex;
@@ -698,15 +704,65 @@ a:hover {
 
 /* ========== 响应式 ========== */
 @media (max-width: 768px) {
+  /* 移动端：侧边栏变顶部横向导航 */
   .sidebar {
     width: 100%;
     height: auto;
-    position: relative;
+    position: sticky;
+    top: 0;
+    z-index: 200;
+    overflow: visible;
+  }
+
+  .sidebar-logo {
+    padding: 12px 14px;
+    min-height: 52px;
+  }
+
+  .sidebar-nav {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 8px;
+    padding: 10px 10px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .sidebar-nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .sidebar-nav li {
+    flex: 0 0 auto;
+  }
+
+  .sidebar-nav li a {
+    border-left: none;
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .sidebar-nav li a.active {
+    border-left: none;
+    box-shadow: inset 0 0 0 2px rgba(24, 144, 255, 0.45);
+  }
+
+  .sidebar-footer {
+    display: none;
   }
 
   .main-content {
     margin-left: 0;
-    padding: 16px;
+    padding: 14px;
+    min-height: 0;
+  }
+
+  .main-inner {
+    max-width: none;
   }
 
   .app-container {
