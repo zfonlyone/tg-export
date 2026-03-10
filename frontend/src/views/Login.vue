@@ -71,3 +71,31 @@ async function handleLogin() {
   }
 }
 </script>
+
+
+<style scoped>
+.login-container {
+  background: radial-gradient(1200px 800px at 15% 10%, rgba(24, 144, 255, 0.18), transparent 55%),
+    radial-gradient(900px 600px at 80% 20%, rgba(82, 196, 26, 0.12), transparent 60%),
+    linear-gradient(135deg, var(--sidebar-bg) 0%, #0d2137 100%);
+}
+
+.login-card {
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.78);
+  -webkit-backdrop-filter: saturate(180%) blur(14px);
+  backdrop-filter: saturate(180%) blur(14px);
+}
+
+.login-card h1 {
+  letter-spacing: 0.2px;
+}
+
+/* mobile: comfortable padding */
+@media (max-width: 768px) {
+  .login-card {
+    margin: 0 14px;
+    padding: 28px;
+  }
+}
+</style>

@@ -615,6 +615,17 @@ onUnmounted(() => {
   box-shadow: 0 12px 24px -12px rgba(15, 23, 42, 0.25);
 }
 
+
+/* iOS-like pressed feedback for touch */
+.managed-card.clickable {
+  cursor: pointer;
+}
+
+.managed-card.clickable:active {
+  transform: translateY(0px) scale(0.995);
+  box-shadow: 0 10px 22px -14px rgba(15, 23, 42, 0.26);
+}
+
 .card-status-strip { width: 6px; }
 .card-status-strip.running, .card-status-strip.extracting { background: #3b82f6; }
 .card-status-strip.completed { background: #22c55e; }
