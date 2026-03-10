@@ -1140,6 +1140,16 @@ async function startExport() {
 .stepper-scroll {
   display: flex;
   gap: 10px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+}
+
+.stepper-scroll::-webkit-scrollbar { display: none; }
+
+.stepper-scroll .step-chip {
+  scroll-snap-align: start;
 }
 
 .stepper-mobile {
@@ -1148,12 +1158,16 @@ async function startExport() {
 
 .step-panel,
 .step-chip {
-  border: 1px solid var(--border);
-  background: #fff;
-  border-radius: 16px;
-  padding: 12px 14px;
+  border: 1px solid rgba(17, 24, 39, 0.10);
+  background: rgba(255,255,255,0.82);
+  border-radius: 999px;
+  padding: 10px 14px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: transform 0.12s ease, box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.step-chip:active {
+  transform: scale(0.99);
 }
 
 .step-panel {
@@ -1224,10 +1238,13 @@ async function startExport() {
 
 .mode-switch {
   display: inline-flex;
-  gap: 8px;
-  background: #f5f7fa;
+  gap: 6px;
+  background: rgba(255,255,255,0.55);
   padding: 6px;
-  border-radius: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(17,24,39,0.08);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
 }
 
 .switch-btn,
@@ -1235,9 +1252,15 @@ async function startExport() {
   border: none;
   background: transparent;
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: 14px;
   cursor: pointer;
-  font-weight: 600;
+  font-weight: 700;
+  transition: transform 0.12s ease, background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.switch-btn:active,
+.preset-chip:active {
+  transform: scale(0.99);
 }
 
 .switch-btn.active,
@@ -1268,9 +1291,12 @@ async function startExport() {
 .selection-card,
 .radio-card,
 .soft-panel {
-  border: 1px solid var(--border);
+  border: 1px solid rgba(17, 24, 39, 0.10);
   border-radius: 18px;
-  background: #fff;
+  background: rgba(255,255,255,0.86);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 10px 26px -22px rgba(15, 23, 42, 0.35);
 }
 
 .hero-tile,
@@ -1357,6 +1383,7 @@ async function startExport() {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .large-input {
@@ -1409,14 +1436,18 @@ async function startExport() {
 
 .action-footer {
   position: sticky;
-  bottom: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom));
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 16px;
   padding: 16px 18px;
-  background: rgba(255,255,255,0.92);
-  backdrop-filter: blur(10px);
+  background: rgba(255,255,255,0.72);
+  border: 1px solid rgba(17, 24, 39, 0.08);
+  border-radius: 18px;
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 40px -26px rgba(15, 23, 42, 0.35);
 }
 
 .footer-hint {
