@@ -1296,7 +1296,7 @@ async function startExport() {
   background: rgba(255,255,255,0.86);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
-  box-shadow: 0 10px 26px -22px rgba(15, 23, 42, 0.35);
+  box-shadow: var(--elev-1);
 }
 
 .hero-tile,
@@ -1447,7 +1447,7 @@ async function startExport() {
   border-radius: 18px;
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
-  box-shadow: 0 18px 40px -26px rgba(15, 23, 42, 0.35);
+  box-shadow: var(--elev-2);
 }
 
 .footer-hint {

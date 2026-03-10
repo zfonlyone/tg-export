@@ -883,7 +883,7 @@ onUnmounted(() => {
   border: 1px solid rgba(17, 24, 39, 0.08);
   -webkit-backdrop-filter: blur(12px);
   backdrop-filter: blur(12px);
-  box-shadow: 0 18px 40px -26px rgba(15, 23, 42, 0.35);
+  box-shadow: var(--elev-2);
 }
 
 .list-toolbar {
@@ -1089,7 +1089,7 @@ onUnmounted(() => {
   border: 1px solid transparent;
   transition: 0.2s;
 }
-.queue-item:hover { background: rgba(255,255,255,0.92); border-color: rgba(59, 130, 246, 0.55); box-shadow: 0 10px 22px -18px rgba(15, 23, 42, 0.25); }
+.queue-item:hover { background: rgba(255,255,255,0.92); border-color: rgba(59, 130, 246, 0.55); box-shadow: var(--elev-1); }
 .queue-item:active { transform: scale(0.995); }
 
 .item-main { flex: 1; min-width: 0; }

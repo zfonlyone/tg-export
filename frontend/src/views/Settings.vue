@@ -453,7 +453,7 @@ onUnmounted(() => stopQrPolling())
 .message-box.success { background: #ecfdf3; color: #166534; }
 .message-box.error { background: #fff1f2; color: #be123c; }
 .settings-main { display: flex; flex-direction: column; gap: 18px; }
-.feature-card { padding: 24px; border-radius: 24px; background: rgba(255,255,255,0.82); border: 1px solid rgba(17,24,39,0.08); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: 0 18px 40px -26px rgba(15,23,42,0.35); }
+.feature-card { padding: 24px; border-radius: 24px; background: rgba(255,255,255,0.82); border: 1px solid rgba(17,24,39,0.08); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: var(--elev-2); }
 .feature-head { align-items: flex-start; }
 .feature-badge { padding: 6px 10px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 12px; font-weight: 700; }
 .feature-badge.ready { background: #dcfce7; color: #166534; }
@@ -478,11 +478,11 @@ onUnmounted(() => stopQrPolling())
 .qr-layout { display: flex; flex-direction: column; gap: 16px; }
 .qr-card { display: flex; flex-direction: column; gap: 14px; align-items: center; }
 .center-text { text-align: center; }
-.qr-frame { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 280px; height: 280px; border: 1px solid rgba(17,24,39,0.10); border-radius: 22px; background: rgba(255,255,255,0.82); overflow: hidden; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: 0 18px 40px -28px rgba(15,23,42,0.38); }
+.qr-frame { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 280px; height: 280px; border: 1px solid rgba(17,24,39,0.10); border-radius: 22px; background: rgba(255,255,255,0.82); overflow: hidden; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: var(--elev-2); }
 .qr-image { max-width: 260px; max-height: 260px; }
 .qr-placeholder { color: #94a3b8; font-size: 13px; }
 .qr-overlay { position: absolute; inset: 0; background: rgba(34, 197, 94, 0.35); display: flex; align-items: center; justify-content: center; color: #14532d; font-weight: 700; font-size: 16px; }
-.inline-card { padding: 18px; border-radius: 22px; margin-bottom: 0; background: rgba(255,255,255,0.82); border: 1px solid rgba(17,24,39,0.08); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: 0 18px 40px -30px rgba(15,23,42,0.32); }
+.inline-card { padding: 18px; border-radius: 22px; margin-bottom: 0; background: rgba(255,255,255,0.82); border: 1px solid rgba(17,24,39,0.08); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); box-shadow: var(--elev-2); }
 .phone-stepper { display: flex; gap: 10px; flex-wrap: wrap; }
 .login-step { padding: 8px 14px; background: rgba(255,255,255,0.60); border: 1px solid rgba(17,24,39,0.08); border-radius: 999px; color: #64748b; font-size: 12px; font-weight: 800; white-space: nowrap; -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); }
 .login-step.active { background: var(--primary); color: white; }
