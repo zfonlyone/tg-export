@@ -11,10 +11,18 @@
             {{ navTitle }}
           </div>
         </div>
-        <button @click="toggleSidebar" class="sidebar-toggle-btn" :title="toggleTitle">
-          {{ toggleIcon }}
-        </button>
+
+        <div class="nav-actions">
+          <button @click="toggleSidebar" class="sidebar-toggle-btn" :title="toggleTitle">
+            {{ toggleIcon }}
+          </button>
+          <!-- 认证按钮：导航栏里提供登出（未来也可用于登录） -->
+          <button @click="authAction" class="sidebar-toggle-btn auth-btn" :title="authTitle">
+            {{ authIcon }}
+          </button>
+        </div>
       </div>
+
       <ul class="sidebar-nav">
         <li>
           <router-link to="/dashboard" active-class="active">
@@ -41,8 +49,10 @@
           </router-link>
         </li>
       </ul>
+
+      <!-- 桌面端保留一个明显的退出入口；移动端仍隐藏（由全局 CSS 控制） -->
       <div class="sidebar-footer">
-        <button @click="logout" class="btn btn-outline" style="width: 100%; color: rgba(255,255,255,0.8); border-color: rgba(255,255,255,0.3); padding: 8px 5px;">
+        <button @click="logout" class="btn btn-outline sidebar-logout-btn">
           <span class="icon">🚪</span>
           <span v-if="!isCollapsed">退出登录</span>
         </button>
@@ -57,7 +67,7 @@
           <button @click="goBack" class="btn btn-outline btn-sm">
             ← 返回
           </button>
-          <router-link to="/dashboard" class="btn btn-outline btn-sm" style="margin-left: 10px;">
+          <router-link to="/dashboard" class="btn btn-outline btn-sm">
             🏠 首页
           </router-link>
         </div>
@@ -132,6 +142,9 @@ const toggleTitle = computed(() => {
   return isDesktopCollapsed.value ? '展开侧边栏' : '收起侧边栏'
 })
 
+const authIcon = computed(() => (isLoggedIn.value ? '⎋' : '🔑'))
+const authTitle = computed(() => (isLoggedIn.value ? '退出登录' : '去登录'))
+
 function toggleSidebar() {
   if (isMobile.value) {
     isTopNavCollapsed.value = !isTopNavCollapsed.value
@@ -141,6 +154,11 @@ function toggleSidebar() {
     localStorage.setItem('sidebarCollapsedDesktop', isDesktopCollapsed.value)
   }
   nextTick(() => updateTopbarHeightVar())
+}
+
+function authAction() {
+  if (isLoggedIn.value) logout()
+  else router.push('/login')
 }
 
 // 检查登录状态
@@ -217,9 +235,26 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.sidebar-footer .btn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.5);
+.nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.auth-btn {
+  font-size: 12px;
+}
+
+.sidebar-logout-btn {
+  width: 100%;
+  color: rgba(255,255,255,0.86);
+  border-color: rgba(255,255,255,0.25);
+  background: rgba(255,255,255,0.08);
+}
+
+.sidebar-logout-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.4);
   color: #fff;
 }
 </style>
