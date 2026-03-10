@@ -49,6 +49,15 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
+body {
+  overflow-x: hidden;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
   background: radial-gradient(1200px 800px at 10% 10%, rgba(24, 144, 255, 0.10), transparent 55%),
@@ -71,7 +80,8 @@ a:hover {
 /* ========== 布局 ========== */
 .app-container {
   display: flex;
-  min-height: 100vh;
+  width: 100%;
+  min-height: 100dvh;
   /* 顶部导航高度变量，用于移动端避免内容被遮挡/错位 */
   --topbar-h: 0px;
 }
@@ -174,9 +184,10 @@ a:hover {
 /* ========== 主内容区 ========== */
 .main-content {
   flex: 1;
+  min-width: 0;
   margin-left: var(--sidebar-width);
   padding: 24px;
-  min-height: 100vh;
+  min-height: 100dvh;
   background: var(--bg);
   transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
@@ -187,6 +198,7 @@ a:hover {
 
 /* 主内容内层：用于大屏限宽（16:9 更舒服） */
 .main-inner {
+  width: 100%;
   max-width: 1200px;
   margin: 0 auto;
 }
@@ -636,7 +648,7 @@ a:hover {
 
 /* ========== 登录页 ========== */
 .login-container {
-  min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -838,6 +850,7 @@ a:hover {
 
   /* 顶部导航条（可滚动），收纳时仅隐藏文字，保留 icon-only 一排 */
   .sidebar-nav {
+    width: 100%;
     display: flex;
     flex-direction: row;
     flex-wrap: nowrap;
