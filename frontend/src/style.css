@@ -14,24 +14,28 @@
 
   /* 侧边栏 - 深蓝色 */
   --sidebar-bg: #1e3a5f;
-  --sidebar-hover: #2a4a73;
-  --sidebar-active: #3d6090;
-  --sidebar-text: rgba(255, 255, 255, 0.85);
-  --sidebar-text-muted: rgba(255, 255, 255, 0.65);
+  --sidebar-hover: rgba(255, 255, 255, 0.08);
+  --sidebar-active: rgba(24, 144, 255, 0.18);
+  --sidebar-text: rgba(255, 255, 255, 0.88);
+  --sidebar-text-muted: rgba(255, 255, 255, 0.62);
 
   /* 内容区 - 浅色 */
   --bg: #f0f2f5;
   --card-bg: #ffffff;
   --text: #1f1f1f;
   --text-secondary: #666666;
-  --border: #e8e8e8;
+  --border: rgba(17, 24, 39, 0.10);
+
+  /* iOS-ish */
+  --glass: rgba(255, 255, 255, 0.65);
+  --glass-border: rgba(255, 255, 255, 0.22);
 
   /* 尺寸 */
   --sidebar-width: 220px;
   --sidebar-collapsed-width: 64px;
-  --radius: 8px;
-  --shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  --shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.12);
+  --radius: 12px;
+  --shadow: 0 2px 10px rgba(0, 0, 0, 0.08);
+  --shadow-hover: 0 10px 30px rgba(0, 0, 0, 0.12);
 }
 
 * {
@@ -41,8 +45,10 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
-  background: var(--bg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: radial-gradient(1200px 800px at 10% 10%, rgba(24, 144, 255, 0.10), transparent 55%),
+    radial-gradient(1000px 600px at 90% 20%, rgba(82, 196, 26, 0.08), transparent 60%),
+    var(--bg);
   color: var(--text);
   line-height: 1.6;
   font-size: 14px;
@@ -706,15 +712,19 @@ a:hover {
 
 /* ========== 响应式 ========== */
 @media (max-width: 768px) {
-  /* 移动端：侧边栏变顶部横向导航 */
+  /* 移动端：侧边栏变 iOS 风格顶部横向导航 */
   .sidebar {
     width: 100%;
     height: auto;
     position: sticky;
     top: 0;
     z-index: 200;
-    overflow: hidden; /* 允许 collapsed 时真正收纳 */
-    backdrop-filter: saturate(180%) blur(10px);
+    overflow: hidden;
+    background: rgba(30, 58, 95, 0.78);
+    -webkit-backdrop-filter: saturate(180%) blur(14px);
+    backdrop-filter: saturate(180%) blur(14px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
   }
 
   .sidebar.collapsed {
@@ -726,11 +736,7 @@ a:hover {
     min-height: 52px;
   }
 
-  /* 顶部模式下的收纳：隐藏导航条，只留 logo+按钮 */
-  .sidebar.collapsed .sidebar-nav {
-    display: none;
-  }
-
+  /* 顶部导航条（可滚动），收纳时仅隐藏文字，保留 icon-only 一排 */
   .sidebar-nav {
     display: flex;
     flex-direction: row;
@@ -741,6 +747,8 @@ a:hover {
     overflow-y: hidden;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
+    scroll-snap-type: x proximity;
+    touch-action: pan-x;
   }
 
   .sidebar-nav::-webkit-scrollbar {
@@ -755,12 +763,32 @@ a:hover {
     border-left: none;
     border-radius: 999px;
     padding: 10px 12px;
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.08);
+    scroll-snap-align: start;
   }
 
   .sidebar-nav li a.active {
     border-left: none;
-    box-shadow: inset 0 0 0 2px rgba(24, 144, 255, 0.45);
+    background: rgba(24, 144, 255, 0.18);
+    box-shadow:
+      inset 0 0 0 1px rgba(24, 144, 255, 0.35),
+      0 6px 16px rgba(24, 144, 255, 0.18);
+  }
+
+  /* 收纳态：更紧凑，icon-only（模板里文字已 v-if 隐藏） */
+  .sidebar.collapsed .sidebar-nav {
+    padding: 8px 10px 10px;
+  }
+
+  .sidebar.collapsed .sidebar-nav li a {
+    min-width: 44px;
+    padding: 10px 12px;
+    justify-content: center;
+    gap: 0;
+  }
+
+  .sidebar.collapsed .sidebar-nav li a .icon {
+    width: auto;
   }
 
   .sidebar-footer {
