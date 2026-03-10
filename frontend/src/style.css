@@ -710,6 +710,101 @@ a:hover {
   margin-bottom: 20px;
 }
 
+
+
+/* ========== iOS Polish: buttons / cards / forms ========== */
+
+/* Buttons: unify size + pressed feedback */
+.btn,
+.btn-premium {
+  border-radius: 12px;
+  min-height: 40px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+@media (max-width: 768px) {
+  .btn,
+  .btn-premium {
+    min-height: 44px;
+  }
+
+  .btn-sm {
+    min-height: 36px;
+  }
+}
+
+.btn {
+  transition: transform 0.12s ease, box-shadow 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.btn:active {
+  transform: translateY(1px) scale(0.99);
+}
+
+.btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px rgba(24, 144, 255, 0.18);
+}
+
+.btn-outline {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(17, 24, 39, 0.12);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+.btn-outline:hover {
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(24, 144, 255, 0.38);
+  color: var(--primary);
+}
+
+/* Cards: softer border + consistent elevation */
+.card,
+.task-card,
+.login-card {
+  border: 1px solid rgba(17, 24, 39, 0.08);
+}
+
+.card:hover,
+.task-card:hover {
+  transform: translateY(-1px);
+}
+
+/* Status badges: make them pill + crisp */
+.status-badge {
+  border: 1px solid rgba(17, 24, 39, 0.06);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+}
+
+/* Progress: slightly thicker, more iOS-like */
+.progress {
+  height: 8px;
+  border-radius: 999px;
+}
+
+.progress-bar {
+  border-radius: 999px;
+}
+
+/* Forms: larger hit area + nicer focus ring */
+.form-input {
+  border-radius: 12px;
+  padding: 12px 14px;
+  border-color: rgba(17, 24, 39, 0.12);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+}
+
+.form-input:focus {
+  border-color: rgba(24, 144, 255, 0.55);
+  box-shadow: 0 0 0 4px rgba(24, 144, 255, 0.16);
+}
+
+.form-checkbox {
+  border-radius: 12px;
+}
+
 /* ========== 响应式 ========== */
 @media (max-width: 768px) {
   /* 移动端：侧边栏变 iOS 风格顶部横向导航 */
