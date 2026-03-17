@@ -119,7 +119,7 @@ jobs:
 
 ```bash
 # 1. 进入项目目录
-cd d:\code\vps\docker\tg-export
+cd d:\code\vps\tg-export
 
 # 2. 初始化 Git 仓库
 git init
@@ -141,7 +141,7 @@ git push -u origin main
 ### 方法二: 使用 SSH (如果已配置)
 
 ```bash
-cd d:\code\vps\docker\tg-export
+cd d:\code\vps\tg-export
 git init
 git add .
 git commit -m "Initial commit: TG Export"
@@ -167,7 +167,7 @@ git push -u origin main
 
 ```bash
 # 进入项目目录
-cd d:\code\vps\docker\tg-export
+cd d:\code\vps\tg-export
 
 # 初始化并提交
 git init

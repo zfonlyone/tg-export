@@ -26,53 +26,68 @@
 
 ## 🛠️ 安装与部署
 
-### 本机开发仓库 vs 生产运行目录（重要）
+### 架构说明
 
-如果这套服务部署在当前机器上，请注意：
+本项目已改造为 `源码构建、物理隔离、纯净运行` 模式：
 
-- **开发仓库**：`/root/code/docker/tg-export`
-- **实际生产目录**：`/etc/tg-export`
-- **线上容器**：`tg-export`
+- **源码目录**：`/root/code/tg-export`
+- **运行目录**：`/etc/tg-export`
+- **运行时环境变量**：`/etc/tg-export/.env`
+- **运行时可写配置**：`/etc/tg-export/config/runtime.env`
+- **持久化数据**：`/etc/tg-export/data`
 
 也就是说：
 
-> 只修改 `/root/code/docker/tg-export` 并不代表线上已经更新。
+> 只修改 `/root/code/tg-export` 并不代表线上已经更新。
 
-必须把代码同步到 `/etc/tg-export`，然后在那里重新 `docker compose up -d --build`，线上才会真正生效。
+代码变更必须在源码目录构建镜像，再通过部署脚本发布到 `/etc/tg-export`。禁止在源码目录直接 `docker compose up`，也禁止在 `/etc/tg-export` 修改代码文件。
 
-### 推荐更新流程（本机部署）
+### 首次部署 / 日常发布
 
 ```bash
-# 1) 在开发仓库改代码
-cd /root/code/docker/tg-export
+# 1) 在源码目录修改代码
+cd /root/code/tg-export
 
-# 2) 先验证前端能构建
+# 2) 先验证前端构建
 cd frontend && npm run build && cd ..
 
-# 3) 提交代码
-git add .
-git commit -m "your change"
+# 3) 首次部署前准备运行时环境变量
+sudo mkdir -p /etc/tg-export
+sudo cp .env.example /etc/tg-export/.env
+# 然后手动编辑 /etc/tg-export/.env，填入 API_ID / API_HASH / ADMIN_PASSWORD 等配置
 
-# 4) 同步到生产目录
-rsync -a --delete \
-  --exclude '.git/' \
-  --exclude '__pycache__/' \
-  --exclude '*.pyc' \
-  --exclude '.env' \
-  --exclude 'data/' \
-  /root/code/docker/tg-export/ /etc/tg-export/
+# 4) 执行部署脚本
+sudo ./scripts/deploy.sh
 
-# 5) 在生产目录重建
+# 5) 验证运行状态
 cd /etc/tg-export
-docker compose up -d --build
-
-# 6) 验证是否真的更新
-docker compose ps
+docker compose --env-file .env ps
 docker inspect tg-export --format 'started={{.State.StartedAt}} image={{.Image}}'
 docker exec tg-export sh -lc 'sed -n "1,20p" /app/frontend/dist/index.html'
 curl -sS http://127.0.0.1:9528/ | sed -n '1,20p'
 curl -sS https://tg-export.181028.xyz/ | sed -n '1,20p'
 ```
+
+### 仅修改运行时配置
+
+如果只是改密钥、管理员密码、下载目录等运行参数，不需要改源码：
+
+```bash
+# 主环境变量
+sudo editor /etc/tg-export/.env
+
+# 面板写入的运行时配置
+sudo editor /etc/tg-export/config/runtime.env
+
+# 重启服务使配置生效
+cd /etc/tg-export
+docker compose --env-file .env up -d
+```
+
+说明：
+- Docker Compose 统一从 `/etc/tg-export/.env` 读取环境变量。
+- 面板中保存的 API_ID / API_HASH / BOT_TOKEN / 自动生成的管理员密码，会持久化到 `/etc/tg-export/config/runtime.env`。
+- 运行目录会被部署脚本自动清理，不再保留 Python / Vue / Dockerfile 等源码文件。
 
 ### 白屏排查提示
 
@@ -83,26 +98,8 @@ curl -sS https://tg-export.181028.xyz/ | sed -n '1,20p'
 3. 如果容器内还是旧 hash：说明根本没重建成功
 4. 如果容器内已新、公网仍旧：再怀疑 Cloudflare 缓存或代理缓存
 
-### 标准 Docker Compose 部署（不依赖 `tg-export.sh`）
-```bash
-git clone https://github.com/zfonlyone/tg-export.git
-cd tg-export
-cp .env.example .env
-# 编辑 .env，填入 API_ID / API_HASH / ADMIN_PASSWORD 等配置
-docker compose up -d --build
-```
-
 访问地址：
 - `http://<你的服务器IP>:${WEB_PORT}`（默认 `9528`）
-
-说明：
-- 项目已迁移为 `env` 配置模式，不再依赖 `config.yml`。
-- 运行时在面板中修改的关键配置会持久化到 `data/.env`（容器重启后仍可用）。
-
-### 一键脚本部署（可选）
-```bash
-bash <(curl -sL https://raw.githubusercontent.com/zfonlyone/tg-export/main/tg-export.sh)
-```
 
 ---
 
