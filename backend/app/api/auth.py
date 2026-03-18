@@ -2,8 +2,8 @@
 TG Export - 认证模块
 """
 from datetime import datetime, timedelta
+import os
 from typing import Optional
-from pathlib import Path
 import json
 import secrets
 
@@ -113,10 +113,12 @@ def init_admin_user():
             print(f"{'='*50}\n")
         else:
             password = settings.ADMIN_PASSWORD
-        
+
         create_user(settings.ADMIN_USERNAME, password)
-        
-        # 保存到持久化 data/.env，避免重启后丢失
+
+        os.environ["ADMIN_PASSWORD"] = password
+
+        # 保存到运行时配置文件，避免重启后丢失
         try:
             upsert_env_values({"ADMIN_PASSWORD": password})
         except Exception:

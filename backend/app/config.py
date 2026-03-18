@@ -5,9 +5,10 @@ import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
 
+
 class Settings(BaseSettings):
     """应用配置"""
-    
+
     # 基础配置
     APP_NAME: str = "TG Export"
     APP_VERSION: str = "2.4.5"  # Task storage and unified naming
@@ -15,17 +16,20 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     WEB_HOST: str = os.getenv("WEB_HOST", "0.0.0.0")
     WEB_PORT: int = int(os.getenv("WEB_PORT", 9528))
-    
+
     # 路径配置
     BASE_DIR: Path = Path(__file__).resolve().parent.parent
-    DATA_DIR: Path = Path(os.getenv("DATA_DIR", BASE_DIR.parent / "data"))
+    PROJECT_DIR: Path = BASE_DIR.parent if BASE_DIR.name == "backend" else BASE_DIR
+    CONFIG_DIR: Path = Path(os.getenv("CONFIG_DIR", PROJECT_DIR / "config"))
+    DATA_DIR: Path = Path(os.getenv("DATA_DIR", PROJECT_DIR / "data"))
     TEMP_DIR: Path = Path(os.getenv("TEMP_DIR", DATA_DIR / "temp"))
     EXPORT_DIR: Path = Path(os.getenv("EXPORT_DIR", DATA_DIR / "exports"))
     SESSIONS_DIR: Path = Path(os.getenv("SESSIONS_DIR", DATA_DIR / "sessions"))
-    
+    RUNTIME_ENV_FILE: Path = Path(os.getenv("RUNTIME_ENV_FILE", CONFIG_DIR / "runtime.env"))
+
     # 数据库/配置路径
     SESSION_NAME: str = "tg_export"
-    
+
     # Telegram API
     API_ID: int = int(os.getenv("API_ID", 0))
     API_HASH: str = os.getenv("API_HASH", "")
@@ -49,11 +53,12 @@ class Settings(BaseSettings):
     PARALLEL_CHUNK_CONNECTIONS: int = int(os.getenv("PARALLEL_CHUNK_CONNECTIONS", 4))
     MIN_PARALLEL_FILE_SIZE: int = 10 * 1024 * 1024  # 10MB，小于此值不启用并行
     ENABLE_PARALLEL_DOWNLOAD: bool = os.getenv("ENABLE_PARALLEL_DOWNLOAD", "true").lower() == "true"
-    
+
     # 代理设置
     PROXY_URL: str = os.getenv("PROXY_URL", "")
-    
+
     class Config:
-        env_file = (".env", "/app/data/.env")
+        env_file = (".env", "config/runtime.env", "/app/config/runtime.env")
+
 
 settings = Settings()

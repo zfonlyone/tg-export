@@ -1,6 +1,7 @@
 """
 TG Export - API 路由
 """
+import os
 from datetime import timedelta
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, status, Body
@@ -48,7 +49,6 @@ class ProxyConfigRequest(BaseModel):
 
 async def _ensure_tg_client_initialized():
     """确保 Telegram 客户端已经初始化"""
-    import os
     if telegram_client.is_initialized:
         return
     api_id = os.environ.get("API_ID") or settings.API_ID
@@ -96,6 +96,8 @@ async def init_telegram(
 ):
     """初始化 Telegram 客户端"""
     try:
+        os.environ["API_ID"] = str(payload.api_id)
+        os.environ["API_HASH"] = payload.api_hash
         await telegram_client.init(payload.api_id, payload.api_hash)
         try:
             upsert_env_values({"API_ID": str(payload.api_id), "API_HASH": payload.api_hash})
@@ -582,12 +584,11 @@ async def get_task(
 @router.get("/settings")
 async def get_settings(current_user: User = Depends(get_current_user)):
     """获取设置"""
-    import os
     api_id = os.environ.get("API_ID") or settings.API_ID
     api_hash = os.environ.get("API_HASH") or settings.API_HASH
-    
+
     return {
-        "export_path": os.environ.get("DOWNLOAD_DIR", "/downloads"),
+        "export_path": str(settings.EXPORT_DIR),
         "max_concurrent_downloads": settings.MAX_CONCURRENT_DOWNLOADS,
         "api_id": api_id,
         "has_api_config": bool(api_id and api_hash),  # 是否已配置 API
@@ -612,8 +613,7 @@ async def save_bot_token(
     current_user: User = Depends(get_current_user)
 ):
     """保存 Bot Token"""
-    # 保存到环境变量或配置文件
-    import os
+    # 保存到环境变量和运行时配置文件
     os.environ["BOT_TOKEN"] = token
     try:
         upsert_env_values({"BOT_TOKEN": token})

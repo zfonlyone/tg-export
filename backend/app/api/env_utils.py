@@ -7,11 +7,11 @@ from typing import Dict
 from ..config import settings
 
 
-RUNTIME_ENV_FILE = settings.DATA_DIR / ".env"
+RUNTIME_ENV_FILE = settings.RUNTIME_ENV_FILE
 
 
 def upsert_env_values(values: Dict[str, str]) -> None:
-    """Upsert key/value pairs into runtime .env file under data volume."""
+    """Upsert key/value pairs into the writable runtime env file."""
     RUNTIME_ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
 
     existing: Dict[str, str] = {}

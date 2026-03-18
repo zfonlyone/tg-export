@@ -4,14 +4,14 @@ WORKDIR /frontend
 
 # 安装前端依赖并构建
 COPY frontend/package*.json ./
-RUN npm install
+RUN npm ci
 
 COPY frontend/ ./
 RUN npm run build
 
 
 FROM python:3.11-slim
-LABEL version="2.2.0"
+LABEL version="2.4.5"
 LABEL description="TG Export - Telegram 全功能导出工具"
 
 WORKDIR /app
@@ -39,11 +39,14 @@ COPY backend/app ./app
 # 复制前端构建产物
 COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
-# 创建数据目录
-RUN mkdir -p /app/data/exports /app/data/sessions
+# 创建运行时目录
+RUN mkdir -p /app/config /app/data/exports /app/data/sessions
 
 # 环境变量
 ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV CONFIG_DIR=/app/config
+ENV RUNTIME_ENV_FILE=/app/config/runtime.env
 ENV DATA_DIR=/app/data
 ENV EXPORT_DIR=/app/data/exports
 ENV SESSIONS_DIR=/app/data/sessions
