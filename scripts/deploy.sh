@@ -87,7 +87,7 @@ cd "$PROJECT_DIR"
 docker build -t "$IMAGE_NAME" .
 
 log "同步运行时编排入口..."
-ln -sf "${PROJECT_DIR}/docker-compose.yml" "${BASE_DIR}/docker-compose.yml"
+cp -f "${PROJECT_DIR}/docker-compose.yml" "${BASE_DIR}/docker-compose.yml"
 
 log "清理运行目录中的源码文件..."
 find "$BASE_DIR" -mindepth 1 -maxdepth 1 \

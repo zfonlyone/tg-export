@@ -29,7 +29,7 @@ sudo ./scripts/deploy.sh
 1. 初始化 `/etc/tg-export/config` 与 `/etc/tg-export/data`
 2. 迁移旧版 `data/.env` 到 `config/runtime.env`
 3. 在源码目录构建 `tg-export:latest`
-4. 将运行目录的 `docker-compose.yml` 链接到源码版本
+4. 将运行目录的 `docker-compose.yml` 同步为源码版本
 5. 清理 `/etc/tg-export` 中残留的源码文件
 6. 在 `/etc/tg-export` 启动容器
 
