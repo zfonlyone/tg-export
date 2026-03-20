@@ -824,13 +824,13 @@ a:hover {
 
 /* ========== 响应式 ========== */
 @media (max-width: 768px) {
-  /* 移动端：侧边栏变 iOS 风格顶部横向导航 */
+  /* 移动端：顶部导航不再悬浮，避免遮挡首页卡片 */
   .sidebar {
     width: 100%;
     height: auto;
-    position: sticky;
-    top: 0;
-    z-index: 200;
+    position: static;
+    top: auto;
+    z-index: auto;
     overflow: hidden;
     background: rgba(30, 58, 95, 0.78);
     -webkit-backdrop-filter: saturate(180%) blur(14px);
@@ -910,8 +910,8 @@ a:hover {
 
   .main-content {
     margin-left: 0;
-    /* 使用动态测量的顶部条高度，避免字体缩放/横竖屏导致内容被盖住 */
-    padding: calc(14px + var(--topbar-h, 0px)) 14px 14px;
+    /* 顶部导航改为常规流式布局后，不再需要为 sticky 预留额外高度 */
+    padding: 14px 14px 14px;
     min-height: 0;
   }
 
