@@ -47,6 +47,31 @@
    - edit `/etc/tg-export/.env` or `/etc/tg-export/config/runtime.env`
    - run `cd /etc/tg-export && docker compose --env-file .env up -d`
 
+## ✅ Forced Verification Checklist ("Page didn't change")
+
+**Do not trust** "build succeeded" or "docker compose up -d". Use evidence.
+
+1) Entry correctness
+- `/etc/tg-export/docker-compose.yml` must be a symlink to `/root/code/tg-export/docker-compose.yml` (preferred),
+  OR must be overwritten by deploy script and proven identical.
+
+2) Container really updated (image + start time)
+- `docker inspect tg-export --format 'started={{.State.StartedAt}} image={{.Image}}'`
+- `docker image inspect tg-export:latest --format 'id={{.Id}} created={{.Created}}'`
+
+3) Container assets really updated (hash)
+- Check `/app/frontend/dist/index.html` for `index-*.js` / route chunk hashes
+- List `/app/frontend/dist/assets/` and compare expected hashes
+
+4) Public vs local consistency
+- `curl -sS http://127.0.0.1:9528/ | head`
+- `curl -sS https://tg-export.181028.xyz/ | head`
+- `curl -sSI https://tg-export.181028.xyz/ | egrep -i 'cache|etag|last-modified|cf-cache-status|age'`
+
+5) If container is new but public is old
+- Suspect Cloudflare cache: Purge Cache.
+- Recommend: `index.html` uses `no-cache`, hashed assets use long cache.
+
 ## White-Screen Triage
 - Check public HTML / JS hash first (`index-*.js`, route chunk names)
 - If container assets are old: rebuild failed or sync never happened
